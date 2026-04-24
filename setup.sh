@@ -333,6 +333,20 @@ TMUX_PREFIX
         fi
     fi
 
+    # Enable mouse mode by uncommenting the line the framework ships commented out.
+    # Falls back to appending if the template line is absent (e.g. older installs).
+    # The framework's bind-m toggle (<prefix>+m) and the #{mouse} status indicator
+    # both work without any additional config once this is set.
+    if ! grep -q "^set -g mouse on" "$conf"; then
+        if [[ "$DRY_RUN" == "true" ]]; then
+            printf '\e[2;37m  [dry] enable mouse mode in %s\e[0m\n' "$conf"
+        else
+            sed -i 's/^#set -g mouse on$/set -g mouse on/' "$conf"
+            # If the commented template line wasn't present, append directly.
+            grep -q "^set -g mouse on" "$conf" || echo 'set -g mouse on' >> "$conf"
+        fi
+    fi
+
     # Window navigation bindings + manual focus-events toggle (C-a F)
     # The toggle is a fallback for tools outside the ssh/aws wrappers.
     if ! grep -q "bind a last-window" "$conf"; then
@@ -1938,12 +1952,13 @@ verify_tmux() {
     [[ -L "$HOME/.tmux.conf" ]]        && pass "~/.tmux.conf is a symlink"         || fail "~/.tmux.conf is not a symlink"
     [[ -f "$HOME/.tmux.conf.local" ]]  && pass "~/.tmux.conf.local exists"         || fail "~/.tmux.conf.local missing"
     local conf="$HOME/.tmux.conf.local"
-    grep -q "uE0B0"              "$conf" 2>/dev/null && pass "Powerline separators configured"  || fail "Powerline separators not configured"
-    grep -q "^set -g prefix C-a" "$conf" 2>/dev/null && pass "C-a prefix configured"           || fail "C-a prefix not configured"
-    grep -q "^unbind C-b"        "$conf" 2>/dev/null && pass "C-b unbound"                     || fail "C-b not unbound"
-    grep -q "^bind a last-window" "$conf" 2>/dev/null && pass "bind a last-window set"         || fail "bind a last-window not set"
-    grep -q "^bind n next-window" "$conf" 2>/dev/null && pass "bind n next-window set"         || fail "bind n next-window not set"
-    grep -q "^bind F "           "$conf" 2>/dev/null && pass "bind F focus-events toggle set"  || fail "bind F focus-events toggle not set"
+    grep -q "uE0B0"               "$conf" 2>/dev/null && pass "Powerline separators configured"  || fail "Powerline separators not configured"
+    grep -q "^set -g prefix C-a"  "$conf" 2>/dev/null && pass "C-a prefix configured"           || fail "C-a prefix not configured"
+    grep -q "^unbind C-b"         "$conf" 2>/dev/null && pass "C-b unbound"                     || fail "C-b not unbound"
+    grep -q "^bind a last-window" "$conf" 2>/dev/null && pass "bind a last-window set"          || fail "bind a last-window not set"
+    grep -q "^bind n next-window" "$conf" 2>/dev/null && pass "bind n next-window set"          || fail "bind n next-window not set"
+    grep -q "^bind F "            "$conf" 2>/dev/null && pass "bind F focus-events toggle set"  || fail "bind F focus-events toggle not set"
+    grep -q "^set -g mouse on"    "$conf" 2>/dev/null && pass "mouse mode enabled"              || fail "mouse mode not enabled"
 }
 
 verify_zsh() {
