@@ -22,7 +22,7 @@ For WSL2 on Windows, include the WSL-specific setup:
 
 Setup is divided into independent sections. By default all sections run on the
 current platform. Exceptions: `gnubin` runs on macOS only, `wsl` on WSL2 only,
-and `copilot`, `chatgpt`, plus `shellgpt` are opt-in.
+and `copilot`, `claude`, `chatgpt`, plus `shellgpt` are opt-in.
 
 | Section | What it sets up |
 |---------|----------------|
@@ -36,8 +36,9 @@ and `copilot`, `chatgpt`, plus `shellgpt` are opt-in.
 | `wsl` | *(WSL2 only)* `wslu`, `win32yank.exe`, `/etc/wsl.conf`, clipboard + true-color patches to `~/.tmux.conf.local` and `~/.vimrc.local` |
 | `python` | `uv`, `uv-virtualenvwrapper`, a base virtualenv at `~/.venvs/base`, and a preinstalled package set for local scripting/research |
 | `keyd` | *(Linux only)* Installs and enables [keyd](https://github.com/rvaiya/keyd); deploys `configs/keyd.conf` which remaps Meta+C/V/X/Z/A to Ctrl equivalents system-wide for Mac-like muscle memory |
-| `copilot` | *(opt-in)* GitHub Copilot CLI installed, global instructions bootstrapped to `~/.copilot/copilot-instructions.md`, model preference written to `~/.copilot/settings.json` |
-| `chatgpt` | *(opt-in)* Official OpenAI Codex CLI installed via npm (`codex` command), global instructions bootstrapped to `~/.codex/AGENTS.md` |
+| `copilot` | *(opt-in)* GitHub Copilot CLI installed, global instructions bootstrapped to `~/.copilot/copilot-instructions.md`, model preference written to `~/.copilot/settings.json`; [Superpowers](https://github.com/obra/superpowers) skills installed via [DwainTR/superpowers-copilot](https://github.com/DwainTR/superpowers-copilot) |
+| `claude` | *(opt-in)* [Claude Code](https://claude.ai/code) CLI installed, global coding standards bootstrapped to `~/.claude/CLAUDE.md`; [gstack](https://github.com/garrytan/gstack) virtual engineering team installed (requires [Bun](https://bun.sh)) |
+| `chatgpt` | *(opt-in)* Official OpenAI Codex CLI installed via npm (`codex` command), global instructions bootstrapped to `~/.codex/AGENTS.md`; gstack skills registered with Codex |
 | `shellgpt` | *(opt-in)* Unofficial open-source ShellGPT installed via `uv tool install shell-gpt` (`sgpt` command, requires `OPENAI_API_KEY`) |
 
 ### Selective Runs
@@ -46,9 +47,10 @@ and `copilot`, `chatgpt`, plus `shellgpt` are opt-in.
 ./setup.sh --only zsh vim          # run only the listed sections
 ./setup.sh --skip packages fonts   # skip listed sections, run the rest
 ./setup.sh --copilot               # standard run + copilot
+./setup.sh --claude                # standard run + Claude Code
 ./setup.sh --chatgpt               # standard run + OpenAI Codex CLI
 ./setup.sh --shellgpt              # standard run + ShellGPT
-./setup.sh --all                   # everything, including copilot + chatgpt + shellgpt
+./setup.sh --all                   # everything, including copilot + claude + chatgpt + shellgpt
 ./setup.sh --help
 ```
 
@@ -194,12 +196,32 @@ macOS Spaces behaviour across multiple screens. The feature is Wayland-only
 (no X11 support). Once Plasma 6.7 is available via pacman on CachyOS, enable it
 in **System Settings → Display & Monitor → Virtual Desktops → Per-screen virtual desktops**.
 
+## Claude Code
+
+Run setup with `--claude` to install the Claude Code CLI and bootstrap global coding
+standards to `~/.claude/CLAUDE.md`. Also installs [gstack](https://github.com/garrytan/gstack)
+— a virtual 23-person engineering team (CEO review, design, QA, security, release) invoked
+via slash commands — which requires [Bun](https://bun.sh).
+
+```bash
+./setup.sh --only claude
+# then:
+claude
+# inside Claude Code, to install Superpowers:
+/plugin install superpowers@claude-plugins-official --global
+```
+
+To use gstack: `/plan-ceo-review`, `/review`, `/qa`, `/ship`, `/browse`, and more.
+Run `ls ~/.claude/skills/gstack/` to see all available skills.
+
 ## GitHub Copilot CLI
 
 Run setup with `--copilot` to install the CLI, bootstrap
 `~/.copilot/copilot-instructions.md` with assistant/user preferences plus
 coding and quality rules, and write `~/.copilot/settings.json` with the
-preferred model.
+preferred model. Also installs [Superpowers](https://github.com/obra/superpowers)
+(TDD, brainstorming, subagent-driven development, code review) via the
+[DwainTR community fork](https://github.com/DwainTR/superpowers-copilot).
 
 ```bash
 ./setup.sh --only copilot
@@ -374,13 +396,17 @@ One approval request at a time; each must be one complete logical change set.
 
 ## OpenAI Codex CLI
 
-Run setup with `--chatgpt` to install the official OpenAI Codex CLI and bootstrap
-`~/.codex/AGENTS.md` with the same coding and quality rules used for Copilot CLI.
+Run setup with `--chatgpt` to install the official OpenAI Codex CLI, bootstrap
+`~/.codex/AGENTS.md` with coding and quality rules, and register gstack skills
+with Codex. gstack is cloned to `~/.claude/skills/gstack` if not already present
+(requires Bun). Superpowers for Codex is installed interactively.
 
 ```bash
 ./setup.sh --only chatgpt
 # then:
 codex
+# inside Codex, to install Superpowers:
+/plugins   # search for 'superpowers'
 ```
 
 ## ShellGPT
