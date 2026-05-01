@@ -1512,9 +1512,8 @@ CLAUDEMD
     local gstack_dir="$HOME/.claude/skills/gstack"
     if [[ -d "$gstack_dir" ]]; then
         ok "gstack already installed at ${gstack_dir}."
-    elif ! command_exists bun; then
-        warn "gstack requires Bun (https://bun.sh) — install it then re-run: ./setup.sh --only claude"
     else
+        ensure_bun || return 1
         log "Installing gstack..."
         run git clone --single-branch --depth 1 https://github.com/garrytan/gstack.git "$gstack_dir"
         if [[ "$DRY_RUN" != "true" ]]; then
@@ -1530,6 +1529,25 @@ CLAUDEMD
 }
 
 # -- 14. OpenAI Codex CLI (ChatGPT CLI) ---------------------------------------
+
+ensure_bun() {
+    local bun_bin="$HOME/.bun/bin/bun"
+    if command_exists bun || [[ -x "$bun_bin" ]]; then
+        ok "bun already installed: $(bun --version 2>/dev/null || "$bun_bin" --version)"
+        return 0
+    fi
+
+    log "Installing Bun..."
+    if [[ "$DRY_RUN" == "true" ]]; then
+        printf '\e[2;37m  [dry] install Bun via curl | bash\e[0m\n'
+        return 0
+    fi
+
+    curl -fsSL https://bun.sh/install | bash
+
+    command_exists bun || [[ -x "$bun_bin" ]] || { warn "bun not found after install"; return 1; }
+    export PATH="$HOME/.bun/bin:$PATH"
+}
 
 ensure_npm() {
     if command_exists npm; then
@@ -1840,12 +1858,9 @@ AGENTS
     # gstack — register skills with Codex (clone first if not yet present)
     local gstack_dir="$HOME/.claude/skills/gstack"
     if [[ ! -d "$gstack_dir" ]]; then
-        if ! command_exists bun; then
-            warn "gstack requires Bun (https://bun.sh) — install it then re-run: ./setup.sh --only chatgpt"
-        else
-            log "Installing gstack..."
-            run git clone --single-branch --depth 1 https://github.com/garrytan/gstack.git "$gstack_dir"
-        fi
+        ensure_bun || return 1
+        log "Installing gstack..."
+        run git clone --single-branch --depth 1 https://github.com/garrytan/gstack.git "$gstack_dir"
     fi
     if [[ -d "$gstack_dir" ]]; then
         log "Registering gstack with Codex..."
@@ -2027,6 +2042,8 @@ verify_claude() {
         claude --version &>/dev/null    && pass "claude --version works"                       || fail "claude --version failed"
     fi
     [[ -f "$HOME/.claude/CLAUDE.md" ]]  && pass "Claude Code instructions written"             || fail "Claude Code instructions missing"
+    { command_exists bun || [[ -x "$HOME/.bun/bin/bun" ]]; } \
+                                        && pass "bun installed (gstack dependency)"            || fail "bun not installed (required by gstack)"
     [[ -d "$HOME/.claude/skills/gstack" ]] \
                                         && pass "gstack installed"                             || fail "gstack not installed"
 }
@@ -2038,6 +2055,8 @@ verify_chatgpt() {
         codex --version &>/dev/null     && pass "codex --version works"                        || fail "codex --version failed"
     fi
     [[ -f "$HOME/.codex/AGENTS.md" ]]   && pass "Codex instructions written"                  || fail "Codex instructions missing"
+    { command_exists bun || [[ -x "$HOME/.bun/bin/bun" ]]; } \
+                                        && pass "bun installed (gstack dependency)"            || fail "bun not installed (required by gstack)"
     { [[ -d "$HOME/.codex/skills" ]] && ls "$HOME/.codex/skills/" 2>/dev/null | grep -q gstack; } \
                                         && pass "gstack registered with Codex"                || fail "gstack not registered with Codex"
 }
