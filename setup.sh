@@ -1274,15 +1274,18 @@ INSTRUCTIONS
     fi
 
     # superpowers — community fork adds Copilot CLI support for obra/superpowers
-    local superpowers_dir="$HOME/.copilot/skills/superpowers"
-    if [[ -d "$superpowers_dir" ]]; then
+    # Uses the marketplace mechanism: register DwainTR/superpowers-copilot as a
+    # marketplace (it ships marketplace.json, not plugin.json), then install from it.
+    if copilot plugin list 2>/dev/null | grep -q "superpowers"; then
         ok "Superpowers for Copilot already installed."
     else
         log "Installing Superpowers for GitHub Copilot CLI..."
         if [[ "$DRY_RUN" == "true" ]]; then
-            printf '\e[2;37m  [dry] install Superpowers via DwainTR/superpowers-copilot\e[0m\n'
+            printf '\e[2;37m  [dry] copilot plugin marketplace add DwainTR/superpowers-copilot\e[0m\n'
+            printf '\e[2;37m  [dry] copilot plugin install superpowers@superpowers-copilot\e[0m\n'
         else
-            bash -c "$(curl -fsSL https://raw.githubusercontent.com/DwainTR/superpowers-copilot/main/install.sh)"
+            copilot plugin marketplace add DwainTR/superpowers-copilot
+            run copilot plugin install superpowers@superpowers-copilot
         fi
         ok "Superpowers installed for Copilot."
     fi
@@ -2038,7 +2041,7 @@ verify_copilot() {
                                         && pass "Copilot instructions written"                 || fail "Copilot instructions missing"
     [[ -f "$HOME/.copilot/settings.json" ]] \
                                         && pass "Copilot settings written"                     || fail "Copilot settings missing"
-    [[ -d "$HOME/.copilot/skills/superpowers" ]] \
+    copilot plugin list 2>/dev/null | grep -q "superpowers" \
                                         && pass "Superpowers for Copilot installed"            || fail "Superpowers for Copilot not installed"
 }
 
