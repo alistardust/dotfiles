@@ -44,7 +44,7 @@ Most other tracked files are artifacts consumed by setup: `terminal_configs/` fo
 
 **Adding a section:** Add it to `ALL_SECTIONS` in `setup.sh`, implement `section_<name>()` and `verify_<name>()`, set a default in the `RUN[]` block, and use SSH remotes (`git@github.com:...`) for any new cloned dependencies.
 
-**Terminal appearance:** Keep `terminal_configs/alacritty.toml` and `terminal_configs/windows-terminal-settings.json` in sync — they are the Linux/macOS and Windows variants of the same color scheme and font.
+**Terminal appearance:** Keep `terminal_configs/alacritty.toml` (macOS, font size 13.5), `terminal_configs/alacritty-linux.toml` (Linux/WSL, font size 10.5), and `terminal_configs/windows-terminal-settings.json` in sync for color scheme and font family. The two alacritty files are identical except for font size — color/font family changes must be applied to both.
 
 ## Bash Conventions (this repo)
 
