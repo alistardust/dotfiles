@@ -676,10 +676,16 @@ section_alacritty() {
         warn "tic not found  - skipping alacritty terminfo install (run: sudo tic -xe alacritty,alacritty-direct alacritty.info)"
     fi
 
-    # Symlink config
+    # Symlink config -- macOS uses alacritty.toml (font size 13.5);
+    # Linux/WSL uses alacritty-linux.toml (font size 10.5 for HiDPI displays).
     run mkdir -p "$HOME/.config/alacritty"
-    run ln -sf "${SCRIPT_DIR}/terminal_configs/alacritty.toml" \
-           "$HOME/.config/alacritty/alacritty.toml"
+    local toml_src
+    if [[ "$OS" == "macos" ]]; then
+        toml_src="${SCRIPT_DIR}/terminal_configs/alacritty.toml"
+    else
+        toml_src="${SCRIPT_DIR}/terminal_configs/alacritty-linux.toml"
+    fi
+    run ln -sf "$toml_src" "$HOME/.config/alacritty/alacritty.toml"
 
     ok "Alacritty configured."
 }
@@ -1976,8 +1982,8 @@ verify_alacritty() {
     local cfg="$HOME/.config/alacritty/alacritty.toml"
     [[ -L "$cfg" ]]                    && pass "alacritty.toml symlinked"                      || fail "alacritty.toml not symlinked"
     local target; target="$(readlink "$cfg" 2>/dev/null || true)"
-    [[ "$target" == *"terminal_configs/alacritty.toml" ]] \
-                                        && pass "alacritty.toml points to dotfiles"            || fail "alacritty.toml symlink target unexpected: $target"
+    [[ "$target" == *"terminal_configs/alacritty.toml" || "$target" == *"terminal_configs/alacritty-linux.toml" ]] \
+                                        && pass "alacritty.toml points to dotfiles ($target)"  || fail "alacritty.toml symlink target unexpected: $target"
 }
 
 verify_keyd() {
