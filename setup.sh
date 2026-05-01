@@ -1274,15 +1274,27 @@ INSTRUCTIONS
     fi
 
     # superpowers — community fork adds Copilot CLI support for obra/superpowers
-    local superpowers_dir="$HOME/.copilot/skills/superpowers"
-    if [[ -d "$superpowers_dir" ]]; then
+    # The installer creates a single nested symlink (.copilot/skills/superpowers ->
+    # marketplace-cache/.../skills) but the CLI requires each skill to be a direct
+    # child of ~/.copilot/skills/. After installing we flatten: remove the nested
+    # symlink and create one symlink per skill directly in ~/.copilot/skills/.
+    local superpowers_cache="$HOME/.copilot/marketplace-cache/dwaintr-superpowers-copilot/plugins/superpowers/skills"
+    local skills_dir="$HOME/.copilot/skills"
+    # Check for the brainstorming skill as a proxy for whether skills are already flat-linked
+    if [[ -L "${skills_dir}/brainstorming" ]]; then
         ok "Superpowers for Copilot already installed."
     else
         log "Installing Superpowers for GitHub Copilot CLI..."
         if [[ "$DRY_RUN" == "true" ]]; then
             printf '\e[2;37m  [dry] install Superpowers via DwainTR/superpowers-copilot\e[0m\n'
+            printf '\e[2;37m  [dry] flatten per-skill symlinks in %s\e[0m\n' "$skills_dir"
         else
             bash -c "$(curl -fsSL https://raw.githubusercontent.com/DwainTR/superpowers-copilot/main/install.sh)"
+            # Remove the nested dir/symlink the installer creates and replace with flat symlinks
+            rm -rf "${skills_dir}/superpowers"
+            for skill_path in "$superpowers_cache"/*/; do
+                ln -sf "$skill_path" "${skills_dir}/$(basename "$skill_path")"
+            done
         fi
         ok "Superpowers installed for Copilot."
     fi
@@ -2053,8 +2065,8 @@ verify_copilot() {
                                         && pass "Copilot instructions written"                 || fail "Copilot instructions missing"
     [[ -f "$HOME/.copilot/settings.json" ]] \
                                         && pass "Copilot settings written"                     || fail "Copilot settings missing"
-    [[ -d "$HOME/.copilot/skills/superpowers" ]] \
-                                        && pass "Superpowers for Copilot installed"            || fail "Superpowers for Copilot not installed"
+    [[ -L "$HOME/.copilot/skills/brainstorming" ]] \
+                                        && pass "Superpowers for Copilot installed (flat symlinks)" || fail "Superpowers for Copilot not installed"
 }
 
 verify_claude() {
