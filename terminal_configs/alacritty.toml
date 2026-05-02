@@ -32,7 +32,7 @@ unfocused_hollow = true
 
 [font]
 normal = {family = "Meslo LG M for Powerline", style = "Bold"}
-size = 13.5
+size = 10.0
 builtin_box_drawing = true
 
 [general]
