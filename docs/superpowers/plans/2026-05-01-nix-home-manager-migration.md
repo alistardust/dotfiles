@@ -742,18 +742,29 @@ Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
 
 **Files:**
 - Create: `modules/ai-instructions.nix`
+- Modify: `hosts/macbook/default.nix` (import here, NOT inside per-tool modules)
 
 > The three AI instruction files (`~/.copilot/copilot-instructions.md`, `~/.claude/CLAUDE.md`,
 > `~/.codex/AGENTS.md`) share ~80% content. This module generates all three from a single
-> Nix template to prevent drift.
+> Nix template to prevent drift. **Import this module at the host level only** — importing
+> it inside copilot.nix, claude.nix, etc. would cause duplicate-attribute conflicts when
+> multiple tool modules are active together.
 
 - [ ] **Step 1: Identify the shared content**
 
-  Diff the three files to find what's shared vs. tool-specific:
+  Snapshot the current files before the switch (used for verification in Step 4):
 
   ```bash
-  diff ~/.copilot/copilot-instructions.md ~/.claude/CLAUDE.md | head -40
-  diff ~/.claude/CLAUDE.md ~/.codex/AGENTS.md | head -40
+  cp ~/.copilot/copilot-instructions.md /tmp/copilot-instructions.md.bak
+  cp ~/.claude/CLAUDE.md /tmp/CLAUDE.md.bak
+  cp ~/.codex/AGENTS.md /tmp/AGENTS.md.bak
+  ```
+
+  Diff to find shared vs. tool-specific content:
+
+  ```bash
+  diff ~/.copilot/copilot-instructions.md ~/.claude/CLAUDE.md | head -60
+  diff ~/.claude/CLAUDE.md ~/.codex/AGENTS.md | head -60
   ```
 
 - [ ] **Step 2: Create modules/ai-instructions.nix**
@@ -762,17 +773,16 @@ Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
   { lib, ... }:
   let
     sharedRules = ''
-      # Global Coding Rules
-      ...  # paste the shared content here
+      # paste the shared content here (extracted from Step 1)
     '';
     copilotExtra = ''
-      ...  # copilot-specific additions
+      # paste copilot-specific additions here
     '';
     claudeExtra = ''
-      ...  # claude-specific additions
+      # paste claude-specific additions here
     '';
     codexExtra = ''
-      ...  # codex-specific additions
+      # paste codex-specific additions here
     '';
   in
   {
@@ -782,16 +792,35 @@ Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
   }
   ```
 
-- [ ] **Step 3: Switch and verify files match current content**
+  > Do not leave the `# paste ...` comments in the committed file. Replace them with
+  > the actual content extracted in Step 1 before committing.
+
+- [ ] **Step 3: Import ai-instructions.nix in macbook host (not in tool modules)**
+
+  ```nix
+  imports = [
+    ../../modules/base.nix
+    ../../modules/gnubin.nix
+    ../../modules/shell.nix
+    ../../modules/tmux.nix
+    ../../modules/vim.nix
+    ../../modules/python-dev.nix
+    ../../modules/ai-instructions.nix  # import once here; never inside tool modules
+  ];
+  ```
+
+- [ ] **Step 4: Switch and verify files match pre-switch snapshots**
 
   ```bash
   home-manager switch --flake ".#macbook"
-  diff ~/.copilot/copilot-instructions.md <(cat ~/.copilot/copilot-instructions.md)
+  diff /tmp/copilot-instructions.md.bak ~/.copilot/copilot-instructions.md
+  diff /tmp/CLAUDE.md.bak ~/.claude/CLAUDE.md
+  diff /tmp/AGENTS.md.bak ~/.codex/AGENTS.md
   ```
 
-  Expected: no meaningful diff from current content (only whitespace/formatting may differ).
+  Expected: no meaningful diff (only whitespace/formatting may differ).
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
   ```bash
   git add modules/ai-instructions.nix hosts/macbook/default.nix
@@ -809,23 +838,23 @@ Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
 - [ ] **Step 1: Create modules/copilot.nix**
 
   ```nix
-  { pkgs, ... }:
+  { pkgs, lib, ... }:
   {
-    imports = [ ./ai-instructions.nix ];
+    # ai-instructions.nix is imported at the host level — do NOT import it here
 
-    home.packages = [ pkgs.gh ];  # gh extension install copilot is done via activation
+    home.packages = [ pkgs.gh ];
 
     home.file.".copilot/settings.json".text = builtins.toJSON {
-      github-copilot.selectedCompletionModel = "gpt-4o";  # update to actual preferred model
+      model = "claude-sonnet-4.6";
     };
 
-    home.activation.installCopilotCli = ''
+    home.activation.installCopilotCli = lib.hm.dag.entryAfter ["writeBoundary"] ''
       if ! ${pkgs.gh}/bin/gh extension list 2>/dev/null | grep -q copilot; then
         $DRY_RUN_CMD ${pkgs.gh}/bin/gh extension install github/gh-copilot
       fi
     '';
 
-    home.activation.installSuperpowers = ''
+    home.activation.installSuperpowers = lib.hm.dag.entryAfter ["writeBoundary"] ''
       SKILLS_DIR="$HOME/.copilot/skills/superpowers"
       if [[ ! -d "$SKILLS_DIR" ]]; then
         $DRY_RUN_CMD mkdir -p "$(dirname "$SKILLS_DIR")"
@@ -834,10 +863,6 @@ Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
     '';
   }
   ```
-
-  > Replace `selectedCompletionModel` with the value from `~/.copilot/settings.json`.
-  > The Superpowers plugin install is a `git clone` via `home.activation` since it's
-  > a curl/bash install currently — this is the cleanest Nix-compatible equivalent.
 
 - [ ] **Step 2: Switch and verify**
 
@@ -863,43 +888,48 @@ Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
 - Modify: `hosts/macbook/default.nix`
 
 > Claude Code installs via npm. gstack requires Bun. Both are handled via `home.activation`
-> since they're not in nixpkgs as installable Home Manager programs.
+> since they're not in nixpkgs as installable Home Manager programs. gstack installs to
+> `~/.claude/skills/gstack` and is set up via its own `./setup --quiet` script.
 
 - [ ] **Step 1: Create modules/claude.nix**
 
   ```nix
-  { pkgs, ... }:
+  { pkgs, lib, ... }:
   {
+    # ai-instructions.nix is imported at the host level — do NOT import it here
+
     home.packages = [
       pkgs.bun
       pkgs.nodejs
     ];
 
-    home.activation.installClaudeCli = ''
+    home.activation.installClaudeCli = lib.hm.dag.entryAfter ["writeBoundary"] ''
       if ! command -v claude &>/dev/null; then
         $DRY_RUN_CMD ${pkgs.nodejs}/bin/npm install -g @anthropic-ai/claude-code
       fi
     '';
 
-    home.activation.installGstack = ''
-      GSTACK_DIR="$HOME/.local/share/gstack"
+    home.activation.installGstack = lib.hm.dag.entryAfter ["writeBoundary"] ''
+      GSTACK_DIR="$HOME/.claude/skills/gstack"
       if [[ ! -d "$GSTACK_DIR" ]]; then
-        $DRY_RUN_CMD git clone git@github.com:<gstack-repo> "$GSTACK_DIR"
-        $DRY_RUN_CMD (cd "$GSTACK_DIR" && ${pkgs.bun}/bin/bun install)
+        $DRY_RUN_CMD git clone --single-branch --depth 1 \
+          https://github.com/garrytan/gstack.git "$GSTACK_DIR"
+        $DRY_RUN_CMD bash -c "cd '$GSTACK_DIR' && ./setup --quiet"
       fi
     '';
   }
   ```
-
-  > Fill in the actual gstack repo URL from `section_claude` in `setup.sh`.
-  > The `ai-instructions.nix` module handles writing `~/.claude/CLAUDE.md`.
 
 - [ ] **Step 2: Switch and verify**
 
   ```bash
   home-manager switch --flake ".#macbook"
   claude --version
+  command -v gstack || ls ~/.claude/skills/gstack/
+  cat ~/.claude/CLAUDE.md | head -5
   ```
+
+  Expected: `claude` reports its version; gstack directory exists; `CLAUDE.md` contains content.
 
 - [ ] **Step 3: Commit**
 
@@ -920,11 +950,13 @@ Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
 - [ ] **Step 1: Create modules/chatgpt.nix**
 
   ```nix
-  { pkgs, ... }:
+  { pkgs, lib, ... }:
   {
+    # ai-instructions.nix is imported at the host level — do NOT import it here
+
     home.packages = [ pkgs.nodejs ];
 
-    home.activation.installCodexCli = ''
+    home.activation.installCodexCli = lib.hm.dag.entryAfter ["writeBoundary"] ''
       if ! command -v codex &>/dev/null; then
         $DRY_RUN_CMD ${pkgs.nodejs}/bin/npm install -g @openai/codex
       fi
@@ -935,11 +967,11 @@ Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
 - [ ] **Step 2: Create modules/shellgpt.nix**
 
   ```nix
-  { pkgs, ... }:
+  { pkgs, lib, ... }:
   {
     home.packages = [ pkgs.uv ];  # uv already in python-dev.nix; harmless to repeat
 
-    home.activation.installShellGpt = ''
+    home.activation.installShellGpt = lib.hm.dag.entryAfter ["writeBoundary"] ''
       if ! command -v sgpt &>/dev/null; then
         $DRY_RUN_CMD ${pkgs.uv}/bin/uv tool install shell-gpt
       fi
@@ -947,13 +979,16 @@ Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
   }
   ```
 
-- [ ] **Step 3: Switch and verify both CLIs available**
+- [ ] **Step 3: Switch and verify all three outputs**
 
   ```bash
   home-manager switch --flake ".#macbook"
   codex --version
   sgpt --version
+  cat ~/.codex/AGENTS.md | head -5
   ```
+
+  Expected: both CLIs report versions; `AGENTS.md` contains content (written by `ai-instructions.nix`).
 
 - [ ] **Step 4: Commit**
 
@@ -972,77 +1007,94 @@ Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
 
 ### Phase 7: System-level modules (keyd, auto_cpufreq)
 
-These write to `/etc/` and manage systemd services. They are NOT Home Manager scope.
+These write to `/etc/` and manage systemd services. They are **NOT Home Manager scope**.
 
-**On CachyOS (Arch, non-NixOS) — keep as wrapper scripts:**
-- Extract `section_keyd` and `section_auto_cpufreq` logic into `scripts/setup-system-linux.sh`
-- Call from `bootstrap.sh` on Linux: `if [[ "$(uname)" == "Linux" ]]; then ./scripts/setup-system-linux.sh; fi`
-- `configs/keyd.conf` stays in the repo unchanged
-- DO NOT put these in Home Manager
+> **Constraint:** Do NOT put keyd or auto_cpufreq in any Home Manager module.
 
-**Future NixOS path (when/if migrating cachyos-home to NixOS):**
+- [ ] Create `scripts/setup-system-linux.sh` by extracting `section_keyd` and
+  `section_auto_cpufreq` logic from `setup.sh` verbatim. (`configs/keyd.conf` stays
+  in the repo unchanged.)
+- [ ] Add a Linux dispatch call in `bootstrap.sh`:
+  ```bash
+  if [[ "$(uname)" == "Linux" ]]; then
+    ./scripts/setup-system-linux.sh
+  fi
+  ```
+- [ ] Verify on cachyos-home: `systemctl is-active keyd && systemctl is-active auto-cpufreq`
+
+**Future NixOS path** (when/if migrating cachyos-home to NixOS — out of scope for this plan):
 - `services.keyd.enable = true;` in `configuration.nix`
 - `services.auto-cpufreq.enable = true;` in `configuration.nix`
-- Out of scope for this plan
 
 ---
 
 ### Phase 8: 1Password
 
 **pre-Nix (can land in parallel with any earlier phase):**
-- `brew_packages.txt`: add `1password-cli`
-- `pacman-packages.txt`: add `1password-cli` (available in Arch repos)
-- `apt-packages.txt` / `dnf-packages.txt`: comment with manual install instructions
-  (official apt/dnf repos required; may need `section_1password` in setup.sh)
+- [ ] `brew_packages.txt`: add `1password-cli`
+- [ ] `pacman-packages.txt`: add `1password-cli` (available in Arch repos)
+- [ ] apt/dnf: deferred (same pattern as glow — non-standard repos)
 
 **Nix module (`modules/onepassword.nix`):**
-```nix
-{ pkgs, ... }:
-{
-  home.packages = [ pkgs._1password-cli ];
-
-  programs.zsh.initExtra = ''
-    eval "$(op completion zsh)"; compdef _op op
-  '';
-}
-```
-
-**SSH agent consolidation:** Deferred until after Phase 8 is stable.
-Do a dedicated SSH key audit first; then plan 1Password agent integration separately.
+- [ ] Create `modules/onepassword.nix`:
+  ```nix
+  { pkgs, ... }:
+  {
+    home.packages = [ pkgs._1password-cli ];
+    programs.zsh.initExtra = ''
+      eval "$(op completion zsh)"; compdef _op op
+    '';
+  }
+  ```
+- [ ] Import in macbook host; run `home-manager switch --flake ".#macbook"`
+- [ ] Verify: `op --version`
 
 **Agenix bootstrap (Phase 8 enhancement):**
-```bash
-# In bootstrap.sh, before home-manager switch:
-op read "op://Personal/agenix-age-key/private key" > ~/.config/agenix/key.txt
-chmod 600 ~/.config/agenix/key.txt
-```
+- [ ] Add to `bootstrap.sh` before the `home-manager switch` call:
+  ```bash
+  op read "op://Personal/agenix-age-key/private key" > ~/.config/agenix/key.txt
+  chmod 600 ~/.config/agenix/key.txt
+  ```
+
+> **SSH agent consolidation:** Deferred. Do a dedicated SSH key audit first;
+> then plan 1Password agent integration separately.
 
 ---
 
 ### Phase 9: Agenix secrets
 
-- Identify secrets vs. config:
+- [ ] Identify secrets vs. config:
   - SSH keys, API tokens → Agenix (age key stored in 1Password)
   - Work-context AI instructions (if sensitive) → Agenix
-- `secrets/secrets.nix`: public key declarations
-- Encrypt secrets, wire into home-manager via `age.secrets`
-- Bootstrap flow: `op signin` → `op read` age key → `home-manager switch` → shred key file
+- [ ] Create `secrets/secrets.nix` with public key declarations for each machine
+- [ ] Encrypt each secret: `agenix -e secrets/<name>.age`
+- [ ] Wire into home-manager via `age.secrets.<name>.file`; run `home-manager switch`
+- [ ] Verify: confirm each secret appears at its expected path with correct permissions
+  ```bash
+  ls -la $(home-manager option age.secrets | grep path | awk '{print $2}')
+  age --decrypt -i ~/.config/agenix/key.txt secrets/<name>.age
+  ```
+- [ ] Bootstrap flow smoke test on a fresh shell: `op signin` → run `bootstrap.sh` →
+  confirm `home-manager switch` decrypts secrets successfully → shred key file:
+  ```bash
+  shred -u ~/.config/agenix/key.txt
+  ```
 
 ---
 
 ### Phase 10: Retire setup.sh
 
-- Once all machines are running Home Manager, `setup.sh` becomes `bootstrap.sh`
-- Archive `setup.sh` as `setup.sh.bak` (keep for reference, remove from PATH)
-- Update `README.md`:
-  - New machines: `./bootstrap.sh <hostname>`
-  - Old: `./setup.sh` (deprecated, remove link)
-- Final commit:
-
+- [ ] Confirm all machines are running Home Manager and all sections are covered
+- [ ] Move `setup.sh` to `archive/setup.sh` (keeps git history, clearly out of PATH):
   ```bash
-  git mv setup.sh setup.sh.bak
-  git commit -m "chore: retire setup.sh -- all machines on home-manager"
+  mkdir -p archive
+  git mv setup.sh archive/setup.sh
+  git commit -m "chore: archive setup.sh -- all machines on home-manager"
   ```
+- [ ] Update `README.md`:
+  - New machines: `./bootstrap.sh <hostname>`
+  - Note `archive/setup.sh` kept for historical reference
+- [ ] Final verification: `./bootstrap.sh macbook` on a clean shell completes without errors
 
 ---
 
