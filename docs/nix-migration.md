@@ -270,14 +270,14 @@ importer tool → verify → disable LastPass browser extension.
 
 ## Decisions still needed
 
-- [ ] Stay with vim or migrate to neovim? (affects Phase 4 scope significantly)
-- [ ] Stay with Oh My Zsh or move to something Home Manager manages natively?
-- [ ] Keep gpakosz/.tmux framework or use `programs.tmux` with custom config?
+- [x] Stay with vim or migrate to neovim? → **Stay with Vim** (`home.file` symlink to AXington/.vim, `Divine` branch)
+- [x] Stay with Oh My Zsh or move to something Home Manager manages natively? → **Keep OMZ** via `programs.zsh.oh-my-zsh`
+- [x] Keep gpakosz/.tmux framework or use `programs.tmux` with custom config? → **Keep gpakosz** as `home.file` managed source; `.tmux.conf.local` becomes a static file
 - [x] Password manager: **1Password** (decided; LastPass migration is a separate personal task)
-- [ ] Which machines are Phase 1 rollout targets? (macbook first? cachyos-home first?)
-- [ ] Same repo restructured, or new `nix-config` repo + dotfiles stays for non-Nix files?
-- [ ] How to handle glow/md viewer: add to `brew_packages.txt`+package lists now, or defer to Phase 2?
-- [ ] SSH agent consolidation: when to move personal SSH keys into 1Password vault?
+- [x] Which machines are Phase 1 rollout targets? → **macbook first** (simpler, no system-level services)
+- [x] Same repo restructured, or new `nix-config` repo + dotfiles stays for non-Nix files? → **Restructure in-place**
+- [x] How to handle glow/md viewer: add to `brew_packages.txt`+package lists now, or defer to Phase 2? → **Add to package lists now** (pre-Nix quick win)
+- [ ] SSH agent consolidation: when to move personal SSH keys into 1Password vault? → **Deferred until after Phase 8** (1Password) is stable
 
 ## What does NOT move to Nix
 

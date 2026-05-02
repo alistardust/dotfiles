@@ -1,6 +1,7 @@
 auto-cpufreq
 curl
 git
+glow
 gcc
 gettext
 htop

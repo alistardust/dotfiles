@@ -4,6 +4,7 @@ findutils
 gawk
 gcc
 gettext
+glow
 gnu-getopt
 gnu-indent
 gnu-sed
