@@ -10,7 +10,7 @@ starting with macOS, while keeping `setup.sh` fully intact for existing machines
 **Architecture:** `flake.nix` + `hosts/` + `modules/` are added to this repo alongside the
 existing `setup.sh`. A thin `bootstrap.sh` installs Nix and runs `home-manager switch`. Migration
 proceeds phase-by-phase; each phase is independently mergeable and leaves all machines working.
-macOS (macbook) is the primary rollout target; CachyOS (cachyos-home) follows.
+CachyOS (cachyos-home) is the primary rollout target; macOS (macbook) follows.
 
 **Tech Stack:** Nix flakes, Home Manager, Agenix (secrets), Oh My Zsh, gpakosz/.tmux, Vim,
 Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
@@ -20,7 +20,7 @@ Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
 - Oh My Zsh kept via `programs.zsh.oh-my-zsh`
 - gpakosz/.tmux framework kept as `home.file` managed source
 - Restructure this repo in-place (no separate nix-config repo)
-- macbook first rollout, then cachyos-home
+- cachyos-home first rollout, then macbook
 - SSH agent consolidation deferred until after Phase 8
 
 ---
@@ -260,15 +260,15 @@ Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
 
 ---
 
-### Task 4: Validate Phase 1 end-to-end on macbook
+### Task 4: Validate Phase 1 end-to-end on cachyos-home
 
-> This is a live test on the macbook. The switch should succeed and manage almost nothing —
+> This is a live test on cachyos-home. The switch should succeed and manage almost nothing —
 > just enough to confirm the plumbing works before adding real config in Phase 2.
 
-- [ ] **Step 1: Run bootstrap.sh on macbook**
+- [ ] **Step 1: Run bootstrap.sh on cachyos-home**
 
   ```bash
-  ./bootstrap.sh macbook
+  ./bootstrap.sh cachyos-home
   ```
 
   Expected:
@@ -288,7 +288,7 @@ Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
 
   ```bash
   home-manager rollback
-  home-manager switch --flake ".#macbook"
+  home-manager switch --flake ".#cachyos-home"
   ```
 
   Expected: both commands succeed. Confirms the generation mechanism is healthy.
@@ -299,7 +299,7 @@ Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
   document in `bootstrap.sh` comments, then commit:
 
   ```bash
-  git commit -m "fix(nix): adjust macbook host config after live validation"
+  git commit -m "fix(nix): adjust cachyos-home host config after live validation"
   ```
 
 ---
@@ -310,7 +310,7 @@ Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
 
 **Files:**
 - Create: `modules/base.nix`
-- Modify: `hosts/macbook/default.nix` (add base.nix import)
+- Modify: `hosts/cachyos-home/default.nix` (add base.nix import)
 
 > Start with the safest, most portable items: fonts and git. No platform conditionals yet.
 > Alacritty is deferred to Task 6 because it needs a platform conditional.
@@ -358,7 +358,7 @@ Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
 - [ ] **Step 3: Run home-manager switch and verify fonts are installed**
 
   ```bash
-  home-manager switch --flake ".#macbook"
+  home-manager switch --flake ".#cachyos-home"
   fc-list | grep -i jetbrains
   ```
 
@@ -367,7 +367,7 @@ Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
 - [ ] **Step 4: Commit**
 
   ```bash
-  git add modules/base.nix hosts/macbook/default.nix
+  git add modules/base.nix hosts/cachyos-home/default.nix
   git commit -m "feat(nix): add modules/base.nix with fonts and git config"
   ```
 
@@ -396,7 +396,7 @@ Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
 - [ ] **Step 2: Switch and verify**
 
   ```bash
-  home-manager switch --flake ".#macbook"
+  home-manager switch --flake ".#cachyos-home"
   ls -la ~/.config/alacritty/alacritty.toml
   ```
 
@@ -415,11 +415,15 @@ Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
 
 **Files:**
 - Create: `modules/gnubin.nix`
-- Modify: `hosts/macbook/default.nix`
+- Modify: `hosts/macbook/default.nix` *(macOS-only — skip for cachyos-home; add to macbook when rolling out)*
 
 > On macOS, GNU tools (sed, awk, tar, grep, etc.) shadow the BSD variants on PATH.
 > In nixpkgs, GNU tools install with their standard names (`sed`, `awk`) unlike Homebrew's
 > `gsed`/`gawk`. This module replaces `section_gnubin` entirely.
+>
+> **CachyOS note:** GNU tools are already the default on Linux — this module uses
+> `lib.mkIf pkgs.stdenv.isDarwin` so it is safe to import on any host, but it is
+> a no-op on Linux. Import it into `hosts/macbook/default.nix` when doing the macbook rollout.
 
 - [ ] **Step 1: Create modules/gnubin.nix**
 
@@ -438,7 +442,9 @@ Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
   }
   ```
 
-- [ ] **Step 2: Import gnubin.nix in macbook host**
+- [ ] **Step 2: Import gnubin.nix in macbook host** *(deferred to macbook rollout)*
+
+  When rolling out to macbook, add to `hosts/macbook/default.nix`:
 
   ```nix
   imports = [
@@ -447,7 +453,7 @@ Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
   ];
   ```
 
-- [ ] **Step 3: Switch and verify**
+- [ ] **Step 3: Switch and verify** *(macbook only)*
 
   ```bash
   home-manager switch --flake ".#macbook"
@@ -459,7 +465,7 @@ Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
 - [ ] **Step 4: Commit**
 
   ```bash
-  git add modules/gnubin.nix hosts/macbook/default.nix
+  git add modules/gnubin.nix
   git commit -m "feat(nix): add modules/gnubin.nix -- GNU tools on macOS"
   ```
 
@@ -469,7 +475,7 @@ Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
 
 **Files:**
 - Create: `modules/shell.nix`
-- Modify: `hosts/macbook/default.nix`
+- Modify: `hosts/cachyos-home/default.nix`
 
 > This replaces the `sed`/marker append pattern in `section_zsh`. All custom `.zshrc`
 > content moves into `programs.zsh.initExtra`; OMZ is declared via `programs.zsh.oh-my-zsh`.
@@ -525,7 +531,7 @@ Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
 - [ ] **Step 4: Switch and verify zsh loads correctly**
 
   ```bash
-  home-manager switch --flake ".#macbook"
+  home-manager switch --flake ".#cachyos-home"
   zsh -i -c "echo 'zsh ok'; omz version"
   ```
 
@@ -534,7 +540,7 @@ Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
 - [ ] **Step 5: Commit**
 
   ```bash
-  git add modules/shell.nix hosts/macbook/default.nix
+  git add modules/shell.nix hosts/cachyos-home/default.nix
   git commit -m "feat(nix): add modules/shell.nix -- zsh + Oh My Zsh via home-manager"
   ```
 
@@ -544,7 +550,7 @@ Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
 
 **Files:**
 - Create: `modules/tmux.nix`
-- Modify: `hosts/macbook/default.nix`
+- Modify: `hosts/cachyos-home/default.nix`
 
 > gpakosz/.tmux is a custom framework, not a standard tmux plugin. It's kept as a
 > `home.file` managed source; `.tmux.conf.local` becomes a static template committed
@@ -604,7 +610,7 @@ Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
   Run the switch, grab the hash from the error:
 
   ```bash
-  home-manager switch --flake ".#macbook" 2>&1 | grep 'got:'
+  home-manager switch --flake ".#cachyos-home" 2>&1 | grep 'got:'
   ```
 
   Paste the reported hash into `sha256` in `modules/tmux.nix`.
@@ -612,7 +618,7 @@ Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
 - [ ] **Step 4: Switch and verify**
 
   ```bash
-  home-manager switch --flake ".#macbook"
+  home-manager switch --flake ".#cachyos-home"
   ls -la ~/.tmux.conf ~/.tmux.conf.local
   tmux -V
   ```
@@ -622,7 +628,7 @@ Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
 - [ ] **Step 5: Commit**
 
   ```bash
-  git add modules/tmux.nix hosts/macbook/default.nix
+  git add modules/tmux.nix hosts/cachyos-home/default.nix
   git commit -m "feat(nix): add modules/tmux.nix -- gpakosz framework via home.file"
   ```
 
@@ -634,7 +640,7 @@ Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
 
 **Files:**
 - Create: `modules/vim.nix`
-- Modify: `hosts/macbook/default.nix`
+- Modify: `hosts/cachyos-home/default.nix`
 
 > AXington/.vim repo stays as the source of truth (on the `Divine` branch). Home Manager
 > symlinks the whole `~/.vim` directory. Full vim-in-Nix (plugins, config fully declarative)
@@ -664,9 +670,9 @@ Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
 - [ ] **Step 2: Run switch, fill in hash, run switch again**
 
   ```bash
-  home-manager switch --flake ".#macbook" 2>&1 | grep 'got:'
+  home-manager switch --flake ".#cachyos-home" 2>&1 | grep 'got:'
   # paste the reported hash (including sha256- prefix) into modules/vim.nix hash field
-  home-manager switch --flake ".#macbook"
+  home-manager switch --flake ".#cachyos-home"
   ```
 
 - [ ] **Step 3: Verify**
@@ -681,7 +687,7 @@ Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
 - [ ] **Step 4: Commit**
 
   ```bash
-  git add modules/vim.nix hosts/macbook/default.nix
+  git add modules/vim.nix hosts/cachyos-home/default.nix
   git commit -m "feat(nix): add modules/vim.nix -- symlink ~/.vim to AXington/.vim Divine branch"
   ```
 
@@ -691,7 +697,7 @@ Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
 
 **Files:**
 - Create: `modules/python-dev.nix`
-- Modify: `hosts/macbook/default.nix`
+- Modify: `hosts/cachyos-home/default.nix`
 
 > This installs `uv` via nixpkgs, installs `uv-virtualenvwrapper` as a uv tool via an
 > activation hook, and wires the shell init into `initExtra`. This matches exactly what
@@ -721,7 +727,7 @@ Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
 - [ ] **Step 2: Import in macbook host and switch**
 
   ```bash
-  home-manager switch --flake ".#macbook"
+  home-manager switch --flake ".#cachyos-home"
   zsh -i -c "workon --help"
   ```
 
@@ -730,7 +736,7 @@ Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
 - [ ] **Step 3: Commit**
 
   ```bash
-  git add modules/python-dev.nix hosts/macbook/default.nix
+  git add modules/python-dev.nix hosts/cachyos-home/default.nix
   git commit -m "feat(nix): add modules/python-dev.nix -- uv + virtualenvwrapper"
   ```
 
@@ -742,7 +748,7 @@ Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
 
 **Files:**
 - Create: `modules/ai-instructions.nix`
-- Modify: `hosts/macbook/default.nix` (import here, NOT inside per-tool modules)
+- Modify: `hosts/cachyos-home/default.nix` (import here, NOT inside per-tool modules)
 
 > The three AI instruction files (`~/.copilot/copilot-instructions.md`, `~/.claude/CLAUDE.md`,
 > `~/.codex/AGENTS.md`) share ~80% content. This module generates all three from a single
@@ -814,7 +820,7 @@ Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
 - [ ] **Step 4: Switch and verify files match pre-switch snapshots**
 
   ```bash
-  home-manager switch --flake ".#macbook"
+  home-manager switch --flake ".#cachyos-home"
   diff ~/.dotfiles-backup/copilot-instructions.md.bak ~/.copilot/copilot-instructions.md
   diff ~/.dotfiles-backup/CLAUDE.md.bak ~/.claude/CLAUDE.md
   diff ~/.dotfiles-backup/AGENTS.md.bak ~/.codex/AGENTS.md
@@ -825,7 +831,7 @@ Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
 - [ ] **Step 5: Commit**
 
   ```bash
-  git add modules/ai-instructions.nix hosts/macbook/default.nix
+  git add modules/ai-instructions.nix hosts/cachyos-home/default.nix
   git commit -m "feat(nix): add modules/ai-instructions.nix -- shared AI instruction template"
   ```
 
@@ -835,7 +841,7 @@ Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
 
 **Files:**
 - Create: `modules/copilot.nix`
-- Modify: `hosts/macbook/default.nix`
+- Modify: `hosts/cachyos-home/default.nix`
 
 - [ ] **Step 1: Create modules/copilot.nix**
 
@@ -869,7 +875,7 @@ Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
 - [ ] **Step 2: Switch and verify**
 
   ```bash
-  home-manager switch --flake ".#macbook"
+  home-manager switch --flake ".#cachyos-home"
   cat ~/.copilot/settings.json
   ls ~/.copilot/skills/superpowers
   ```
@@ -877,7 +883,7 @@ Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
 - [ ] **Step 3: Commit**
 
   ```bash
-  git add modules/copilot.nix hosts/macbook/default.nix
+  git add modules/copilot.nix hosts/cachyos-home/default.nix
   git commit -m "feat(nix): add modules/copilot.nix -- Copilot CLI + settings + Superpowers"
   ```
 
@@ -887,7 +893,7 @@ Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
 
 **Files:**
 - Create: `modules/claude.nix`
-- Modify: `hosts/macbook/default.nix`
+- Modify: `hosts/cachyos-home/default.nix`
 
 > Claude Code installs via npm. gstack requires Bun. Both are handled via `home.activation`
 > since they're not in nixpkgs as installable Home Manager programs. gstack installs to
@@ -926,7 +932,7 @@ Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
 - [ ] **Step 2: Switch and verify**
 
   ```bash
-  home-manager switch --flake ".#macbook"
+  home-manager switch --flake ".#cachyos-home"
   claude --version
   command -v gstack || ls ~/.claude/skills/gstack/
   cat ~/.claude/CLAUDE.md | head -5
@@ -937,7 +943,7 @@ Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
 - [ ] **Step 3: Commit**
 
   ```bash
-  git add modules/claude.nix hosts/macbook/default.nix
+  git add modules/claude.nix hosts/cachyos-home/default.nix
   git commit -m "feat(nix): add modules/claude.nix -- Claude Code + gstack via activation"
   ```
 
@@ -948,7 +954,7 @@ Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
 **Files:**
 - Create: `modules/chatgpt.nix`
 - Create: `modules/shellgpt.nix`
-- Modify: `hosts/macbook/default.nix`
+- Modify: `hosts/cachyos-home/default.nix`
 
 - [ ] **Step 1: Create modules/chatgpt.nix**
 
@@ -985,7 +991,7 @@ Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
 - [ ] **Step 3: Switch and verify all three outputs**
 
   ```bash
-  home-manager switch --flake ".#macbook"
+  home-manager switch --flake ".#cachyos-home"
   codex --version
   sgpt --version
   cat ~/.codex/AGENTS.md | head -5
@@ -996,7 +1002,7 @@ Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
 - [ ] **Step 4: Commit**
 
   ```bash
-  git add modules/chatgpt.nix modules/shellgpt.nix hosts/macbook/default.nix
+  git add modules/chatgpt.nix modules/shellgpt.nix hosts/cachyos-home/default.nix
   git commit -m "feat(nix): add chatgpt and shellgpt modules"
   ```
 
@@ -1111,6 +1117,6 @@ These write to `/etc/` and manage systemd services. They are **NOT Home Manager 
 | Oh My Zsh | **Keep OMZ** via `programs.zsh.oh-my-zsh` (theme + plugins + initExtra) |
 | gpakosz/.tmux | **Keep framework** as `home.file` managed source; static `.tmux.conf.local` |
 | Repo structure | **Restructure in-place** — no separate nix-config repo |
-| Rollout target | **macbook first** (simpler, no system-level services) |
+| Rollout target | **cachyos-home first** (on-machine now); macbook follows |
 | glow | **Add to package lists now** (pre-Nix quick win) |
 | SSH agent | **Defer** until after Phase 8 (1Password) is stable |
