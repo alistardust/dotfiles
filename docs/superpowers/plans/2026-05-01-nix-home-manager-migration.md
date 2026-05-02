@@ -752,12 +752,14 @@ Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
 
 - [ ] **Step 1: Identify the shared content**
 
-  Snapshot the current files before the switch (used for verification in Step 4):
+  Snapshot the current files before the switch (used for verification in Step 4).
+  Use `~/.dotfiles-backup/` rather than `/tmp/` so they survive a reboot between steps:
 
   ```bash
-  cp ~/.copilot/copilot-instructions.md /tmp/copilot-instructions.md.bak
-  cp ~/.claude/CLAUDE.md /tmp/CLAUDE.md.bak
-  cp ~/.codex/AGENTS.md /tmp/AGENTS.md.bak
+  mkdir -p ~/.dotfiles-backup
+  cp ~/.copilot/copilot-instructions.md ~/.dotfiles-backup/copilot-instructions.md.bak
+  cp ~/.claude/CLAUDE.md ~/.dotfiles-backup/CLAUDE.md.bak
+  cp ~/.codex/AGENTS.md ~/.dotfiles-backup/AGENTS.md.bak
   ```
 
   Diff to find shared vs. tool-specific content:
@@ -813,9 +815,9 @@ Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
 
   ```bash
   home-manager switch --flake ".#macbook"
-  diff /tmp/copilot-instructions.md.bak ~/.copilot/copilot-instructions.md
-  diff /tmp/CLAUDE.md.bak ~/.claude/CLAUDE.md
-  diff /tmp/AGENTS.md.bak ~/.codex/AGENTS.md
+  diff ~/.dotfiles-backup/copilot-instructions.md.bak ~/.copilot/copilot-instructions.md
+  diff ~/.dotfiles-backup/CLAUDE.md.bak ~/.claude/CLAUDE.md
+  diff ~/.dotfiles-backup/AGENTS.md.bak ~/.codex/AGENTS.md
   ```
 
   Expected: no meaningful diff (only whitespace/formatting may differ).
@@ -912,6 +914,7 @@ Alacritty, 1Password CLI (future), zsh/OMZ, uv, existing AI CLIs.
     home.activation.installGstack = lib.hm.dag.entryAfter ["writeBoundary"] ''
       GSTACK_DIR="$HOME/.claude/skills/gstack"
       if [[ ! -d "$GSTACK_DIR" ]]; then
+        # HTTPS intentional: SSH keys may not be configured yet at activation time
         $DRY_RUN_CMD git clone --single-branch --depth 1 \
           https://github.com/garrytan/gstack.git "$GSTACK_DIR"
         $DRY_RUN_CMD bash -c "cd '$GSTACK_DIR' && ./setup --quiet"
@@ -1071,6 +1074,8 @@ These write to `/etc/` and manage systemd services. They are **NOT Home Manager 
 - [ ] Wire into home-manager via `age.secrets.<name>.file`; run `home-manager switch`
 - [ ] Verify: confirm each secret appears at its expected path with correct permissions
   ```bash
+  # Note: `home-manager option` output format varies by version — validate this command
+  # against your HM version before running. Fall back to manual `ls -la <path>` if needed.
   ls -la $(home-manager option age.secrets | grep path | awk '{print $2}')
   age --decrypt -i ~/.config/agenix/key.txt secrets/<name>.age
   ```
