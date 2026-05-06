@@ -1299,6 +1299,32 @@ INSTRUCTIONS
         ok "Superpowers installed for Copilot."
     fi
 
+    # gstack -- Garry Tan's engineering team skills for Copilot CLI
+    # Uses ridermw/gstack (PR garrytan/gstack#393) which adds --host copilot.
+    # The setup script clones to a cache dir, builds the browse binary with bun,
+    # generates .agents/skills/ docs, then writes per-skill dirs under
+    # ~/.copilot/skills/gstack-*/ and a runtime root at ~/.copilot/skills/gstack/.
+    local gstack_cache="$HOME/.copilot/marketplace-cache/gstack"
+    local gstack_runtime="$HOME/.copilot/skills/gstack"
+    if [[ -d "$gstack_runtime" ]]; then
+        ok "gstack for Copilot already installed."
+    else
+        ensure_bun || return 1
+        log "Installing gstack for GitHub Copilot CLI..."
+        if [[ ! -d "$gstack_cache" ]]; then
+            run git clone --single-branch --depth 1 \
+                --branch add-copilot-cli-support \
+                git@github.com:ridermw/gstack.git \
+                "$gstack_cache"
+        fi
+        if [[ "$DRY_RUN" == "true" ]]; then
+            printf '\e[2;37m  [dry] cd %s && ./setup --host copilot\e[0m\n' "$gstack_cache"
+        else
+            bash -c "cd '$gstack_cache' && ./setup --host copilot"
+        fi
+        ok "gstack installed for Copilot."
+    fi
+
     log "To authenticate, run: copilot /login"
 }
 
@@ -2067,6 +2093,10 @@ verify_copilot() {
                                         && pass "Copilot settings written"                     || fail "Copilot settings missing"
     [[ -L "$HOME/.copilot/skills/brainstorming" ]] \
                                         && pass "Superpowers for Copilot installed (flat symlinks)" || fail "Superpowers for Copilot not installed"
+    { command_exists bun || [[ -x "$HOME/.bun/bin/bun" ]]; } \
+                                        && pass "bun installed (gstack dependency)"             || fail "bun not installed (required by gstack)"
+    [[ -d "$HOME/.copilot/skills/gstack" ]] \
+                                        && pass "gstack installed for Copilot"                  || fail "gstack not installed for Copilot"
 }
 
 verify_claude() {
