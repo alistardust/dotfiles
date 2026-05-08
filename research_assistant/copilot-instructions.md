@@ -155,6 +155,130 @@ tmp.unlink()
 
 ---
 
+## Memory System
+
+The agent uses a three-layer memory architecture. All memory operations are
+best-effort and never block the chat loop.
+
+### Layer 1 -- Working memory (sliding window)
+
+`loop.py` trims `messages` to the last `_MAX_HISTORY_MESSAGES = 30` entries
+before building each API payload. The controller's display list is never
+modified -- trimming is a read-side safety net only.
+
+### Layer 2 -- Session memory (in-session narrative compression)
+
+`SessionController._detect_and_summarize_aged()` is called from `submit()`
+before launching the worker thread. When `len(self.messages)` exceeds the
+window, the aged batch is summarized by `MemorySummarizer.summarize_messages()`
+and stored in `self._session_summary`. The worker receives this via
+`_run_worker(messages, cancel_event, session_summary)`, which passes it to
+`agent_chat(session_summary=...)`. The loop injects it as a
+`--- EARLIER IN THIS SESSION ---` content block between the system prompt
+and the live window.
+
+Periodic flush: every `flush_every_n_turns` (default 10) turns, `_on_reply()`
+spawns a daemon thread to call `MemoryStore.update_session_summary()` with a
+fresh embedding. This never runs on the UI thread.
+
+### Layer 3 -- Persistent memory (SQLite + Ollama)
+
+Database: `~/.config/<appname>/memory.db` (WAL mode, FTS5).
+
+Schema tables:
+- `sessions` -- id, nick, started_at, ended_at, summary, technical_notes,
+  embedding (BLOB), turn_count
+- `facts` -- id, category, fact_text, source_session_id, embedding, created_at,
+  updated_at
+- `sessions_fts` / `facts_fts` -- FTS5 external-content tables with explicit
+  `_ai`, `_ad`, `_au` triggers (required -- without triggers FTS5 returns
+  stale data)
+- `schema_version` -- single row for migration tracking
+
+**FTS5 trigger rule:** Every `INSERT`, `DELETE`, and `UPDATE` on `sessions`
+and `facts` must have a corresponding trigger to keep the FTS5 index in sync.
+Test all three trigger types for both tables.
+
+### OllamaEmbedder lifecycle
+
+`OllamaEmbedder.ensure_running()` checks `http://localhost:11434/`, launches
+`ollama serve` via `subprocess.Popen` if not reachable, waits up to
+`startup_timeout` seconds. `FileNotFoundError` (ollama not in PATH) is caught
+and returns `False`. Started in a daemon thread from `TachiApp._wire_memory()`
+-- never blocks the UI thread. `stop_on_exit` config controls whether the
+process is terminated at exit.
+
+Embedding model: `nomic-embed-text` (default). Embeddings stored as
+`struct.pack("f" * len(v), *v)` BLOB. FTS5 keyword search is the fallback
+when Ollama is unavailable.
+
+### MemoryStore API
+
+```python
+store.start_session(nick: str) -> str                         # returns session_id
+store.update_session_summary(id, summary, embedding, turns)   # periodic flush
+store.end_session(id, summary, technical_notes, embedding, facts)  # on exit
+store.add_fact(category, text, source_session_id)             # /remember command
+store.search(query, limit=5) -> list[SearchResult]            # semantic + FTS5
+store.list_sessions(limit=20) -> list[SessionRecord]
+store.get_session_detail(id) -> SessionDetail | None          # lazy technical_notes
+store.delete(id, type: Literal["session", "fact"]) -> bool
+```
+
+`technical_notes` is lazy -- NULL until `end_session()`. Only fetched via
+`/memory show <id>` (use `get_session_detail()`).
+
+### search_memory tool
+
+Registered via `register(ToolDef(...))` at import time in `tools/memory.py`.
+`_load_tools()` in `tools/__init__.py` imports it to trigger registration.
+Module-level `_store: MemoryStore | None = None` singleton wired at startup
+via `set_memory_store()` called from `TachiApp._wire_memory()`.
+
+The agent invokes this tool automatically when the user asks about past work,
+says "do you remember", or references previous sessions.
+
+### finalize_session()
+
+Called from `TachiApp._clean_exit()` before worker shutdown:
+
+```python
+self.controller.finalize_session(embedder=self._embedder, timeout=15.0)
+```
+
+Runs in a daemon thread with a 15s join timeout. Calls `summarize_messages()`,
+`extract_technical_notes()`, `extract_facts()`, then `store.end_session()`.
+Best-effort -- failures are logged as warnings, never raised.
+
+### Slash commands
+
+| Command | Description |
+|---------|-------------|
+| `/memory search <query>` | Semantic + FTS5 search over sessions and facts |
+| `/memory list` | Recent stored sessions (most recent first) |
+| `/memory show <id>` | Full session narrative + technical notes |
+| `/memory forget session:<id>` | Delete a stored session |
+| `/memory forget fact:<id>` | Delete a stored fact |
+| `/remember <text>` | Pin an explicit fact to long-term memory |
+
+Both `/memory` and `/remember` are in `_KNOWN_SLASH` in `controller.py`.
+Handlers are `_cmd_memory()` and `_cmd_remember()` on `SessionController`.
+Slash dispatch reads from the full `command` string (not just the first token)
+for the subcommand remainder.
+
+### Config
+
+```toml
+[agent.memory]
+enabled = true
+embedding_model = "nomic-embed-text"
+stop_ollama_on_exit = false
+flush_every_n_turns = 10
+max_search_results = 5
+```
+
+---
+
 ## Configuration
 
 Config is loaded from `~/.config/<appname>/config.toml` (or `~/<appname>.toml` as
