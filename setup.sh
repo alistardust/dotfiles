@@ -71,7 +71,7 @@ OS="$(detect_os)"
 
 # -- Argument parsing ----------------------------------------------------------
 
-ALL_SECTIONS=(packages gnubin fonts tmux zsh vim alacritty wsl python keyd auto_cpufreq copilot claude chatgpt shellgpt)
+ALL_SECTIONS=(packages gnubin fonts tmux zsh vim alacritty wsl python keyd auto_cpufreq ddcutil copilot claude chatgpt shellgpt)
 declare -A RUN
 for s in "${ALL_SECTIONS[@]}"; do RUN[$s]=true; done
 RUN[copilot]=false                                    # opt-in; use --copilot or --all
@@ -82,6 +82,7 @@ if [[ "$OS" == "macos" ]]; then RUN[gnubin]=true; else RUN[gnubin]=false; fi  # 
 if [[ "$OS" == "wsl"   ]]; then RUN[wsl]=true;   else RUN[wsl]=false;   fi   # WSL-only
 if [[ "$OS" != "linux" ]]; then RUN[keyd]=false;        fi  # Linux-only (key remap daemon)
 if [[ "$OS" != "linux" ]] || [[ "$OS" == "wsl" ]]; then RUN[auto_cpufreq]=false; fi  # Linux bare-metal only
+if [[ "$OS" == "wsl" ]]; then RUN[ddcutil]=false; fi                                # not supported under WSL
 if [[ "$(detect_linux_distro 2>/dev/null)" == "arch" ]]; then RUN[fonts]=false; fi  # Arch: fonts managed via pacman
 
 usage() {
@@ -1017,7 +1018,63 @@ verify_auto_cpufreq() {
     check "auto-cpufreq service active" "systemctl is-active --quiet auto-cpufreq"
 }
 
-# -- 12. GitHub Copilot CLI ----------------------------------------------------
+# -- 12. DDC/CI monitor control ------------------------------------------------
+
+section_ddcutil() {
+    if [[ "$OS" == "wsl" ]]; then
+        log "ddcutil: skipping (not supported under WSL)"
+        return 0
+    fi
+
+    case "$OS" in
+        linux)
+            log "Setting up ddcutil (DDC/CI monitor control)..."
+            if ! command_exists ddcutil; then
+                case "$(detect_linux_distro)" in
+                    arch)   run sudo pacman -S --noconfirm ddcutil ;;
+                    debian) run sudo apt-get install -y ddcutil ;;
+                    *)      warn "Unknown distro -- install ddcutil manually." ; return 0 ;;
+                esac
+            else
+                ok "ddcutil already installed."
+            fi
+            # Add user to i2c group for passwordless DDC/CI access
+            if ! id -nG | grep -qw i2c; then
+                run sudo usermod -aG i2c "$(whoami)"
+                ok "Added $(whoami) to i2c group -- re-login for effect."
+            else
+                ok "User already in i2c group."
+            fi
+            ;;
+        macos)
+            log "Setting up ddcctl (DDC/CI monitor control for macOS)..."
+            if ! command_exists ddcctl; then
+                run brew install ddcctl
+            else
+                ok "ddcctl already installed."
+            fi
+            ;;
+        *)
+            warn "ddcutil: unsupported OS ($OS)"
+            ;;
+    esac
+}
+
+verify_ddcutil() {
+    if [[ "$OS" == "wsl" ]]; then skip_check "ddcutil section not applicable under WSL"; return; fi
+    case "$OS" in
+        linux)
+            command_exists ddcutil          && pass "ddcutil installed"           || fail "ddcutil not installed"
+            id -nG 2>/dev/null | grep -qw i2c \
+                                            && pass "user in i2c group"           || fail "user not in i2c group (re-login required)"
+            ;;
+        macos)
+            command_exists ddcctl           && pass "ddcctl installed"            || fail "ddcctl not installed"
+            ;;
+    esac
+}
+
+# -- 13. GitHub Copilot CLI ----------------------------------------------------
 
 section_copilot() {
     log "Setting up GitHub Copilot CLI..."
@@ -1328,7 +1385,7 @@ INSTRUCTIONS
     log "To authenticate, run: copilot /login"
 }
 
-# -- 13. Claude Code -----------------------------------------------------------
+# -- 14. Claude Code -----------------------------------------------------------
 
 section_claude() {
     log "Setting up Claude Code..."
@@ -1586,7 +1643,7 @@ CLAUDEMD
     printf '    /plugin install superpowers@claude-plugins-official --global\n'
 }
 
-# -- 14. OpenAI Codex CLI (ChatGPT CLI) ---------------------------------------
+# -- 15. OpenAI Codex CLI (ChatGPT CLI) ---------------------------------------
 
 ensure_bun() {
     local bun_bin="$HOME/.bun/bin/bun"
@@ -1935,7 +1992,7 @@ AGENTS
     log "To install Superpowers, run inside a Codex session: /plugins → search 'superpowers'"
 }
 
-# -- 15. ShellGPT (unofficial open-source ChatGPT CLI) ------------------------
+# -- 16. ShellGPT (unofficial open-source ChatGPT CLI) ------------------------
 
 section_shellgpt() {
     log "Setting up ShellGPT (unofficial chat-focused CLI)..."
@@ -2174,6 +2231,7 @@ should_run wsl       && { [[ "$CHECK_ONLY" == "true" ]] && verify_wsl       || s
 should_run python    && { [[ "$CHECK_ONLY" == "true" ]] && verify_python    || section_python;    }
 should_run keyd        && { [[ "$CHECK_ONLY" == "true" ]] && verify_keyd        || section_keyd;        }
 should_run auto_cpufreq && { [[ "$CHECK_ONLY" == "true" ]] && verify_auto_cpufreq || section_auto_cpufreq; }
+should_run ddcutil     && { [[ "$CHECK_ONLY" == "true" ]] && verify_ddcutil     || section_ddcutil;     }
 should_run copilot   && { [[ "$CHECK_ONLY" == "true" ]] && verify_copilot   || section_copilot;   }
 should_run claude    && { [[ "$CHECK_ONLY" == "true" ]] && verify_claude    || section_claude;    }
 should_run chatgpt   && { [[ "$CHECK_ONLY" == "true" ]] && verify_chatgpt   || section_chatgpt;   }
