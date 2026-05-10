@@ -1047,11 +1047,16 @@ section_ddcutil() {
             fi
             ;;
         macos)
-            log "Setting up ddcctl (DDC/CI monitor control for macOS)..."
+            log "Setting up ddcctl + displayplacer (DDC/CI monitor control for macOS)..."
             if ! command_exists ddcctl; then
                 run brew install ddcctl
             else
                 ok "ddcctl already installed."
+            fi
+            if ! command_exists displayplacer; then
+                run brew install displayplacer
+            else
+                ok "displayplacer already installed."
             fi
             ;;
         *)
@@ -1059,32 +1064,145 @@ section_ddcutil() {
             ;;
     esac
 
-    # Inject monitor-switching aliases into ~/.zshrc (idempotent)
+    # Inject monitor-switching aliases into ~/.zshrc (idempotent, OS-aware)
     local zshrc="$HOME/.zshrc"
-    if [[ -f "$zshrc" ]] && ! grep -q "# >>> ddcutil aliases <<<" "$zshrc" 2>/dev/null; then
-        if [[ "$DRY_RUN" == "true" ]]; then
-            printf '\e[2;37m  [dry] append ddcutil monitor aliases to %s\e[0m\n' "$zshrc"
-        else
+    if [[ -f "$zshrc" ]] && grep -q "# >>> ddcutil aliases <<<" "$zshrc" 2>/dev/null; then
+        ok "ddcutil aliases already present in $zshrc."
+        return 0
+    fi
+    if [[ "$DRY_RUN" == "true" ]]; then
+        printf '\e[2;37m  [dry] append ddcutil monitor aliases to %s\e[0m\n' "$zshrc"
+        return 0
+    fi
+
+    case "$OS" in
+        linux)
             cat >> "$zshrc" << 'EOF'
 
 # >>> ddcutil aliases <<<
-# Monitor input switching (Samsung S34C65xU via DDC/CI).
-# Bus number detected at setup time; values: 0x36=USB-C, 0x0f=DP, 0x11=HDMI.
+# Two-monitor setup via DDC/CI (ddcutil, KDE Wayland / kscreen-doctor).
+#
+# Physical layout (Linux mode):
+#   [  Second: S34C65xU (DP-2) 3440x1440 @ 0,0      ]
+#   [    Main: LC32G5xT (DP-3) 2560x1440 @ 364,1440  ]
+#
+# Input codes:
+#   Main  (bus 8): 0x0f=DisplayPort(Linux)  0x06=HDMI
+#   Second(bus 7): 0x0f=DisplayPort(Linux)  0x36=USB-C(MacBook)
 if command -v ddcutil &>/dev/null; then
-    alias mon-usbc='ddcutil --bus=7 setvcp 60 0x36'
-    alias mon-dp='ddcutil --bus=7 setvcp 60 0x0f'
-    alias mon-hdmi='ddcutil --bus=7 setvcp 60 0x11'
-    alias mon-input='ddcutil --bus=7 getvcp 60'
-    alias mon-bright='ddcutil --bus=7 getvcp 10'
-    mon-set-bright() { ddcutil --bus=7 setvcp 10 "${1:?usage: mon-set-bright <0-100>}"; }
+    # --- Individual input switches ---
+    alias main-dp='ddcutil --bus=8 setvcp 60 0x0f'    # main   → Linux (DP)
+    alias main-hdmi='ddcutil --bus=8 setvcp 60 0x06'  # main   → HDMI
+    alias sec-dp='ddcutil --bus=7 setvcp 60 0x0f'     # second → Linux (DP)
+    alias sec-usbc='ddcutil --bus=7 setvcp 60 0x36'   # second → MacBook (USB-C)
+
+    # --- Brightness (second monitor) ---
+    alias sec-bright='ddcutil --bus=7 getvcp 10'
+    sec-set-bright() { ddcutil --bus=7 setvcp 10 "${1:?usage: sec-set-bright <0-100>}"; }
+
+    # --- Status ---
+    mon-status() {
+        echo "Main   (LC32G5xT, bus 8): $(ddcutil --bus=8 getvcp 60 2>/dev/null)"
+        echo "Second (S34C65xU, bus 7): $(ddcutil --bus=7 getvcp 60 2>/dev/null)"
+    }
+
+    # --- Compound: switch both monitors + restore layout ---
+    mon-linux() {
+        echo "Switching monitors to Linux..."
+        ddcutil --bus=8 setvcp 60 0x0f
+        ddcutil --bus=7 setvcp 60 0x0f
+        echo "Restoring KDE layout (waiting for monitors to wake)..."
+        sleep 4
+        kscreen-doctor \
+            output.DP-2.enable \
+            output.DP-2.mode.3440x1440@100 \
+            output.DP-2.position.0,0 \
+            output.DP-3.enable \
+            output.DP-3.mode.2560x1440@144 \
+            output.DP-3.position.364,1440
+        echo "Done."
+    }
+
+    mon-mac() {
+        echo "Handing monitors to MacBook..."
+        ddcutil --bus=8 setvcp 60 0x06
+        ddcutil --bus=7 setvcp 60 0x36
+        echo "Done."
+    }
 fi
 # <<< ddcutil aliases <<<
 EOF
             ok "ddcutil aliases written to $zshrc."
+            ;;
+        macos)
+            cat >> "$zshrc" << 'EOF'
+
+# >>> ddcutil aliases <<<
+# Two-monitor setup via DDC/CI (ddcctl) + display layout (displayplacer).
+#
+# Physical layout (Mac mode):
+#   [MacBook] [  Second: S34C65xU  ] (USB-C, display number TBD)
+#             [  Main:   LC32G5xT  ] (HDMI,  display number TBD)
+#
+# One-time setup: run 'mon-discover' to find display numbers, then update
+# MON_MAIN_NUM and MON_SECOND_NUM below, and set MON_MAC_LAYOUT with the
+# output of 'displayplacer list' for your preferred arrangement.
+#
+# Input codes (decimal for ddcctl):
+#   Main:   15=DisplayPort(Linux)  6=HDMI
+#   Second: 15=DisplayPort(Linux)  54=USB-C(MacBook)
+MON_MAIN_NUM="${MON_MAIN_NUM:-1}"    # override in ~/.zshrc.local
+MON_SECOND_NUM="${MON_SECOND_NUM:-2}"
+MON_MAC_LAYOUT="${MON_MAC_LAYOUT:-}"  # set to 'displayplacer list' output
+
+if command -v ddcctl &>/dev/null; then
+    # --- Individual input switches ---
+    alias main-dp="ddcctl -d \$MON_MAIN_NUM -i 15"    # main   → Linux (DP)
+    alias main-hdmi="ddcctl -d \$MON_MAIN_NUM -i 6"   # main   → HDMI (Mac)
+    alias sec-dp="ddcctl -d \$MON_SECOND_NUM -i 15"   # second → Linux (DP)
+    alias sec-usbc="ddcctl -d \$MON_SECOND_NUM -i 54" # second → MacBook (USB-C)
+
+    # --- Status ---
+    mon-status() {
+        echo "Main   (display $MON_MAIN_NUM):   $(ddcctl -d "$MON_MAIN_NUM"   -g 60 2>/dev/null)"
+        echo "Second (display $MON_SECOND_NUM): $(ddcctl -d "$MON_SECOND_NUM" -g 60 2>/dev/null)"
+    }
+
+    # --- Discover display numbers (run once after connecting monitors) ---
+    mon-discover() {
+        echo "Probing display numbers (current input source)..."
+        for i in 1 2 3 4; do
+            result=$(ddcctl -d "$i" -g 60 2>/dev/null)
+            [[ -n "$result" ]] && echo "  Display $i: $result"
+        done
+        echo ""
+        echo "Set MON_MAIN_NUM and MON_SECOND_NUM in ~/.zshrc.local once identified."
+    }
+
+    # --- Compound: switch both monitors + restore layout ---
+    mon-mac() {
+        echo "Taking monitors to MacBook..."
+        ddcctl -d "$MON_MAIN_NUM"   -i 6   # main   → HDMI
+        ddcctl -d "$MON_SECOND_NUM" -i 54  # second → USB-C
+        if [[ -n "$MON_MAC_LAYOUT" ]] && command -v displayplacer &>/dev/null; then
+            sleep 3
+            eval "displayplacer $MON_MAC_LAYOUT"
         fi
-    else
-        ok "ddcutil aliases already present in $zshrc."
-    fi
+        echo "Done."
+    }
+
+    mon-linux() {
+        echo "Handing monitors to Linux..."
+        ddcctl -d "$MON_MAIN_NUM"   -i 15  # main   → DP
+        ddcctl -d "$MON_SECOND_NUM" -i 15  # second → DP
+        echo "Done."
+    }
+fi
+# <<< ddcutil aliases <<<
+EOF
+            ok "ddcctl aliases written to $zshrc."
+            ;;
+    esac
 }
 
 verify_ddcutil() {
@@ -1099,6 +1217,9 @@ verify_ddcutil() {
             ;;
         macos)
             command_exists ddcctl           && pass "ddcctl installed"            || fail "ddcctl not installed"
+            command_exists displayplacer    && pass "displayplacer installed"     || fail "displayplacer not installed"
+            grep -q "# >>> ddcutil aliases <<<" "$HOME/.zshrc" 2>/dev/null \
+                                            && pass "ddcutil aliases in .zshrc"   || fail "ddcutil aliases missing from .zshrc"
             ;;
     esac
 }
