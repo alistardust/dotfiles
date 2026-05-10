@@ -1058,6 +1058,33 @@ section_ddcutil() {
             warn "ddcutil: unsupported OS ($OS)"
             ;;
     esac
+
+    # Inject monitor-switching aliases into ~/.zshrc (idempotent)
+    local zshrc="$HOME/.zshrc"
+    if [[ -f "$zshrc" ]] && ! grep -q "# >>> ddcutil aliases <<<" "$zshrc" 2>/dev/null; then
+        if [[ "$DRY_RUN" == "true" ]]; then
+            printf '\e[2;37m  [dry] append ddcutil monitor aliases to %s\e[0m\n' "$zshrc"
+        else
+            cat >> "$zshrc" << 'EOF'
+
+# >>> ddcutil aliases <<<
+# Monitor input switching (Samsung S34C65xU via DDC/CI).
+# Bus number detected at setup time; values: 0x36=USB-C, 0x0f=DP, 0x11=HDMI.
+if command -v ddcutil &>/dev/null; then
+    alias mon-usbc='ddcutil --bus=7 setvcp 60 0x36'
+    alias mon-dp='ddcutil --bus=7 setvcp 60 0x0f'
+    alias mon-hdmi='ddcutil --bus=7 setvcp 60 0x11'
+    alias mon-input='ddcutil --bus=7 getvcp 60'
+    alias mon-bright='ddcutil --bus=7 getvcp 10'
+    mon-set-bright() { ddcutil --bus=7 setvcp 10 "${1:?usage: mon-set-bright <0-100>}"; }
+fi
+# <<< ddcutil aliases <<<
+EOF
+            ok "ddcutil aliases written to $zshrc."
+        fi
+    else
+        ok "ddcutil aliases already present in $zshrc."
+    fi
 }
 
 verify_ddcutil() {
@@ -1067,6 +1094,8 @@ verify_ddcutil() {
             command_exists ddcutil          && pass "ddcutil installed"           || fail "ddcutil not installed"
             id -nG 2>/dev/null | grep -qw i2c \
                                             && pass "user in i2c group"           || fail "user not in i2c group (re-login required)"
+            grep -q "# >>> ddcutil aliases <<<" "$HOME/.zshrc" 2>/dev/null \
+                                            && pass "ddcutil aliases in .zshrc"   || fail "ddcutil aliases missing from .zshrc"
             ;;
         macos)
             command_exists ddcctl           && pass "ddcctl installed"            || fail "ddcctl not installed"
