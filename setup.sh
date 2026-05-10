@@ -1087,23 +1087,23 @@ section_ddcutil() {
 #   [    Main: LC32G5xT (DP-3) 2560x1440 @ 364,1440  ]
 #
 # Input codes:
-#   Main  (bus 8): 0x0f=DisplayPort(Linux)  0x06=HDMI
-#   Second(bus 7): 0x0f=DisplayPort(Linux)  0x36=USB-C(MacBook)
+#   Main (bus 8): 0x0f=DisplayPort(Linux)  0x06=HDMI
+#   Top  (bus 7): 0x0f=DisplayPort(Linux)  0x36=USB-C(MacBook)
 if command -v ddcutil &>/dev/null; then
     # --- Individual input switches ---
-    alias main-dp='ddcutil --bus=8 setvcp 60 0x0f'    # main   → Linux (DP)
-    alias main-hdmi='ddcutil --bus=8 setvcp 60 0x06'  # main   → HDMI
-    alias sec-dp='ddcutil --bus=7 setvcp 60 0x0f'     # second → Linux (DP)
-    alias sec-usbc='ddcutil --bus=7 setvcp 60 0x36'   # second → MacBook (USB-C)
+    alias main-dp='ddcutil --bus=8 setvcp 60 0x0f'    # main → Linux (DP)
+    alias main-hdmi='ddcutil --bus=8 setvcp 60 0x06'  # main → HDMI
+    alias top-dp='ddcutil --bus=7 setvcp 60 0x0f'     # top  → Linux (DP)
+    alias top-usbc='ddcutil --bus=7 setvcp 60 0x36'   # top  → MacBook (USB-C)
 
-    # --- Brightness (second monitor) ---
-    alias sec-bright='ddcutil --bus=7 getvcp 10'
-    sec-set-bright() { ddcutil --bus=7 setvcp 10 "${1:?usage: sec-set-bright <0-100>}"; }
+    # --- Brightness (top monitor) ---
+    alias top-bright='ddcutil --bus=7 getvcp 10'
+    top-set-bright() { ddcutil --bus=7 setvcp 10 "${1:?usage: top-set-bright <0-100>}"; }
 
     # --- Status ---
     mon-status() {
-        echo "Main   (LC32G5xT, bus 8): $(ddcutil --bus=8 getvcp 60 2>/dev/null)"
-        echo "Second (S34C65xU, bus 7): $(ddcutil --bus=7 getvcp 60 2>/dev/null)"
+        echo "Main (LC32G5xT, bus 8): $(ddcutil --bus=8 getvcp 60 2>/dev/null)"
+        echo "Top  (S34C65xU, bus 7): $(ddcutil --bus=7 getvcp 60 2>/dev/null)"
     }
 
     # --- Compound: switch both monitors + restore layout ---
@@ -1141,31 +1141,31 @@ EOF
 # Two-monitor setup via DDC/CI (ddcctl) + display layout (displayplacer).
 #
 # Physical layout (Mac mode):
-#   [MacBook] [  Second: S34C65xU  ] (USB-C, display number TBD)
-#             [  Main:   LC32G5xT  ] (HDMI,  display number TBD)
+#   [MacBook] [  Top:  S34C65xU  ] (USB-C, display number TBD)
+#             [  Main: LC32G5xT  ] (HDMI,  display number TBD)
 #
 # One-time setup: run 'mon-discover' to find display numbers, then update
-# MON_MAIN_NUM and MON_SECOND_NUM below, and set MON_MAC_LAYOUT with the
+# MON_MAIN_NUM and MON_TOP_NUM below, and set MON_MAC_LAYOUT with the
 # output of 'displayplacer list' for your preferred arrangement.
 #
 # Input codes (decimal for ddcctl):
-#   Main:   15=DisplayPort(Linux)  6=HDMI
-#   Second: 15=DisplayPort(Linux)  54=USB-C(MacBook)
+#   Main: 15=DisplayPort(Linux)  6=HDMI
+#   Top:  15=DisplayPort(Linux)  54=USB-C(MacBook)
 MON_MAIN_NUM="${MON_MAIN_NUM:-1}"    # override in ~/.zshrc.local
-MON_SECOND_NUM="${MON_SECOND_NUM:-2}"
+MON_TOP_NUM="${MON_TOP_NUM:-2}"
 MON_MAC_LAYOUT="${MON_MAC_LAYOUT:-}"  # set to 'displayplacer list' output
 
 if command -v ddcctl &>/dev/null; then
     # --- Individual input switches ---
-    alias main-dp="ddcctl -d \$MON_MAIN_NUM -i 15"    # main   → Linux (DP)
-    alias main-hdmi="ddcctl -d \$MON_MAIN_NUM -i 6"   # main   → HDMI (Mac)
-    alias sec-dp="ddcctl -d \$MON_SECOND_NUM -i 15"   # second → Linux (DP)
-    alias sec-usbc="ddcctl -d \$MON_SECOND_NUM -i 54" # second → MacBook (USB-C)
+    alias main-dp="ddcctl -d \$MON_MAIN_NUM -i 15"   # main → Linux (DP)
+    alias main-hdmi="ddcctl -d \$MON_MAIN_NUM -i 6"  # main → HDMI (Mac)
+    alias top-dp="ddcctl -d \$MON_TOP_NUM -i 15"     # top  → Linux (DP)
+    alias top-usbc="ddcctl -d \$MON_TOP_NUM -i 54"   # top  → MacBook (USB-C)
 
     # --- Status ---
     mon-status() {
-        echo "Main   (display $MON_MAIN_NUM):   $(ddcctl -d "$MON_MAIN_NUM"   -g 60 2>/dev/null)"
-        echo "Second (display $MON_SECOND_NUM): $(ddcctl -d "$MON_SECOND_NUM" -g 60 2>/dev/null)"
+        echo "Main (display $MON_MAIN_NUM): $(ddcctl -d "$MON_MAIN_NUM" -g 60 2>/dev/null)"
+        echo "Top  (display $MON_TOP_NUM):  $(ddcctl -d "$MON_TOP_NUM"  -g 60 2>/dev/null)"
     }
 
     # --- Discover display numbers (run once after connecting monitors) ---
@@ -1176,14 +1176,14 @@ if command -v ddcctl &>/dev/null; then
             [[ -n "$result" ]] && echo "  Display $i: $result"
         done
         echo ""
-        echo "Set MON_MAIN_NUM and MON_SECOND_NUM in ~/.zshrc.local once identified."
+        echo "Set MON_MAIN_NUM and MON_TOP_NUM in ~/.zshrc.local once identified."
     }
 
     # --- Compound: switch both monitors + restore layout ---
     mon-mac() {
         echo "Taking monitors to MacBook..."
-        ddcctl -d "$MON_MAIN_NUM"   -i 6   # main   → HDMI
-        ddcctl -d "$MON_SECOND_NUM" -i 54  # second → USB-C
+        ddcctl -d "$MON_MAIN_NUM" -i 6   # main → HDMI
+        ddcctl -d "$MON_TOP_NUM"  -i 54  # top  → USB-C
         if [[ -n "$MON_MAC_LAYOUT" ]] && command -v displayplacer &>/dev/null; then
             sleep 3
             eval "displayplacer $MON_MAC_LAYOUT"
@@ -1193,8 +1193,8 @@ if command -v ddcctl &>/dev/null; then
 
     mon-linux() {
         echo "Handing monitors to Linux..."
-        ddcctl -d "$MON_MAIN_NUM"   -i 15  # main   → DP
-        ddcctl -d "$MON_SECOND_NUM" -i 15  # second → DP
+        ddcctl -d "$MON_MAIN_NUM" -i 15  # main → DP
+        ddcctl -d "$MON_TOP_NUM"  -i 15  # top  → DP
         echo "Done."
     }
 fi
