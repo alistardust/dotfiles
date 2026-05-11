@@ -1047,11 +1047,11 @@ section_ddcutil() {
             fi
             ;;
         macos)
-            log "Setting up ddcctl + displayplacer (DDC/CI monitor control for macOS)..."
-            if ! command_exists ddcctl; then
-                run brew install ddcctl
+            log "Setting up m1ddc + displayplacer (DDC/CI monitor control for macOS)..."
+            if ! command_exists m1ddc; then
+                run brew install m1ddc
             else
-                ok "ddcctl already installed."
+                ok "m1ddc already installed."
             fi
             if ! command_exists displayplacer; then
                 run brew install displayplacer
@@ -1138,43 +1138,44 @@ EOF
             cat >> "$zshrc" << 'EOF'
 
 # >>> ddcutil aliases <<<
-# Two-monitor setup via DDC/CI (ddcctl) + display layout (displayplacer).
+# Two-monitor setup via DDC/CI (m1ddc) + display layout (displayplacer).
 #
 # Physical layout (Mac mode):
-#   [MacBook] [  Top:  S34C65xU  ] (USB-C, display number TBD)
-#             [  Main: LC32G5xT  ] (HDMI,  display number TBD)
+#   [  Top:  S34C65xU  ] (USB-C direct,       m1ddc display 3)
+#   [  Main: LC32G5xT  ] (HDMI via USB-C,     m1ddc display 2)
 #
-# One-time setup: run 'mon-discover' to find display numbers, then update
-# MON_MAIN_NUM and MON_TOP_NUM below, and set MON_MAC_LAYOUT with the
-# output of 'displayplacer list' for your preferred arrangement.
+# One-time setup: run 'mon-discover' to verify display numbers, then update
+# MON_MAIN_NUM and MON_TOP_NUM in ~/.zshrc.local. Set MON_MAC_LAYOUT with
+# the output of 'displayplacer list' for your preferred arrangement.
 #
-# Input codes (decimal for ddcctl):
-#   Main: 15=DisplayPort(Linux)  6=HDMI
+# Input codes (VCP 60, monitor-side):
+#   Main: 15=DisplayPort(Linux)  6=HDMI(Mac via USB-C)
 #   Top:  15=DisplayPort(Linux)  54=USB-C(MacBook)
-MON_MAIN_NUM="${MON_MAIN_NUM:-1}"    # override in ~/.zshrc.local
-MON_TOP_NUM="${MON_TOP_NUM:-2}"
+MON_MAIN_NUM="${MON_MAIN_NUM:-2}"    # override in ~/.zshrc.local
+MON_TOP_NUM="${MON_TOP_NUM:-3}"
 MON_MAC_LAYOUT="${MON_MAC_LAYOUT:-}"  # set to 'displayplacer list' output
 
-if command -v ddcctl &>/dev/null; then
+if command -v m1ddc &>/dev/null; then
     # --- Individual input switches ---
-    alias main-dp="ddcctl -d \$MON_MAIN_NUM -i 15"   # main → Linux (DP)
-    alias main-hdmi="ddcctl -d \$MON_MAIN_NUM -i 6"  # main → HDMI (Mac)
-    alias top-dp="ddcctl -d \$MON_TOP_NUM -i 15"     # top  → Linux (DP)
-    alias top-usbc="ddcctl -d \$MON_TOP_NUM -i 54"   # top  → MacBook (USB-C)
+    alias main-dp="m1ddc display \$MON_MAIN_NUM set input 15"   # main → Linux (DP)
+    alias main-hdmi="m1ddc display \$MON_MAIN_NUM set input 6"  # main → HDMI via USB-C (Mac)
+    alias top-dp="m1ddc display \$MON_TOP_NUM set input 15"     # top  → Linux (DP)
+    alias top-usbc="m1ddc display \$MON_TOP_NUM set input 54"   # top  → USB-C (Mac)
+
+    # --- Brightness (top monitor) ---
+    alias top-bright="m1ddc display \$MON_TOP_NUM get luminance"
+    top-set-bright() { m1ddc display "$MON_TOP_NUM" set luminance "${1:?usage: top-set-bright <0-100>}"; }
 
     # --- Status ---
     mon-status() {
-        echo "Main (display $MON_MAIN_NUM): $(ddcctl -d "$MON_MAIN_NUM" -g 60 2>/dev/null)"
-        echo "Top  (display $MON_TOP_NUM):  $(ddcctl -d "$MON_TOP_NUM"  -g 60 2>/dev/null)"
+        echo "Displays seen by m1ddc:"
+        m1ddc display list
     }
 
-    # --- Discover display numbers (run once after connecting monitors) ---
+    # --- Discover display numbers ---
     mon-discover() {
-        echo "Probing display numbers (current input source)..."
-        for i in 1 2 3 4; do
-            result=$(ddcctl -d "$i" -g 60 2>/dev/null)
-            [[ -n "$result" ]] && echo "  Display $i: $result"
-        done
+        echo "Displays seen by m1ddc:"
+        m1ddc display list
         echo ""
         echo "Set MON_MAIN_NUM and MON_TOP_NUM in ~/.zshrc.local once identified."
     }
@@ -1182,8 +1183,8 @@ if command -v ddcctl &>/dev/null; then
     # --- Compound: switch both monitors + restore layout ---
     mon-mac() {
         echo "Taking monitors to MacBook..."
-        ddcctl -d "$MON_MAIN_NUM" -i 6   # main → HDMI
-        ddcctl -d "$MON_TOP_NUM"  -i 54  # top  → USB-C
+        m1ddc display "$MON_MAIN_NUM" set input 6   # main → HDMI via USB-C
+        m1ddc display "$MON_TOP_NUM"  set input 54  # top  → USB-C
         if [[ -n "$MON_MAC_LAYOUT" ]] && command -v displayplacer &>/dev/null; then
             sleep 3
             eval "displayplacer $MON_MAC_LAYOUT"
@@ -1193,14 +1194,14 @@ if command -v ddcctl &>/dev/null; then
 
     mon-linux() {
         echo "Handing monitors to Linux..."
-        ddcctl -d "$MON_MAIN_NUM" -i 15  # main → DP
-        ddcctl -d "$MON_TOP_NUM"  -i 15  # top  → DP
+        m1ddc display "$MON_MAIN_NUM" set input 15  # main → DP
+        m1ddc display "$MON_TOP_NUM"  set input 15  # top  → DP
         echo "Done."
     }
 fi
 # <<< ddcutil aliases <<<
 EOF
-            ok "ddcctl aliases written to $zshrc."
+            ok "m1ddc aliases written to $zshrc."
             ;;
     esac
 }
@@ -1216,7 +1217,7 @@ verify_ddcutil() {
                                             && pass "ddcutil aliases in .zshrc"   || fail "ddcutil aliases missing from .zshrc"
             ;;
         macos)
-            command_exists ddcctl           && pass "ddcctl installed"            || fail "ddcctl not installed"
+            command_exists m1ddc            && pass "m1ddc installed"             || fail "m1ddc not installed"
             command_exists displayplacer    && pass "displayplacer installed"     || fail "displayplacer not installed"
             grep -q "# >>> ddcutil aliases <<<" "$HOME/.zshrc" 2>/dev/null \
                                             && pass "ddcutil aliases in .zshrc"   || fail "ddcutil aliases missing from .zshrc"
