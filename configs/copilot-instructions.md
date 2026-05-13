@@ -1,5 +1,14 @@
 # Global Copilot Instructions
 
+<!-- BACK-SYNC NOTE: This is the generic dotfiles bootstrap. The live file at
+     ~/.copilot/copilot-instructions.md intentionally diverges in these ways:
+     - Adds "## Identity and Preferences" (Sam identity, Ali preferences)
+     - Adds "## Model Preference" (pins claude-opus-4.6; also set in settings.json)
+     - Adds "## Context" (Iodine/SRE work context)
+     - Adds work-specific sections (Tachikoma, AWX, PagerDuty, Jira, etc.)
+     - Adds Superpowers skills section
+     Do NOT back-sync those sections into this file. -->
+
 ## Quality Rules
 
 - Prioritize accuracy over speed.
@@ -8,9 +17,8 @@
 - Perform an adversarial review on all code: actively seek edge cases, failure modes, and security issues.
 - Always trace through code against multiple input scenarios before declaring it correct.
 
----
 
-## Naming Conventions (Universal)
+## Naming Conventions
 
 Variable, function, and class names describe **what the thing IS**, never what content it relates to,
 what project it belongs to, or what it came from.
@@ -28,9 +36,8 @@ what project it belongs to, or what it came from.
 - Only well-known abbreviations: `id`, `url`, `db`, `http`. Never invent new ones.
 - Negative booleans (`is_not_valid`): invert and use `is_invalid` instead.
 
----
 
-## Error Handling (Universal)
+## Error Handling
 
 - **Fail fast and loudly.** A crash immediately is better than silent data corruption hours later.
 - **Never swallow exceptions silently.** A bare `except: pass` or empty `catch {}` is almost always
@@ -41,9 +48,8 @@ what project it belongs to, or what it came from.
 - Distinguish: programmer errors (bugs, let crash, fix the code); operational errors (retry and alert);
   user input errors (validate early, return clear message).
 
----
 
-## Logging (Universal)
+## Logging
 
 - Use **structured logging** (JSON or key-value). Never build log strings with f-strings/interpolation
   in production code; structured logs are machine-parseable.
@@ -54,9 +60,8 @@ what project it belongs to, or what it came from.
 - Include a correlation/request ID on every log line in a request context.
 - Python: use `structlog`. Node: use `pino`.
 
----
 
-## Security (Absolute Blockers)
+## Security
 
 These are CI failures and immediate review rejects. No exceptions.
 
@@ -77,9 +82,8 @@ These are CI failures and immediate review rejects. No exceptions.
 Input validation: validate at every external boundary (API, CLI, queue). Whitelist what is allowed;
 reject everything else. Never trust client-supplied role or permission data.
 
----
 
-## Function and Code Design (Universal)
+## Function and Code Design
 
 - **Single Responsibility:** one function does one thing, completely.
 - Size target: 40 lines per function or fewer. If you can't see the whole function at once, it's
@@ -92,9 +96,8 @@ reject everything else. Never trust client-supplied role or permission data.
   non-obvious decisions.
 - TODO comments must include an owner and a ticket: `# TODO(alice): remove after migration [PROJ-1234]`
 
----
 
-## Architecture Principles (Universal)
+## Architecture Principles
 
 - Business logic never lives in API handlers or DB queries; it lives in a service/domain layer.
 - DB queries never live in business logic; use a repository pattern.
@@ -111,9 +114,8 @@ reject everything else. Never trust client-supplied role or permission data.
 - **Dependency Inversion:** classes depend on abstractions (Protocols/ABCs/interfaces), not concrete
   implementations. Inject dependencies; do not construct them internally.
 
----
 
-## Testing (Universal)
+## Testing
 
 - Test **behaviour**, not implementation. Tests that break on renaming a private method are wrong.
 - Test names must be sentences: `test_create_user_with_duplicate_email_raises_conflict_error`
@@ -122,9 +124,8 @@ reject everything else. Never trust client-supplied role or permission data.
 - Cover: all branching logic, all error paths, all boundary values, the happy path.
 - 80% line coverage is a floor, not a goal.
 
----
 
-## Git Hygiene (Universal)
+## Git Hygiene
 
 - Commit messages follow **Conventional Commits**: `<type>[scope]: <description>`
   - Types: `feat`, `fix`, `docs`, `refactor`, `test`, `chore`, `perf`, `ci`, `revert`
@@ -136,12 +137,11 @@ reject everything else. Never trust client-supplied role or permission data.
 - PRs target 400 lines changed or fewer. Larger PRs must be split.
 - Branch naming: `feature/ID-description`, `fix/ID-description`, `chore/description`
 
----
 
 ## Python Standards
 
-- **Formatter:** Black (line-length=88). Run in pre-commit and CI. Non-negotiable.
-- **Linter:** Ruff with `E/W/F/I/N/B/C4/UP/S/ANN/D` rulesets. Replaces Flake8 + isort.
+- **Formatter/Linter:** Ruff (lint + format, line-length=88). Replaces Black, Flake8, isort.
+  Enable rulesets: `E/W/F/I/N/B/C4/UP/S/ANN/D`. Run in pre-commit and CI.
 - **Type checking:** mypy --strict. All public functions, methods, and class attributes must have
   type annotations.
 - **Python 3.10+ syntax:** `X | None` not `Optional[X]`; `list[str]` not `List[str]`;
@@ -157,7 +157,6 @@ reject everything else. Never trust client-supplied role or permission data.
 - **Idioms:** `pathlib.Path` not `os.path`; `secrets` not `random` for security; f-strings not `%`
   or `.format()`; `isinstance()` not `type() ==`; `x is None` not `x == None`.
 
----
 
 ## JavaScript / Web Standards
 
@@ -170,7 +169,6 @@ reject everything else. Never trust client-supplied role or permission data.
 - No `innerHTML` with unsanitized content.
 - No inline event handlers (`onclick=`); use `addEventListener`.
 
----
 
 ## Confirmation Requirement
 
@@ -187,16 +185,3 @@ Review and approval requests must be presented one at a time. Each request must 
 logical change set. Do not split a coherent edit into smaller fragments solely to reduce size. Do
 not combine unrelated edits into one request.
 
----
-
-## AI Instruction File Best Practices
-
-- Put hard constraints (security, never-do-this) **first**; they must be seen before context limits
-  cut in.
-- Use bullets and discrete rules, not prose paragraphs; LLMs comply more reliably with explicit lists.
-- Provide positive AND negative code examples for non-obvious rules.
-- State the *why* for non-obvious constraints.
-- Keep repo-level instruction files under 2000 words; longer files get deprioritized.
-- Global rules belong in user-level config (`~/.copilot/copilot-instructions.md`). Project-specific
-  rules belong in the project's `.github/copilot-instructions.md`.
-- Never put secrets, PII, or project-sensitive content in instruction files.
