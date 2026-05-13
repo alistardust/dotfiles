@@ -14,11 +14,12 @@ that genuinely speeds up your work and improves the quality of what you ship.
 3. [How the CLI Works](#how-the-cli-works)
 4. [Choosing and Switching Models](#choosing-and-switching-models)
 5. [Writing Your Copilot Instructions](#writing-your-copilot-instructions)
-6. [Installing Superpowers Skills](#installing-superpowers-skills)
+6. [Skills: Installing, Using, and Writing](#skills-installing-using-and-writing)
 7. [Installing and Using gstack](#installing-and-using-gstack)
-8. [Writing Effective Prompts](#writing-effective-prompts)
-9. [Using Multiple Models Strategically](#using-multiple-models-strategically)
-10. [Practical Workflow Examples](#practical-workflow-examples)
+8. [Using Copilot in VSCode](#using-copilot-in-vscode)
+9. [Writing Effective Prompts](#writing-effective-prompts)
+10. [Using Multiple Models Strategically](#using-multiple-models-strategically)
+11. [Practical Workflow Examples](#practical-workflow-examples)
 
 ---
 
@@ -212,6 +213,54 @@ edit it to reflect your own preferences. The bootstrapped file covers naming,
 error handling, logging, security, architecture, testing, Git hygiene, Python,
 and JavaScript standards.
 
+Here is a minimal but effective global instructions file to start from:
+
+```markdown
+# Global Copilot Instructions
+
+## Identity
+
+My name is Alex. Use he/him pronouns.
+
+## Model Preference
+
+Prefer Claude Sonnet for standard tasks. Use Claude Opus for complex
+multi-step reasoning or security-sensitive changes.
+
+## Quality Rules
+
+- Prioritise accuracy over speed.
+- Never guess. Only provide answers you can verify.
+- Fail fast and loudly -- a crash immediately is better than silent
+  data corruption later.
+- Never swallow exceptions silently (no bare `except: pass` or empty `catch {}`).
+
+## Naming Conventions
+
+- Variables and functions describe what the thing IS, not where it came from.
+- Booleans use question form: `is_active`, `has_permission`, `can_retry`.
+- No magic numbers -- name the constant (`MAX_RETRIES = 3`, not `3`).
+
+## Security -- Absolute Blockers
+
+- No `eval()` or `exec()` with any external input.
+- No SQL built by string formatting -- always use parameterised queries.
+- No hardcoded credentials anywhere in source code.
+- No `random` for security purposes -- use `secrets` (Python) or
+  `crypto.randomBytes` (Node).
+
+## Git
+
+- Conventional Commits: `<type>[scope]: <description>`
+- Atomic commits -- one logical change per commit.
+- Branch naming: `feature/ID-description` or `fix/ID-description`.
+
+## Explicit Approval
+
+Ask before acting on anything that modifies state, opens a PR, or runs a
+destructive command. Wait for an unambiguous confirmation before proceeding.
+```
+
 **Key principle:** Put hard constraints first. Use bullets, not prose. Always
 state *why* a rule exists -- this helps the agent make good decisions in edge
 cases that your instructions do not explicitly cover.
@@ -231,6 +280,75 @@ repository. This is where you capture things that are specific to that project:
 **Tip:** Run `/init` inside a project and the agent will read your codebase and
 propose a starter `copilot-instructions.md` for you. Review it carefully and
 edit before committing.
+
+Here is an example for a Python web service:
+
+````markdown
+# Project: Payments Service
+
+## Stack
+
+- Python 3.12, FastAPI 0.115, SQLAlchemy 2.0 (async), PostgreSQL 16
+- Tests: pytest, pytest-asyncio, httpx (async test client)
+- Dependency management: uv
+
+## Running Tests
+
+```bash
+uv run pytest -x --tb=short
+```
+
+## Conventions
+
+- All database access goes through `src/repository/` -- never in route handlers.
+- All business logic goes in `src/services/` -- no DB calls there.
+- Config is loaded from environment variables via `src/config.py` using pydantic-settings.
+- Never import from `src/api/` into `src/services/` -- that direction is forbidden.
+
+## Do Not Touch
+
+- `src/generated/` -- auto-generated from the OpenAPI spec, do not edit by hand.
+- `migrations/` -- always generate Alembic migrations, never write them manually.
+
+## Deployment
+
+- Staging: `APP_ENV=staging`
+- Production: `APP_ENV=production`
+- Secrets come from AWS Secrets Manager, not environment variables in production.
+````
+
+### Path-Specific Instructions
+
+For larger repos you can scope instructions to specific file patterns using
+`.github/instructions/` files with an `applyTo` frontmatter field. These are
+picked up automatically by Copilot CLI and the VSCode Copilot extension when
+you are working in matching files.
+
+```markdown
+---
+applyTo: "**/*.test.ts"
+---
+
+# Test File Conventions
+
+- Use `describe` / `it` blocks (not `test()`).
+- Mock HTTP calls with `msw` -- never use `jest.spyOn` on `fetch`.
+- Each test file has a single top-level `describe` matching the module under test.
+- Use `userEvent` from `@testing-library/user-event` for all interactions,
+  not `fireEvent`.
+```
+
+```markdown
+---
+applyTo: "src/api/**/*.ts"
+---
+
+# API Route Conventions
+
+- All routes validate input with a Zod schema before touching the database.
+- Return `ApiResponse<T>` -- never return raw objects from route handlers.
+- Log at INFO on entry and exit of every route using the request correlation ID.
+```
 
 ### What to Include and What to Leave Out
 
@@ -260,11 +378,41 @@ files on or off for the session.
 
 ---
 
-## Installing Superpowers Skills
+## Skills: Installing, Using, and Writing
 
 Skills are specialised instruction sets that the agent loads on demand to handle
 specific types of tasks. Instead of writing one massive instruction file that
 covers everything, skills let you load the right guidance for the right task.
+
+Think of a skill as a playbook for a specific situation. When the agent invokes
+a skill, it loads the playbook and follows it -- so the skill determines not just
+what gets done, but how rigorously and in what order.
+
+### How Skills Work Technically
+
+Skills live in `~/.copilot/skills/`. Each skill is a directory containing a
+`SKILL.md` file:
+
+```
+~/.copilot/skills/
+  brainstorming/
+    SKILL.md
+  test-driven-development/
+    SKILL.md
+  systematic-debugging/
+    SKILL.md
+  gstack/
+    SKILL.md
+  ...
+```
+
+At session start, Copilot reads the `name` and `description` fields from every
+skill's YAML frontmatter. When you ask for something, the agent decides which
+skills are relevant and loads the full `SKILL.md` content for those skills only.
+This keeps the context window efficient -- skills that are not relevant to your
+current task cost nothing.
+
+### Installing the Superpowers Collection
 
 The [Superpowers](https://github.com/obra/superpowers) collection (via the
 [DwainTR community fork for Copilot](https://github.com/DwainTR/superpowers-copilot))
@@ -278,9 +426,7 @@ includes skills for:
 - **Code review** -- structured review with signal vs noise filtering
 - **Subagent-driven development** -- running parallel agents for independent tasks
 
-### Installing Via the Dotfiles Bootstrap
-
-The `copilot` section handles this automatically:
+The `copilot` section of the dotfiles bootstrap installs everything:
 
 ```bash
 ./setup.sh --only copilot
@@ -298,20 +444,35 @@ Inside a Copilot session:
 
 This opens the skills manager where you can browse, enable, and disable skills.
 
+To see what is installed from your shell:
+
+```bash
+ls ~/.copilot/skills/
+```
+
 ### Using a Skill
 
-To use a skill, simply describe a task that the skill applies to and the agent
-will invoke it. You can also explicitly trigger one:
+The agent will invoke relevant skills automatically. You can also trigger one
+explicitly by naming it in your prompt:
 
 ```
 Use the brainstorming skill to help me design the caching layer for this service.
 ```
 
-Or reference it by name when you know you want it:
-
 ```
 I want to fix this bug using systematic-debugging.
 ```
+
+```
+Use test-driven-development. I need to add input validation to the sign-up endpoint.
+```
+
+```
+Run the code-review skill on the changes in @src/auth/handler.py.
+```
+
+When a skill is active you will see its name in the session status line. The
+agent is now following that skill's structured process rather than improvising.
 
 ### Key Skills and When to Use Them
 
@@ -329,6 +490,148 @@ I want to fix this bug using systematic-debugging.
 **Rule of thumb:** If there is a skill for what you are about to do, use it.
 Skills are there because someone found the undisciplined approach produced worse
 results.
+
+### Writing Your Own Skills
+
+You can write skills for patterns specific to your team or project -- deployment
+runbooks, incident response checklists, on-call procedures, or any multi-step
+process you want the agent to follow precisely.
+
+#### Skill File Structure
+
+A skill is a directory with a single `SKILL.md`:
+
+```
+~/.copilot/skills/my-skill-name/
+  SKILL.md
+```
+
+The filename must be `SKILL.md`. The directory name is the skill's identifier.
+
+#### SKILL.md Format
+
+Every skill file starts with YAML frontmatter, followed by the skill content in
+Markdown:
+
+```markdown
+---
+name: deployment-runbook
+description: Use when deploying the payments service to staging or production.
+  Covers pre-deploy checks, the deploy sequence, and post-deploy verification.
+---
+
+# Deployment Runbook -- Payments Service
+
+## Pre-Deploy Checklist
+
+Before deploying, confirm all of the following:
+
+- [ ] All tests pass: `uv run pytest`
+- [ ] No secrets in the diff: `git log -p HEAD~1..HEAD | grep -i "password\|token\|secret"`
+- [ ] Migration is backwards-compatible (if any)
+- [ ] Feature flags are set correctly for the target environment
+
+## Deploy Sequence
+
+1. Tag the release: `git tag v$(date +%Y%m%d)-$(git rev-parse --short HEAD)`
+2. Push the tag: `git push origin --tags`
+3. Watch the CI pipeline -- do not proceed until it is green.
+4. Deploy to staging: `./scripts/deploy.sh staging`
+5. Smoke test staging: `./scripts/smoke-test.sh staging`
+6. Deploy to production: `./scripts/deploy.sh production`
+
+## Post-Deploy Verification
+
+- Check error rate in Grafana for 10 minutes after deploy.
+- Verify the health endpoint: `curl https://api.example.com/health`
+- Confirm the deploy version matches: the response should include `"version": "..."`.
+
+## Rollback
+
+If error rate spikes above 1% or the health check fails:
+
+```bash
+./scripts/rollback.sh production
+```
+
+Then open a post-mortem ticket before investigating further.
+```
+
+#### Key Principles for Writing Good Skills
+
+**Be specific, not generic.** Generic instructions ("follow best practices") add
+no value -- the agent already follows best practices. Skills should encode
+knowledge the agent cannot infer: your team's specific commands, your
+architecture decisions, your non-obvious constraints.
+
+**Keep it concise.** Every token in a skill competes with your conversation
+history for context window space. Challenge every sentence: does the agent
+actually need this? If it is something any competent developer would know, leave
+it out.
+
+**Put constraints before steps.** List the things that must be true before the
+process begins, then the process itself. This prevents the agent from racing
+ahead before preconditions are met.
+
+**Use the description field for discovery.** The description is what the agent
+reads to decide whether a skill applies. Start it with "Use when..." and include
+specific situations and symptoms -- not a summary of what the skill does.
+
+```markdown
+# Good -- describes when to use it
+description: Use when deploying the payments service to staging or production.
+
+# Bad -- describes what it contains
+description: Contains deployment steps, pre-deploy checks, and rollback instructions.
+```
+
+**Test your skill before relying on it.** After writing a skill, start a new
+session and describe a scenario where the skill should apply. Verify the agent
+picks up the skill and follows the process correctly. If it does not, the
+description field probably needs to be more specific.
+
+#### A Minimal Working Example
+
+Here is a complete, minimal skill to use as a starting point:
+
+```markdown
+---
+name: pr-checklist
+description: Use before opening any pull request. Runs through a pre-PR quality
+  and safety checklist to catch issues before code review.
+---
+
+# Pre-PR Checklist
+
+Work through each item before opening the pull request. Do not skip items --
+if something cannot be done, document why in the PR description.
+
+## Quality
+
+- Run the full test suite and confirm it passes.
+- Review the diff with `/diff` -- look for debug code, commented-out blocks,
+  and TODO comments without ticket numbers.
+- Check that every new function has at least one test covering the happy path
+  and one covering an error case.
+
+## Safety
+
+- No hardcoded credentials, tokens, or internal hostnames in the diff.
+- No changes to generated files (if present in this repo).
+- If the change touches authentication, authorisation, or data handling:
+  run the security review skill before proceeding.
+
+## PR Description
+
+The PR description must include:
+- What changed and why
+- How it was tested
+- Any risks or known limitations
+- The ticket number this closes
+```
+
+Place this file at `~/.copilot/skills/pr-checklist/SKILL.md` and it will be
+available in every session immediately.
 
 ---
 
@@ -396,6 +699,119 @@ Run gstack-cso for a security audit before we ship.
 
 You do not need to run all of these for every change. A small bug fix may only
 need `gstack-review`. A new user-facing feature warrants the full sequence.
+
+---
+
+## Using Copilot in VSCode
+
+GitHub Copilot works in VSCode through two separate but complementary channels:
+the **Copilot extension** (inline suggestions and chat inside the editor) and
+the **Copilot CLI** (the terminal agent you have been setting up). They share
+your instruction files, so configuring one benefits the other.
+
+### Installing the Copilot Extension
+
+Install the extension from the VSCode Marketplace:
+
+1. Open VSCode
+2. Press `Ctrl+Shift+X` to open Extensions
+3. Search for **GitHub Copilot** and install it
+4. Also install **GitHub Copilot Chat** (listed separately)
+5. Sign in with your GitHub account when prompted
+
+Or install from the terminal:
+
+```bash
+code --install-extension GitHub.copilot
+code --install-extension GitHub.copilot-chat
+```
+
+### What the Extension Gives You
+
+| Feature | How to Use It |
+|---------|--------------|
+| Inline completions | Start typing -- suggestions appear automatically, press `Tab` to accept |
+| Copilot Chat panel | `Ctrl+Shift+I` -- a chat interface in the sidebar |
+| Inline chat | `Ctrl+I` -- chat anchored to the current cursor position or selection |
+| Explain code | Select code, right-click, choose "Copilot > Explain" |
+| Generate tests | Select a function, right-click, choose "Copilot > Generate Tests" |
+| Fix error | Click the lightbulb on an error, choose "Fix using Copilot" |
+
+### How Your Instructions Apply in VSCode
+
+The same instruction files you set up for the CLI are read by the VSCode
+extension automatically:
+
+- `~/.copilot/copilot-instructions.md` -- global, applies everywhere
+- `.github/copilot-instructions.md` -- applies in the current repo
+- `.github/instructions/**/*.instructions.md` -- applies to matching file patterns
+
+You do not need to configure anything extra. Open a repo in VSCode and your
+instructions are active in both the extension and the CLI.
+
+### Connecting the CLI to VSCode
+
+You can connect a running Copilot CLI session to your VSCode workspace so the
+agent can read open files and navigate the editor:
+
+```
+/ide
+```
+
+This opens a pairing flow. Once connected, the agent can reference files open
+in VSCode directly, and you can send prompts from the CLI that interact with
+your editor state.
+
+### VSCode-Specific Prompt Techniques
+
+**Reference the current file in chat:**
+
+In the Copilot Chat panel, type `#file` to attach the current file:
+
+```
+#file Explain what this function does and identify any edge cases it misses.
+```
+
+**Reference a specific file by name:**
+
+```
+#file:src/services/payment.py What is the retry strategy here and is it correct?
+```
+
+**Use slash commands in VSCode chat:**
+
+The VSCode Copilot Chat supports several built-in commands:
+
+```
+/explain    -- explain selected code
+/fix        -- suggest a fix for selected code or an error
+/tests      -- generate tests for a function or file
+/doc        -- generate a docstring or JSDoc comment
+/new        -- scaffold a new file or component
+```
+
+Example:
+
+```
+/tests Write unit tests for the selected validate_payment() function.
+Cover the happy path, an invalid card number, and an expired card.
+```
+
+### CLI vs Extension -- When to Use Which
+
+| Situation | Tool |
+|-----------|------|
+| Multi-file refactor or new feature | CLI -- better at multi-step tasks |
+| Quick explanation of a function | VSCode inline chat (`Ctrl+I`) |
+| Generating a test for a single function | VSCode right-click > Generate Tests |
+| Debugging across multiple files | CLI with `systematic-debugging` skill |
+| Reviewing a PR diff | CLI with `/review` or `gstack-review` |
+| Autocomplete while typing | VSCode extension (always running) |
+| Following a structured process (TDD, runbook) | CLI with the relevant skill |
+
+The extension is your always-on pair programmer for small things. The CLI is the
+tool you reach for when the task requires a plan, spans multiple files, or needs
+a structured process enforced by a skill.
 
 ---
 
