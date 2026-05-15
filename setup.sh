@@ -12,8 +12,9 @@ set -euo pipefail
 #   ./setup.sh --claude                      # include Claude Code in the standard run
 #   ./setup.sh --chatgpt                     # include OpenAI Codex CLI in the standard run
 #   ./setup.sh --shellgpt                    # include ShellGPT in the standard run
+#   ./setup.sh --google-workspace            # include Google Workspace MCP in the standard run
 #
-# Sections: packages gnubin fonts tmux zsh vim alacritty wsl python keyd auto_cpufreq copilot claude chatgpt shellgpt
+# Sections: packages gnubin fonts tmux zsh vim alacritty wsl python keyd auto_cpufreq copilot claude chatgpt shellgpt google_workspace
 
 # -- Helpers -------------------------------------------------------------------
 
@@ -71,13 +72,14 @@ OS="$(detect_os)"
 
 # -- Argument parsing ----------------------------------------------------------
 
-ALL_SECTIONS=(packages gnubin fonts tmux zsh vim alacritty wsl python keyd auto_cpufreq ddcutil copilot claude chatgpt shellgpt)
+ALL_SECTIONS=(packages gnubin fonts tmux zsh vim alacritty wsl python keyd auto_cpufreq ddcutil copilot claude chatgpt shellgpt google_workspace)
 declare -A RUN
 for s in "${ALL_SECTIONS[@]}"; do RUN[$s]=true; done
 RUN[copilot]=false                                    # opt-in; use --copilot or --all
 RUN[claude]=false                                     # opt-in; use --claude or --all
 RUN[chatgpt]=false                                    # opt-in; use --chatgpt or --all
 RUN[shellgpt]=false                                   # opt-in; use --shellgpt or --all
+RUN[google_workspace]=false                            # opt-in; use --google-workspace or --all
 if [[ "$OS" == "macos" ]]; then RUN[gnubin]=true; else RUN[gnubin]=false; fi  # macOS-only
 if [[ "$OS" == "wsl"   ]]; then RUN[wsl]=true;   else RUN[wsl]=false;   fi   # WSL-only
 if [[ "$OS" != "linux" ]]; then RUN[keyd]=false;        fi  # Linux-only (key remap daemon)
@@ -96,7 +98,8 @@ Options:
   --claude            Include Claude Code setup (off by default)
   --chatgpt           Include OpenAI Codex CLI setup (off by default)
   --shellgpt          Include ShellGPT setup (off by default)
-  --all               Run all sections including copilot, claude, chatgpt, and shellgpt
+  --google-workspace  Include Google Workspace MCP setup (off by default)
+  --all               Run all sections including AI CLIs and MCP servers
   --dry-run           Simulate: print what would be done without making changes
   --verify            Check post-conditions for each section (acts as test suite)
   --help              Show this help
@@ -159,6 +162,7 @@ while [[ $# -gt 0 ]]; do
         --claude) RUN[claude]=true;                                      shift ;;
         --chatgpt) RUN[chatgpt]=true;                                    shift ;;
         --shellgpt) RUN[shellgpt]=true;                                  shift ;;
+        --google-workspace) RUN[google_workspace]=true;                   shift ;;
         --all)     for s in "${ALL_SECTIONS[@]}"; do RUN[$s]=true; done; shift ;;
         --dry-run)  DRY_RUN=true;    shift ;;
         --verify)   CHECK_ONLY=true; shift ;;
@@ -1957,6 +1961,24 @@ section_shellgpt() {
     log "To use it, set OPENAI_API_KEY and run: sgpt \"hello\""
 }
 
+section_google_workspace() {
+    log "Setting up Google Workspace MCP (taylorwilsdon/google_workspace_mcp)..."
+
+    ensure_uv || return 1
+
+    if { uv tool list 2>/dev/null || "$HOME/.local/bin/uv" tool list 2>/dev/null; } \
+       | grep -q '^workspace-mcp '; then
+        ok "workspace-mcp already installed."
+    else
+        run uv tool install workspace-mcp
+    fi
+
+    ok "Google Workspace MCP installed."
+    log "Post-install: create a Google Cloud OAuth 2.0 Desktop client, then set"
+    log "  GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET in your environment."
+    log "Run: uvx workspace-mcp --tool-tier core"
+}
+
 # -- Verification (--verify mode) ---------------------------------------------
 
 verify_packages() {
@@ -2145,6 +2167,15 @@ verify_shellgpt() {
                                         && pass "uv tool list includes shell-gpt"              || fail "shell-gpt not registered as a uv tool"
 }
 
+verify_google_workspace() {
+    local uv_bin="${HOME}/.local/bin/uv"
+
+    { command_exists uv || [[ -x "$uv_bin" ]]; } \
+                                        && pass "uv installed"                                 || fail "uv not installed"
+    { "$uv_bin" tool list 2>/dev/null || uv tool list 2>/dev/null; } | grep -q '^workspace-mcp ' \
+                                        && pass "workspace-mcp registered as a uv tool"        || fail "workspace-mcp not registered as a uv tool"
+}
+
 # -- Main ----------------------------------------------------------------------
 
 log "Detected OS: ${OS}"
@@ -2184,6 +2215,7 @@ should_run copilot   && { [[ "$CHECK_ONLY" == "true" ]] && verify_copilot   || s
 should_run claude    && { [[ "$CHECK_ONLY" == "true" ]] && verify_claude    || section_claude;    }
 should_run chatgpt   && { [[ "$CHECK_ONLY" == "true" ]] && verify_chatgpt   || section_chatgpt;   }
 should_run shellgpt  && { [[ "$CHECK_ONLY" == "true" ]] && verify_shellgpt  || section_shellgpt;  }
+should_run google_workspace && { [[ "$CHECK_ONLY" == "true" ]] && verify_google_workspace || section_google_workspace; }
 
 if [[ "$CHECK_ONLY" == "true" ]]; then
     if [[ "$_check_failed" == "true" ]]; then
@@ -2194,7 +2226,7 @@ if [[ "$CHECK_ONLY" == "true" ]]; then
     fi
 else
     log "Done! Start a new shell (or run: exec zsh -l) to apply changes."
-    if ! [[ "$DRY_RUN" == "true" ]] && { should_run claude || should_run chatgpt; }; then
+    if ! [[ "$DRY_RUN" == "true" ]] && { should_run claude || should_run chatgpt || should_run google_workspace; }; then
         printf '\n\e[1;33m==> Manual steps required:\e[0m\n'
         if should_run claude; then
             printf '\e[1;33m  Claude Code — install Superpowers (run inside a Claude Code session):\e[0m\n'
@@ -2203,6 +2235,13 @@ else
         if should_run chatgpt; then
             printf '\e[1;33m  Codex — install Superpowers (run inside a Codex session):\e[0m\n'
             printf '    /plugins  →  search "superpowers"  →  Install\n'
+        fi
+        if should_run google_workspace; then
+            printf '\e[1;33m  Google Workspace MCP — configure OAuth credentials:\e[0m\n'
+            printf '    1. Create a Google Cloud project with OAuth 2.0 Desktop client\n'
+            printf '    2. Enable Gmail, Calendar, Drive, Docs, and Sheets APIs\n'
+            printf '    3. Export GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET\n'
+            printf '    4. Run: uvx workspace-mcp --tool-tier core\n'
         fi
     fi
 fi

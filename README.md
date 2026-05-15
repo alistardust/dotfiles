@@ -50,7 +50,8 @@ and `copilot`, `claude`, `chatgpt`, plus `shellgpt` are opt-in.
 ./setup.sh --claude                # standard run + Claude Code
 ./setup.sh --chatgpt               # standard run + OpenAI Codex CLI
 ./setup.sh --shellgpt              # standard run + ShellGPT
-./setup.sh --all                   # everything, including copilot + claude + chatgpt + shellgpt
+./setup.sh --google-workspace      # standard run + Google Workspace MCP
+./setup.sh --all                   # everything, including all AI CLIs and MCP servers
 ./setup.sh --help
 ```
 

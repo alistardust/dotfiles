@@ -15,10 +15,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ./setup.sh --claude                     # standard run + Claude Code CLI
 ./setup.sh --chatgpt                    # standard run + OpenAI Codex CLI
 ./setup.sh --shellgpt                   # standard run + ShellGPT
+./setup.sh --google-workspace           # standard run + Google Workspace MCP
 ./setup.sh --all                        # everything, including all AI CLIs
 ```
 
-Sections: `packages gnubin fonts tmux zsh vim alacritty wsl python keyd auto_cpufreq copilot claude chatgpt shellgpt`
+Sections: `packages gnubin fonts tmux zsh vim alacritty wsl python keyd auto_cpufreq copilot claude chatgpt shellgpt google_workspace`
 
 Use `--dry-run --only <section>` to preview changes and `--verify --only <section>` as the nearest equivalent to a unit test for one area.
 
