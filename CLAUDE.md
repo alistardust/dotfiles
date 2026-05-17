@@ -16,10 +16,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ./setup.sh --chatgpt                    # standard run + OpenAI Codex CLI
 ./setup.sh --shellgpt                   # standard run + ShellGPT
 ./setup.sh --google-workspace           # standard run + Google Workspace MCP
+./setup.sh --skills-work                # standard run + work profile Copilot skills
+./setup.sh --skills-home                # standard run + home profile Copilot skills
 ./setup.sh --all                        # everything, including all AI CLIs
 ```
 
-Sections: `packages gnubin fonts tmux zsh vim alacritty wsl python keyd auto_cpufreq copilot claude chatgpt shellgpt google_workspace`
+Sections: `packages gnubin fonts tmux zsh vim alacritty wsl python keyd auto_cpufreq copilot claude chatgpt shellgpt google_workspace copilot_skills`
 
 Use `--dry-run --only <section>` to preview changes and `--verify --only <section>` as the nearest equivalent to a unit test for one area.
 
@@ -43,7 +45,7 @@ Most other tracked files are artifacts consumed by setup: `terminal_configs/` fo
 
 **Shared vs. machine-local:** Shared artifacts like `terminal_configs/alacritty.toml` are symlinked into place. Machine-local files like `~/.vimrc.local` are copied then patched. Don't collapse this distinction.
 
-**Platform defaults:** `copilot`, `claude`, `chatgpt`, and `shellgpt` are opt-in (off by default). `gnubin` is macOS-only. `wsl` is WSL2-only. `keyd` and `auto_cpufreq` are Linux bare-metal only. Preserve these defaults when adding new sections.
+**Platform defaults:** `copilot`, `claude`, `chatgpt`, `shellgpt`, `google_workspace`, and `copilot_skills` are opt-in (off by default). `gnubin` is macOS-only. `wsl` is WSL2-only. `keyd` and `auto_cpufreq` are Linux bare-metal only. `copilot_skills` requires a profile flag (`--skills-work` and/or `--skills-home`) to select which skills to install. Preserve these defaults when adding new sections.
 
 **Adding a section:** Add it to `ALL_SECTIONS` in `setup.sh`, implement `section_<name>()` and `verify_<name>()`, set a default in the `RUN[]` block, and use SSH remotes (`git@github.com:...`) for any new cloned dependencies.
 

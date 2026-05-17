@@ -14,7 +14,7 @@ set -euo pipefail
 #   ./setup.sh --shellgpt                    # include ShellGPT in the standard run
 #   ./setup.sh --google-workspace            # include Google Workspace MCP in the standard run
 #
-# Sections: packages gnubin fonts tmux zsh vim alacritty wsl python keyd auto_cpufreq copilot claude chatgpt shellgpt google_workspace
+# Sections: packages gnubin fonts tmux zsh vim alacritty wsl python keyd auto_cpufreq copilot claude chatgpt shellgpt google_workspace copilot_skills
 
 # -- Helpers -------------------------------------------------------------------
 
@@ -72,7 +72,7 @@ OS="$(detect_os)"
 
 # -- Argument parsing ----------------------------------------------------------
 
-ALL_SECTIONS=(packages gnubin fonts tmux zsh vim alacritty wsl python keyd auto_cpufreq ddcutil copilot claude chatgpt shellgpt google_workspace)
+ALL_SECTIONS=(packages gnubin fonts tmux zsh vim alacritty wsl python keyd auto_cpufreq ddcutil copilot claude chatgpt shellgpt google_workspace copilot_skills)
 declare -A RUN
 for s in "${ALL_SECTIONS[@]}"; do RUN[$s]=true; done
 RUN[copilot]=false                                    # opt-in; use --copilot or --all
@@ -80,12 +80,18 @@ RUN[claude]=false                                     # opt-in; use --claude or 
 RUN[chatgpt]=false                                    # opt-in; use --chatgpt or --all
 RUN[shellgpt]=false                                   # opt-in; use --shellgpt or --all
 RUN[google_workspace]=false                            # opt-in; use --google-workspace or --all
+RUN[copilot_skills]=false                              # opt-in; use --skills-work / --skills-home or --all
 if [[ "$OS" == "macos" ]]; then RUN[gnubin]=true; else RUN[gnubin]=false; fi  # macOS-only
 if [[ "$OS" == "wsl"   ]]; then RUN[wsl]=true;   else RUN[wsl]=false;   fi   # WSL-only
 if [[ "$OS" != "linux" ]]; then RUN[keyd]=false;        fi  # Linux-only (key remap daemon)
 if [[ "$OS" != "linux" ]] || [[ "$OS" == "wsl" ]]; then RUN[auto_cpufreq]=false; fi  # Linux bare-metal only
 if [[ "$OS" == "wsl" ]]; then RUN[ddcutil]=false; fi                                # not supported under WSL
 if [[ "$(detect_linux_distro 2>/dev/null)" == "arch" ]]; then RUN[fonts]=false; fi  # Arch: fonts managed via pacman
+
+# Copilot Skills profile selection (used by section_copilot_skills)
+declare -A SKILLS_PROFILE
+SKILLS_PROFILE[work]=false
+SKILLS_PROFILE[home]=false
 
 usage() {
     cat << EOF
@@ -99,6 +105,8 @@ Options:
   --chatgpt           Include OpenAI Codex CLI setup (off by default)
   --shellgpt          Include ShellGPT setup (off by default)
   --google-workspace  Include Google Workspace MCP setup (off by default)
+  --skills-work       Install Copilot skills for infrastructure/work profile
+  --skills-home       Install Copilot skills for personal/home profile
   --all               Run all sections including AI CLIs and MCP servers
   --dry-run           Simulate: print what would be done without making changes
   --verify            Check post-conditions for each section (acts as test suite)
@@ -163,7 +171,10 @@ while [[ $# -gt 0 ]]; do
         --chatgpt) RUN[chatgpt]=true;                                    shift ;;
         --shellgpt) RUN[shellgpt]=true;                                  shift ;;
         --google-workspace) RUN[google_workspace]=true;                   shift ;;
-        --all)     for s in "${ALL_SECTIONS[@]}"; do RUN[$s]=true; done; shift ;;
+        --skills-work) RUN[copilot_skills]=true; SKILLS_PROFILE[work]=true; shift ;;
+        --skills-home) RUN[copilot_skills]=true; SKILLS_PROFILE[home]=true; shift ;;
+        --all)     for s in "${ALL_SECTIONS[@]}"; do RUN[$s]=true; done;
+                   SKILLS_PROFILE[work]=true; SKILLS_PROFILE[home]=true;   shift ;;
         --dry-run)  DRY_RUN=true;    shift ;;
         --verify)   CHECK_ONLY=true; shift ;;
         --help|-h) usage ;;
@@ -1979,6 +1990,68 @@ section_google_workspace() {
     log "Run: uvx workspace-mcp --tool-tier core"
 }
 
+# -- Copilot Skills (profile-based) -------------------------------------------
+
+# Skills installed via: gh skills install github/awesome-copilot <name>
+SKILLS_SOURCE="github/awesome-copilot"
+
+SKILLS_WORK=(
+    threat-model-analyst
+    create-architectural-decision-record
+    multi-stage-dockerfile
+    secret-scanning
+    postgresql-optimization
+)
+
+SKILLS_HOME=(
+    web-coder
+    playwright-generate-test
+    agent-governance
+    agentic-eval
+    documentation-writer
+)
+
+SKILLS_SHARED=(
+    python-pypi-package-builder
+    sql-code-review
+)
+
+section_copilot_skills() {
+    log "Installing Copilot skills (profiles: work=${SKILLS_PROFILE[work]}, home=${SKILLS_PROFILE[home]})..."
+
+    if ! command_exists gh && [[ "$DRY_RUN" != "true" ]]; then
+        warn "gh CLI not found. Install GitHub CLI first: https://cli.github.com/"
+        return 1
+    fi
+
+    # Build the list of skills to install based on selected profiles
+    local -a selected_skills=()
+    selected_skills+=("${SKILLS_SHARED[@]}")
+    if [[ "${SKILLS_PROFILE[work]}" == "true" ]]; then
+        selected_skills+=("${SKILLS_WORK[@]}")
+    fi
+    if [[ "${SKILLS_PROFILE[home]}" == "true" ]]; then
+        selected_skills+=("${SKILLS_HOME[@]}")
+    fi
+
+    if [[ ${#selected_skills[@]} -eq 0 ]]; then
+        warn "No skill profiles selected (use --skills-work and/or --skills-home)."
+        return 0
+    fi
+
+    local skill
+    for skill in "${selected_skills[@]}"; do
+        if [[ -d "${HOME}/.copilot/skills/${skill}" ]]; then
+            ok "Skill already installed: ${skill}"
+        else
+            run gh skills install "${SKILLS_SOURCE}" "${skill}"
+            ok "Installed skill: ${skill}"
+        fi
+    done
+
+    ok "Copilot skills installation complete."
+}
+
 # -- Verification (--verify mode) ---------------------------------------------
 
 verify_packages() {
@@ -2176,6 +2249,38 @@ verify_google_workspace() {
                                         && pass "workspace-mcp registered as a uv tool"        || fail "workspace-mcp not registered as a uv tool"
 }
 
+verify_copilot_skills() {
+    local skills_dir="${HOME}/.copilot/skills"
+
+    [[ -d "$skills_dir" ]] \
+        && pass "~/.copilot/skills/ directory exists" \
+        || { fail "~/.copilot/skills/ directory missing"; return; }
+
+    # Check shared skills (always expected if copilot_skills was ever run)
+    local skill
+    for skill in "${SKILLS_SHARED[@]}"; do
+        [[ -f "${skills_dir}/${skill}/SKILL.md" ]] \
+            && pass "Skill installed: ${skill}" \
+            || fail "Skill missing: ${skill}"
+    done
+
+    if [[ "${SKILLS_PROFILE[work]}" == "true" ]]; then
+        for skill in "${SKILLS_WORK[@]}"; do
+            [[ -f "${skills_dir}/${skill}/SKILL.md" ]] \
+                && pass "Skill installed: ${skill}" \
+                || fail "Skill missing: ${skill}"
+        done
+    fi
+
+    if [[ "${SKILLS_PROFILE[home]}" == "true" ]]; then
+        for skill in "${SKILLS_HOME[@]}"; do
+            [[ -f "${skills_dir}/${skill}/SKILL.md" ]] \
+                && pass "Skill installed: ${skill}" \
+                || fail "Skill missing: ${skill}"
+        done
+    fi
+}
+
 # -- Main ----------------------------------------------------------------------
 
 log "Detected OS: ${OS}"
@@ -2216,6 +2321,7 @@ should_run claude    && { [[ "$CHECK_ONLY" == "true" ]] && verify_claude    || s
 should_run chatgpt   && { [[ "$CHECK_ONLY" == "true" ]] && verify_chatgpt   || section_chatgpt;   }
 should_run shellgpt  && { [[ "$CHECK_ONLY" == "true" ]] && verify_shellgpt  || section_shellgpt;  }
 should_run google_workspace && { [[ "$CHECK_ONLY" == "true" ]] && verify_google_workspace || section_google_workspace; }
+should_run copilot_skills  && { [[ "$CHECK_ONLY" == "true" ]] && verify_copilot_skills  || section_copilot_skills;  }
 
 if [[ "$CHECK_ONLY" == "true" ]]; then
     if [[ "$_check_failed" == "true" ]]; then
