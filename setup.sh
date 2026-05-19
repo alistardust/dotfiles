@@ -48,6 +48,28 @@ run() {
     fi
 }
 
+# Download a remote installer script, log its SHA-256, then execute.
+# Usage: fetch_and_run <url> [bash_args...]
+# Avoids pipe-to-shell by downloading to a temp file first.
+fetch_and_run() {
+    local url="$1"; shift
+    local tmp_script
+    tmp_script="$(mktemp)"
+    register_cleanup "$tmp_script"
+
+    if [[ "$DRY_RUN" == "true" ]]; then
+        printf '\e[2;37m  [dry] fetch_and_run %s\e[0m\n' "$url"
+        return 0
+    fi
+
+    curl -fsSL -o "$tmp_script" "$url" || { warn "Failed to download: $url"; return 1; }
+    local sha256
+    sha256="$(shasum -a 256 "$tmp_script" | cut -d' ' -f1)"
+    printf '\e[2;37m  [sha256: %s] %s\e[0m\n' "$sha256" "$url"
+    bash "$tmp_script" "$@"
+    rm -f "$tmp_script"
+}
+
 # --verify helpers
 pass()       { printf '\e[1;32m  ✓ %s\e[0m\n' "$*"; }
 fail()       { printf '\e[1;31m  ✗ %s\e[0m\n' "$*"; _check_failed=true; }
@@ -203,7 +225,7 @@ install_packages_macos() {
             printf '\e[2;37m  [dry] install Homebrew\e[0m\n'
         else
             log "Installing Homebrew..."
-            bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+            fetch_and_run "https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh"
         fi
     fi
     if [[ -x /opt/homebrew/bin/brew ]]; then
@@ -398,8 +420,12 @@ section_zsh() {
 
     if [[ ! -d "$HOME/.oh-my-zsh" ]]; then
         if [[ "$DRY_RUN" != "true" ]]; then
-            RUNZSH=no CHSH=no sh -c \
-                "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"
+            local omz_script
+            omz_script="$(mktemp)"
+            register_cleanup "$omz_script"
+            curl -fsSL -o "$omz_script" https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh
+            RUNZSH=no CHSH=no sh "$omz_script"
+            rm -f "$omz_script"
         else
             printf '\e[2;37m  [dry] install oh-my-zsh\e[0m\n'
         fi
@@ -600,7 +626,7 @@ section_vim() {
 # -- 7. Alacritty -------------------------------------------------------------
 
 _alacritty_install_mac() {
-    command_exists brew || bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    command_exists brew || fetch_and_run "https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh"
     if [[ -x /opt/homebrew/bin/brew ]]; then
         eval "$(/opt/homebrew/bin/brew shellenv)"
     elif [[ -x /usr/local/bin/brew ]]; then
@@ -917,7 +943,7 @@ ensure_uv() {
         return 0
     fi
 
-    curl -LsSf https://astral.sh/uv/install.sh | sh
+    fetch_and_run "https://astral.sh/uv/install.sh"
     ensure_local_bin_shell_path
 
     command_exists uv || [[ -x "$HOME/.local/bin/uv" ]] || { warn "uv not found after install"; return 1; }
@@ -1258,9 +1284,9 @@ section_copilot() {
                 run brew install copilot-cli ;;
             linux|wsl)
                 if [[ "$DRY_RUN" == "true" ]]; then
-                    printf '\e[2;37m  [dry] install Copilot CLI via curl | bash\e[0m\n'
+                    printf '\e[2;37m  [dry] install Copilot CLI via fetch_and_run\e[0m\n'
                 else
-                    curl -fsSL https://gh.io/copilot-install | bash
+                    fetch_and_run "https://gh.io/copilot-install"
                 fi ;;
             *)
                 warn "Unsupported OS. Install manually: https://gh.io/copilot-install"
@@ -1316,7 +1342,7 @@ section_copilot() {
             printf '\e[2;37m  [dry] install Superpowers via DwainTR/superpowers-copilot\e[0m\n'
             printf '\e[2;37m  [dry] flatten per-skill symlinks in %s\e[0m\n' "$skills_dir"
         else
-            bash -c "$(curl -fsSL https://raw.githubusercontent.com/DwainTR/superpowers-copilot/main/install.sh)"
+            fetch_and_run "https://raw.githubusercontent.com/DwainTR/superpowers-copilot/main/install.sh"
             # Remove the nested dir/symlink the installer creates and replace with flat symlinks
             rm -rf "${skills_dir}/superpowers"
             for skill_path in "$superpowers_cache"/*/; do
@@ -1366,9 +1392,9 @@ section_claude() {
         case "$OS" in
             macos|linux|wsl)
                 if [[ "$DRY_RUN" == "true" ]]; then
-                    printf '\e[2;37m  [dry] install Claude Code via curl | bash\e[0m\n'
+                    printf '\e[2;37m  [dry] install Claude Code via fetch_and_run\e[0m\n'
                 else
-                    curl -fsSL https://claude.ai/install.sh | bash
+                    fetch_and_run "https://claude.ai/install.sh"
                 fi
                 ;;
             *)
@@ -1426,11 +1452,11 @@ ensure_bun() {
 
     log "Installing Bun..."
     if [[ "$DRY_RUN" == "true" ]]; then
-        printf '\e[2;37m  [dry] install Bun via curl | bash\e[0m\n'
+        printf '\e[2;37m  [dry] install Bun via fetch_and_run\e[0m\n'
         return 0
     fi
 
-    curl -fsSL https://bun.sh/install | bash
+    fetch_and_run "https://bun.sh/install"
 
     command_exists bun || [[ -x "$bun_bin" ]] || { warn "bun not found after install"; return 1; }
     export PATH="$HOME/.bun/bin:$PATH"
@@ -1449,7 +1475,7 @@ ensure_npm() {
                 if [[ "$DRY_RUN" == "true" ]]; then
                     printf '\e[2;37m  [dry] install Homebrew\e[0m\n'
                 else
-                    bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+                    fetch_and_run "https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh"
                 fi
             fi
             if [[ -x /opt/homebrew/bin/brew ]]; then
