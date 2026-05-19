@@ -19,17 +19,20 @@
 ./setup.sh --all                        # everything, including all AI CLIs
 ```
 
-Sections: `packages gnubin fonts tmux zsh vim alacritty wsl python keyd auto_cpufreq copilot claude chatgpt shellgpt google_workspace copilot_skills`
+Sections: `packages gnubin fonts tmux zsh vim alacritty wsl python keyd auto_cpufreq copilot claude chatgpt shellgpt google_workspace copilot_skills ddcutil`
 
 Use `--dry-run --only <section>` to preview changes and `--verify --only <section>` as the nearest equivalent to a unit test for one area.
 
 ## Architecture
 
-`setup.sh` is the single entry point containing all bootstrap logic. It:
+`setup.sh` is the entry point and dispatcher (~300 lines). It:
 
 1. Detects OS (`macos`, `wsl`, `linux`) and Linux distro (debian/rhel/arch) early in the script.
 2. Builds a `RUN[section]=true/false` associative array based on platform defaults and CLI flags.
-3. Runs either `section_<name>` functions (normal mode) or `verify_<name>` functions (`--verify` mode) for each enabled section.
+3. Sources all files in `sections/*.sh` to load section functions.
+4. Runs either `section_<name>` functions (normal mode) or `verify_<name>` functions (`--verify` mode) for each enabled section.
+
+Section logic lives in `sections/<name>.sh` (18 files, ~1800 lines total). Each file defines `section_<name>()` and `verify_<name>()` plus any private helpers. Section files use `# shellcheck shell=bash` (sourced, no shebang).
 
 The package list files (`brew_packages.txt`, `apt-packages.txt`, `dnf-packages.txt`, `pacman-packages.txt`) are pure data — `setup.sh` selects the right file for the detected platform.
 
@@ -45,7 +48,7 @@ Most other tracked files are artifacts consumed by setup: `terminal_configs/` fo
 
 **Platform defaults:** `copilot`, `claude`, `chatgpt`, `shellgpt`, `google_workspace`, and `copilot_skills` are opt-in (off by default). `gnubin` is macOS-only. `wsl` is WSL2-only. `keyd` and `auto_cpufreq` are Linux bare-metal only. `copilot_skills` requires a profile flag (`--skills-work` and/or `--skills-home`) to select which skills to install. Preserve these defaults when adding new sections.
 
-**Adding a section:** Add it to `ALL_SECTIONS` in `setup.sh`, implement `section_<name>()` and `verify_<name>()`, set a default in the `RUN[]` block, and use SSH remotes (`git@github.com:...`) for any new cloned dependencies.
+**Adding a section:** Create `sections/<name>.sh` with `section_<name>()` and `verify_<name>()` functions. Add the name to `ALL_SECTIONS` in `setup.sh`, set a default in the `RUN[]` block, and use SSH remotes (`git@github.com:...`) for any new cloned dependencies.
 
 **Terminal appearance:** Keep `terminal_configs/alacritty.toml` (macOS, font size 13.5), `terminal_configs/alacritty-linux.toml` (Linux/WSL, font size 10.5), and `terminal_configs/windows-terminal-settings.json` in sync for color scheme and font family. The two alacritty files are identical except for font size — color/font family changes must be applied to both.
 

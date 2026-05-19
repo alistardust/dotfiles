@@ -22,7 +22,8 @@ For WSL2 on Windows, include the WSL-specific setup:
 
 Setup is divided into independent sections. By default all sections run on the
 current platform. Exceptions: `gnubin` runs on macOS only, `wsl` on WSL2 only,
-and `copilot`, `claude`, `chatgpt`, plus `shellgpt` are opt-in.
+`keyd` and `auto_cpufreq` are Linux bare-metal only, and `copilot`, `claude`,
+`chatgpt`, `shellgpt`, `google_workspace`, and `copilot_skills` are opt-in.
 
 | Section | What it sets up |
 |---------|----------------|
@@ -40,6 +41,10 @@ and `copilot`, `claude`, `chatgpt`, plus `shellgpt` are opt-in.
 | `claude` | *(opt-in)* [Claude Code](https://claude.ai/code) CLI installed, global coding standards bootstrapped to `~/.claude/CLAUDE.md`; [gstack](https://github.com/garrytan/gstack) virtual engineering team installed (requires [Bun](https://bun.sh)) |
 | `chatgpt` | *(opt-in)* Official OpenAI Codex CLI installed via npm (`codex` command), global instructions bootstrapped to `~/.codex/AGENTS.md`; gstack skills registered with Codex |
 | `shellgpt` | *(opt-in)* Unofficial open-source ShellGPT installed via `uv tool install shell-gpt` (`sgpt` command, requires `OPENAI_API_KEY`) |
+| `google_workspace` | *(opt-in)* Google Workspace MCP server for Docs/Sheets/Drive integration |
+| `copilot_skills` | *(opt-in)* Installs Copilot CLI skills from shared, work, home, and local (repo-shipped) skill sets; requires `--skills-work` or `--skills-home` profile flag |
+| `auto_cpufreq` | *(Linux bare-metal only)* Installs and enables [auto-cpufreq](https://github.com/AdnanHodzic/auto-cpufreq) for CPU frequency/governor management |
+| `ddcutil` | Monitor input-switching aliases via DDC/CI (`ddcutil` on Linux, `ddcctl` on macOS); see Monitor Setup in copilot-instructions |
 
 ### Selective Runs
 
