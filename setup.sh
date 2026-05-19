@@ -2016,15 +2016,34 @@ SKILLS_SHARED=(
     sql-code-review
 )
 
+# Local skills shipped in this repo (skills/<name>/SKILL.md -> ~/.copilot/skills/<name>/)
+SKILLS_LOCAL=(
+    code-audit
+)
+
 section_copilot_skills() {
     log "Installing Copilot skills (profiles: work=${SKILLS_PROFILE[work]}, home=${SKILLS_PROFILE[home]})..."
+
+    # Install local skills from this repo first
+    local skill
+    for skill in "${SKILLS_LOCAL[@]}"; do
+        local src="${SCRIPT_DIR}/skills/${skill}"
+        local dest="${HOME}/.copilot/skills/${skill}"
+        if [[ ! -d "$src" ]]; then
+            warn "Local skill source missing: ${src}"
+            continue
+        fi
+        run mkdir -p "$dest"
+        run cp -R "${src}/." "$dest/"
+        ok "Installed local skill: ${skill}"
+    done
 
     if ! command_exists gh && [[ "$DRY_RUN" != "true" ]]; then
         warn "gh CLI not found. Install GitHub CLI first: https://cli.github.com/"
         return 1
     fi
 
-    # Build the list of skills to install based on selected profiles
+    # Build the list of remote skills to install based on selected profiles
     local -a selected_skills=()
     selected_skills+=("${SKILLS_SHARED[@]}")
     if [[ "${SKILLS_PROFILE[work]}" == "true" ]]; then
@@ -2039,7 +2058,6 @@ section_copilot_skills() {
         return 0
     fi
 
-    local skill
     for skill in "${selected_skills[@]}"; do
         if [[ -d "${HOME}/.copilot/skills/${skill}" ]]; then
             ok "Skill already installed: ${skill}"
@@ -2256,8 +2274,15 @@ verify_copilot_skills() {
         && pass "~/.copilot/skills/ directory exists" \
         || { fail "~/.copilot/skills/ directory missing"; return; }
 
-    # Check shared skills (always expected if copilot_skills was ever run)
+    # Check local skills (always expected if copilot_skills was ever run)
     local skill
+    for skill in "${SKILLS_LOCAL[@]}"; do
+        [[ -f "${skills_dir}/${skill}/SKILL.md" ]] \
+            && pass "Local skill installed: ${skill}" \
+            || fail "Local skill missing: ${skill}"
+    done
+
+    # Check shared remote skills (always expected if copilot_skills was ever run)
     for skill in "${SKILLS_SHARED[@]}"; do
         [[ -f "${skills_dir}/${skill}/SKILL.md" ]] \
             && pass "Skill installed: ${skill}" \
