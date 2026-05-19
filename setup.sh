@@ -27,6 +27,17 @@ command_exists() { command -v "$1" &>/dev/null; }
 DRY_RUN=false
 CHECK_ONLY=false
 _check_failed=false
+_cleanup_paths=()
+
+# Register a path for cleanup on exit (temp files/dirs).
+register_cleanup() { _cleanup_paths+=("$1"); }
+
+_global_cleanup() {
+    for p in "${_cleanup_paths[@]}"; do
+        [[ -e "$p" ]] && rm -rf "$p"
+    done
+}
+trap _global_cleanup EXIT
 
 # In --dry-run mode, print command instead of executing it.
 run() {
@@ -288,12 +299,11 @@ section_fonts() {
 
     local tmp_dir
     tmp_dir="$(mktemp -d)"
-    trap 'rm -rf "$tmp_dir"' EXIT
+    register_cleanup "$tmp_dir"
 
     run git clone --depth=1 git@github.com:powerline/fonts.git "$tmp_dir/fonts"
     run bash "$tmp_dir/fonts/install.sh"
     rm -rf "$tmp_dir"
-    trap - EXIT
 }
 
 # -- 4. tmux -------------------------------------------------------------------
@@ -679,7 +689,7 @@ section_alacritty() {
     elif command_exists tic; then
         local terminfo_tmp
         terminfo_tmp="$(mktemp)"
-        trap 'rm -f "$terminfo_tmp"' RETURN
+        register_cleanup "$terminfo_tmp"
         if run curl -fsSL -o "$terminfo_tmp" \
             https://raw.githubusercontent.com/alacritty/alacritty/master/extra/alacritty.info; then
             run sudo tic -xe alacritty,alacritty-direct "$terminfo_tmp"
@@ -687,7 +697,6 @@ section_alacritty() {
             warn "Failed to download Alacritty terminfo  - skipping"
         fi
         rm -f "$terminfo_tmp"
-        trap - RETURN
     else
         warn "tic not found  - skipping alacritty terminfo install (run: sudo tic -xe alacritty,alacritty-direct alacritty.info)"
     fi
@@ -729,6 +738,7 @@ section_wsl() {
         command_exists unzip || run sudo apt-get install -y unzip
         local winy_tmp
         winy_tmp="$(mktemp)"
+        register_cleanup "$winy_tmp"
         run curl -fsSL -o "$winy_tmp" \
             "https://github.com/equalsraf/win32yank/releases/latest/download/win32yank-x64.zip"
         if [[ "$DRY_RUN" == "true" ]]; then
@@ -804,6 +814,7 @@ TMUX_WSL
 
     # ~/.vimrc.local  - true color + win32yank clipboard (idempotent)
     local vimrc_local="$HOME/.vimrc.local"
+    [[ -f "$vimrc_local" ]] || touch "$vimrc_local"
     if ! grep -q "\" >>> WSL config <<<" "$vimrc_local" 2>/dev/null; then
         log "Patching ~/.vimrc.local for WSL2 (true color + clipboard)..."
         if [[ "$DRY_RUN" == "true" ]]; then
@@ -868,6 +879,7 @@ VIM_WSL
 
 append_local_bin_hook() {
     local target="$1"
+    [[ -f "$target" ]] || touch "$target"
     if grep -q "# >>> dotfiles local bin <<<" "$target" 2>/dev/null; then
         return 0
     fi
@@ -925,7 +937,7 @@ section_python() {
 
     # Create the base virtualenv (acts as a system-level scripting environment)
     local venv_home="${WORKON_HOME:-$HOME/.venvs}"
-    mkdir -p "$venv_home"
+    run mkdir -p "$venv_home"
     local base_venv="$venv_home/base"
     if [[ ! -d "$base_venv" ]]; then
         run uv venv "$base_venv"
@@ -2066,6 +2078,8 @@ section_copilot_skills() {
 }
 
 # -- Verification (--verify mode) ---------------------------------------------
+# shellcheck disable=SC2088  # Tilde in quoted strings is intentional display text
+# shellcheck disable=SC2015  # A && B || C pattern is safe here (pass/fail always succeed)
 
 verify_packages() {
     case "$OS" in
