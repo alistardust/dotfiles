@@ -21,7 +21,7 @@ jobs:
       - name: ShellCheck sections/
         run: shellcheck sections/*.sh
 
-  verify:
+  syntax-and-dryrun:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -33,5 +33,16 @@ jobs:
             bash -n "$f" || exit 1
           done
 
-      - name: Verify mode (default sections)
-        run: ./setup.sh --verify --skip wsl keyd auto_cpufreq ddcutil
+      - name: Dry-run smoke test
+        run: ./setup.sh --dry-run --only packages fonts tmux zsh vim python
+
+  bats:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install bats-core
+        run: sudo apt-get install -y bats
+
+      - name: Run unit tests
+        run: bats tests/

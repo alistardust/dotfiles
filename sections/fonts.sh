@@ -27,7 +27,7 @@ section_fonts() {
     tmp_dir="$(mktemp -d)"
     register_cleanup "$tmp_dir"
 
-    run git clone --depth=1 git@github.com:powerline/fonts.git "$tmp_dir/fonts"
+    run git clone --depth=1 "$(git_url git@github.com:powerline/fonts.git)" "$tmp_dir/fonts"
     run bash "$tmp_dir/fonts/install.sh"
     rm -rf "$tmp_dir"
 }

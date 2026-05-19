@@ -101,12 +101,12 @@ TMUX_WSL
 
     # ~/.vimrc.local  - true color + win32yank clipboard (idempotent)
     local vimrc_local="$HOME/.vimrc.local"
-    [[ -f "$vimrc_local" ]] || touch "$vimrc_local"
     if ! grep -q "\" >>> WSL config <<<" "$vimrc_local" 2>/dev/null; then
         log "Patching ~/.vimrc.local for WSL2 (true color + clipboard)..."
         if [[ "$DRY_RUN" == "true" ]]; then
             printf '\e[2;37m  [dry] append WSL config to %s\e[0m\n' "$vimrc_local"
         else
+            [[ -f "$vimrc_local" ]] || touch "$vimrc_local"
             cat >> "$vimrc_local" << 'VIM_WSL'
 
 " >>> WSL config <<<

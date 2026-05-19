@@ -6,7 +6,6 @@
 
 append_local_bin_hook() {
     local target="$1"
-    [[ -f "$target" ]] || touch "$target"
     if grep -q "# >>> dotfiles local bin <<<" "$target" 2>/dev/null; then
         return 0
     fi
@@ -15,6 +14,8 @@ append_local_bin_hook() {
         printf '\e[2;37m  [dry] append local bin hook to %s\e[0m\n' "$target"
         return 0
     fi
+
+    [[ -f "$target" ]] || touch "$target"
 
     cat >> "$target" << 'LOCAL_BIN_HOOK'
 

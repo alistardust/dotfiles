@@ -7,7 +7,7 @@
 section_tmux() {
     log "Setting up tmux..."
     if [[ ! -d "$HOME/.tmux" ]]; then
-        run git clone git@github.com:gpakosz/.tmux.git "$HOME/.tmux"
+        run git clone "$(git_url git@github.com:gpakosz/.tmux.git)" "$HOME/.tmux"
     fi
     # Per gpakosz/.tmux instructions: symlink main conf, copy local conf
     run ln -sf "$HOME/.tmux/.tmux.conf" "$HOME/.tmux.conf"

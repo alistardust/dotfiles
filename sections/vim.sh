@@ -7,7 +7,7 @@
 section_vim() {
     log "Setting up Vim..."
     if [[ ! -d "$HOME/.vim" ]]; then
-        run git clone git@github.com:alistardust/.vim.git "$HOME/.vim"
+        run git clone "$(git_url git@github.com:alistardust/.vim.git)" "$HOME/.vim"
     fi
     if [[ "$DRY_RUN" == "true" ]]; then
         printf '\e[2;37m  [dry] checkout Divine branch and update submodules in ~/.vim\e[0m\n'

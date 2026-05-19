@@ -96,7 +96,7 @@ section_copilot() {
         if [[ ! -d "$gstack_cache" ]]; then
             run git clone --single-branch --depth 1 \
                 --branch add-copilot-cli-support \
-                git@github.com:ridermw/gstack.git \
+                "$(git_url git@github.com:ridermw/gstack.git)" \
                 "$gstack_cache"
         fi
         if [[ "$DRY_RUN" == "true" ]]; then

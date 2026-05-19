@@ -1,4 +1,20 @@
 #!/usr/bin/env bash
+
+# -- Bash version gate ---------------------------------------------------------
+# Associative arrays require bash 4+. macOS ships bash 3.2 (/bin/bash).
+# If running under bash < 4, re-exec with a newer bash if one exists.
+if [[ "${BASH_VERSINFO[0]}" -lt 4 ]]; then
+    for _candidate in /opt/homebrew/bin/bash /usr/local/bin/bash; do
+        if [[ -x "$_candidate" ]] && "$_candidate" --version 2>/dev/null | grep -q 'version [4-9]'; then
+            exec "$_candidate" "$0" "$@"
+        fi
+    done
+    printf '\e[1;31mERROR: bash 4+ is required but only bash %s is available.\e[0m\n' "$BASH_VERSION" >&2
+    printf 'On macOS, install a modern bash first:\n  brew install bash\n' >&2
+    exit 1
+fi
+unset _candidate 2>/dev/null
+
 set -euo pipefail
 
 # Bootstrap a new machine with all personal dotfiles and tooling.
@@ -26,6 +42,7 @@ command_exists() { command -v "$1" &>/dev/null; }
 
 DRY_RUN=false
 CHECK_ONLY=false
+CLONE_VIA=ssh    # ssh (default) or https; override with --https flag
 _check_failed=false
 _cleanup_paths=()
 
@@ -33,6 +50,7 @@ _cleanup_paths=()
 register_cleanup() { _cleanup_paths+=("$1"); }
 
 _global_cleanup() {
+    [[ ${#_cleanup_paths[@]} -gt 0 ]] || return 0
     for p in "${_cleanup_paths[@]}"; do
         [[ -e "$p" ]] && rm -rf "$p"
     done
@@ -45,6 +63,17 @@ run() {
         printf '\e[2;37m  [dry] %s\e[0m\n' "$*"
     else
         "$@"
+    fi
+}
+
+# Convert a GitHub SSH URL to HTTPS when --https is active.
+# Usage: git_url "git@github.com:owner/repo.git"
+git_url() {
+    local url="$1"
+    if [[ "$CLONE_VIA" == "https" && "$url" == git@github.com:* ]]; then
+        echo "https://github.com/${url#git@github.com:}"
+    else
+        echo "$url"
     fi
 }
 
@@ -64,7 +93,13 @@ fetch_and_run() {
 
     curl -fsSL -o "$tmp_script" "$url" || { warn "Failed to download: $url"; return 1; }
     local sha256
-    sha256="$(shasum -a 256 "$tmp_script" | cut -d' ' -f1)"
+    if command_exists sha256sum; then
+        sha256="$(sha256sum "$tmp_script" | cut -d' ' -f1)"
+    elif command_exists shasum; then
+        sha256="$(shasum -a 256 "$tmp_script" | cut -d' ' -f1)"
+    else
+        sha256="(no hash tool available)"
+    fi
     printf '\e[2;37m  [sha256: %s] %s\e[0m\n' "$sha256" "$url"
     bash "$tmp_script" "$@"
     rm -f "$tmp_script"
@@ -142,6 +177,7 @@ Options:
   --skills-home       Install Copilot skills for personal/home profile
   --all               Run all sections including AI CLIs and MCP servers
   --dry-run           Simulate: print what would be done without making changes
+  --https             Use HTTPS instead of SSH for git clones (for machines without SSH keys)
   --verify            Check post-conditions for each section (acts as test suite)
   --help              Show this help
 
@@ -209,6 +245,7 @@ while [[ $# -gt 0 ]]; do
         --all)     for s in "${ALL_SECTIONS[@]}"; do RUN[$s]=true; done;
                    SKILLS_PROFILE[work]=true; SKILLS_PROFILE[home]=true;   shift ;;
         --dry-run)  DRY_RUN=true;    shift ;;
+        --https)    CLONE_VIA=https; shift ;;
         --verify)   CHECK_ONLY=true; shift ;;
         --help|-h) usage ;;
         *)         echo "Unknown option: $1" >&2; usage 1 ;;
