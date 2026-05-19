@@ -1,7 +1,13 @@
 *.swp
+*.swo
 *.local_settings
 *.pathfile
 *.DS_Store
 *.zcompdump*
+__pycache__/
+*.pyc
+.env
+.env.*
+*.pem
+*.key
 virtualenvwrapper
-scripts/__pycache__

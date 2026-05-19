@@ -1028,11 +1028,6 @@ section_auto_cpufreq() {
     ok "auto-cpufreq active — CPU frequency scales automatically with load."
 }
 
-verify_auto_cpufreq() {
-    check_cmd auto-cpufreq
-    check "auto-cpufreq service active" "systemctl is-active --quiet auto-cpufreq"
-}
-
 # -- 12. DDC/CI monitor control ------------------------------------------------
 
 section_ddcutil() {
