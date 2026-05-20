@@ -1,6 +1,7 @@
 #!/usr/bin/env bats
-# Test section module contract: every sections/*.sh file must define
-# both section_<name>() and verify_<name>() functions.
+# Test section module contract: every public sections/*.sh file must define
+# both section_<name>() and verify_<name>() functions. Helper modules prefixed
+# with an underscore are sourced privately by setup.sh and are excluded.
 
 setup() {
     export SCRIPT_DIR="$BATS_TEST_DIRNAME/.."
@@ -8,7 +9,7 @@ setup() {
 
 @test "all section files define section_<name> function" {
     local failures=()
-    for f in "$SCRIPT_DIR"/sections/*.sh; do
+    for f in "$SCRIPT_DIR"/sections/[!_]*.sh; do
         local name
         name="$(basename "$f" .sh)"
         if ! grep -q "^section_${name}()" "$f"; then
@@ -23,7 +24,7 @@ setup() {
 
 @test "all section files define verify_<name> function" {
     local failures=()
-    for f in "$SCRIPT_DIR"/sections/*.sh; do
+    for f in "$SCRIPT_DIR"/sections/[!_]*.sh; do
         local name
         name="$(basename "$f" .sh)"
         if ! grep -q "^verify_${name}()" "$f"; then
@@ -38,7 +39,7 @@ setup() {
 
 @test "all section files have shellcheck shell=bash directive" {
     local failures=()
-    for f in "$SCRIPT_DIR"/sections/*.sh; do
+    for f in "$SCRIPT_DIR"/sections/[!_]*.sh; do
         if ! head -1 "$f" | grep -q "# shellcheck shell=bash"; then
             failures+=("$f missing shellcheck directive")
         fi
@@ -54,9 +55,13 @@ setup() {
     local declared
     declared="$(grep '^ALL_SECTIONS=' "$SCRIPT_DIR/setup.sh" | sed 's/ALL_SECTIONS=(//' | sed 's/)//' | tr ' ' '\n' | sort)"
 
-    # List actual section files
+    # List actual public section files
     local on_disk
-    on_disk="$(ls "$SCRIPT_DIR"/sections/*.sh 2>/dev/null | xargs -I{} basename {} .sh | sort)"
+    on_disk="$(
+        for f in "$SCRIPT_DIR"/sections/[!_]*.sh; do
+            basename "$f" .sh
+        done | sort
+    )"
 
     if [[ "$declared" != "$on_disk" ]]; then
         echo "Declared in ALL_SECTIONS:"
