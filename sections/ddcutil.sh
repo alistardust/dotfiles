@@ -4,64 +4,47 @@
 
 # -- 12. DDC/CI monitor control ------------------------------------------------
 
-section_ddcutil() {
-    if [[ "$OS" == "wsl" ]]; then
-        log "ddcutil: skipping (not supported under WSL)"
-        return 0
+_ddcutil_install_linux_tools() {
+    log "Setting up ddcutil (DDC/CI monitor control)..."
+
+    if ! command_exists ddcutil; then
+        case "$(detect_linux_distro)" in
+            arch)   run sudo pacman -S --noconfirm ddcutil ;;
+            debian) run sudo apt-get install -y ddcutil ;;
+            *)      warn "Unknown distro -- install ddcutil manually."; return 1 ;;
+        esac
+    else
+        ok "ddcutil already installed."
     fi
 
-    case "$OS" in
-        linux)
-            log "Setting up ddcutil (DDC/CI monitor control)..."
-            if ! command_exists ddcutil; then
-                case "$(detect_linux_distro)" in
-                    arch)   run sudo pacman -S --noconfirm ddcutil ;;
-                    debian) run sudo apt-get install -y ddcutil ;;
-                    *)      warn "Unknown distro -- install ddcutil manually." ; return 0 ;;
-                esac
-            else
-                ok "ddcutil already installed."
-            fi
-            # Add user to i2c group for passwordless DDC/CI access
-            if ! id -nG | grep -qw i2c; then
-                run sudo usermod -aG i2c "$(whoami)"
-                ok "Added $(whoami) to i2c group -- re-login for effect."
-            else
-                ok "User already in i2c group."
-            fi
-            ;;
-        macos)
-            log "Setting up m1ddc + displayplacer (DDC/CI monitor control for macOS)..."
-            if ! command_exists m1ddc; then
-                run brew install m1ddc
-            else
-                ok "m1ddc already installed."
-            fi
-            if ! command_exists displayplacer; then
-                run brew install displayplacer
-            else
-                ok "displayplacer already installed."
-            fi
-            ;;
-        *)
-            warn "ddcutil: unsupported OS ($OS)"
-            ;;
-    esac
-
-    # Inject monitor-switching aliases into ~/.zshrc (idempotent, OS-aware)
-    local zshrc="$HOME/.zshrc"
-    if [[ -f "$zshrc" ]] && grep -q "# >>> ddcutil aliases <<<" "$zshrc" 2>/dev/null; then
-        ok "ddcutil aliases already present in $zshrc."
-        return 0
+    # Add user to i2c group for passwordless DDC/CI access
+    if ! id -nG | grep -qw i2c; then
+        run sudo usermod -aG i2c "$(whoami)"
+        ok "Added $(whoami) to i2c group -- re-login for effect."
+    else
+        ok "User already in i2c group."
     fi
-    if [[ "$DRY_RUN" == "true" ]]; then
-        printf '\e[2;37m  [dry] append ddcutil monitor aliases to %s\e[0m\n' "$zshrc"
-        return 0
-    fi
+}
 
-    case "$OS" in
-        linux)
-            cat >> "$zshrc" << 'EOF'
+_ddcutil_install_macos_tools() {
+    log "Setting up m1ddc + displayplacer (DDC/CI monitor control for macOS)..."
+
+    if ! command_exists m1ddc; then
+        run brew install m1ddc
+    else
+        ok "m1ddc already installed."
+    fi
+    if ! command_exists displayplacer; then
+        run brew install displayplacer
+    else
+        ok "displayplacer already installed."
+    fi
+}
+
+_ddcutil_write_linux_aliases() {
+    local zshrc="$1"
+
+    cat >> "$zshrc" << 'EOF'
 
 # >>> ddcutil aliases <<<
 # Two-monitor setup via DDC/CI (ddcutil, KDE Wayland / kscreen-doctor).
@@ -116,10 +99,13 @@ if command -v ddcutil &>/dev/null; then
 fi
 # <<< ddcutil aliases <<<
 EOF
-            ok "ddcutil aliases written to $zshrc."
-            ;;
-        macos)
-            cat >> "$zshrc" << 'EOF'
+    ok "ddcutil aliases written to $zshrc."
+}
+
+_ddcutil_write_macos_aliases() {
+    local zshrc="$1"
+
+    cat >> "$zshrc" << 'EOF'
 
 # >>> ddcutil aliases <<<
 # Two-monitor setup via DDC/CI (m1ddc) + display layout (displayplacer).
@@ -185,9 +171,49 @@ if command -v m1ddc &>/dev/null; then
 fi
 # <<< ddcutil aliases <<<
 EOF
-            ok "m1ddc aliases written to $zshrc."
+    ok "m1ddc aliases written to $zshrc."
+}
+
+_ddcutil_write_aliases() {
+    local zshrc="$1"
+
+    if [[ -f "$zshrc" ]] && grep -q "# >>> ddcutil aliases <<<" "$zshrc" 2>/dev/null; then
+        ok "ddcutil aliases already present in $zshrc."
+        return 0
+    fi
+    if [[ "$DRY_RUN" == "true" ]]; then
+        printf '\e[2;37m  [dry] append ddcutil monitor aliases to %s\e[0m\n' "$zshrc"
+        return 0
+    fi
+
+    case "$OS" in
+        linux) _ddcutil_write_linux_aliases "$zshrc" ;;
+        macos) _ddcutil_write_macos_aliases "$zshrc" ;;
+    esac
+}
+
+section_ddcutil() {
+    local zshrc="$HOME/.zshrc"
+
+    if [[ "$OS" == "wsl" ]]; then
+        log "ddcutil: skipping (not supported under WSL)"
+        return 0
+    fi
+
+    case "$OS" in
+        linux)
+            _ddcutil_install_linux_tools || return 0
+            ;;
+        macos)
+            _ddcutil_install_macos_tools
+            ;;
+        *)
+            warn "ddcutil: unsupported OS ($OS)"
+            return 0
             ;;
     esac
+
+    _ddcutil_write_aliases "$zshrc"
 }
 
 verify_ddcutil() {
