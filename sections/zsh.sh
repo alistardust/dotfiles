@@ -4,9 +4,7 @@
 
 # -- 5. ZSH / Oh My Zsh -------------------------------------------------------
 
-section_zsh() {
-    log "Setting up Zsh + Oh My Zsh..."
-
+_zsh_install_omz() {
     if [[ ! -d "$HOME/.oh-my-zsh" ]]; then
         if [[ "$DRY_RUN" != "true" ]]; then
             local omz_script
@@ -21,15 +19,20 @@ section_zsh() {
     else
         ok "Oh My Zsh already installed."
     fi
+}
 
+_zsh_install_plugins() {
     local plugin_dir="${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}/plugins/zsh-syntax-highlighting"
+
     if [[ ! -d "$plugin_dir" ]]; then
         run git clone --depth=1 \
             "$(git_url git@github.com:zsh-users/zsh-syntax-highlighting.git)" \
             "$plugin_dir"
     fi
+}
 
-    local zshrc="$HOME/.zshrc"
+_zsh_patch_theme_and_plugins() {
+    local zshrc="$1"
 
     if [[ -f "$zshrc" ]]; then
         run sed -i.bak \
@@ -37,7 +40,13 @@ section_zsh() {
             -e 's/^plugins=(git)$/plugins=(git zsh-syntax-highlighting)/' \
             "$zshrc"
         run rm -f "${zshrc}.bak"
+    fi
+}
 
+_zsh_fix_legacy() {
+    local zshrc="$1"
+
+    if [[ -f "$zshrc" ]]; then
         # Fix bare unguarded 'tmux attach || tmux new' left by older setup runs.
         # Must use Python  - sed chokes on || in the match pattern.
         if command_exists python3; then
@@ -69,6 +78,10 @@ PYFIX
             warn "python3 not found  - skipping legacy zshrc cleanup (check for bare 'tmux attach || tmux new' manually)"
         fi
     fi
+}
+
+_zsh_append_customizations() {
+    local zshrc="$1"
 
     if grep -q "# >>> dotfiles customizations <<<" "$zshrc" 2>/dev/null; then
         ok ".zshrc customizations already present."
@@ -76,7 +89,7 @@ PYFIX
         if [[ "$DRY_RUN" == "true" ]]; then
             printf '\e[2;37m  [dry] append dotfiles customizations to %s\e[0m\n' "$zshrc"
         else
-            local path_prefix='$HOME/.gnubin'
+            local path_prefix="\$HOME/.gnubin"
             if [[ "$OS" == "macos" ]]; then
                 local brew_prefix
                 brew_prefix="$(brew --prefix 2>/dev/null || echo '/opt/homebrew')"
@@ -158,8 +171,11 @@ aws() {
 EOF
         fi
     fi
+}
 
+_zsh_set_default_shell() {
     local zsh_path
+
     zsh_path="$(command -v zsh || true)"
     if [[ -z "$zsh_path" ]]; then
         warn "zsh not found in PATH  - skipping default shell change"
@@ -174,9 +190,12 @@ EOF
         run sudo chsh -s "$zsh_path" "$USER" \
             || warn "chsh failed  - run manually: chsh -s $zsh_path"
     fi
+}
 
+_zsh_set_default_editor() {
     if command_exists update-alternatives && command_exists vim; then
         local vim_path
+
         vim_path="$(command -v vim)"
         # Register vim in the alternatives system before selecting it.
         # --install is idempotent; without this, --set fails if vim was never registered.
@@ -185,6 +204,20 @@ EOF
         run sudo update-alternatives --set editor "$vim_path" \
             || warn "update-alternatives --set editor failed (non-fatal)"
     fi
+}
+
+section_zsh() {
+    local zshrc="$HOME/.zshrc"
+
+    log "Setting up Zsh + Oh My Zsh..."
+
+    _zsh_install_omz
+    _zsh_install_plugins
+    _zsh_patch_theme_and_plugins "$zshrc"
+    _zsh_fix_legacy "$zshrc"
+    _zsh_append_customizations "$zshrc"
+    _zsh_set_default_shell
+    _zsh_set_default_editor
 
     ok "Zsh configured."
 }

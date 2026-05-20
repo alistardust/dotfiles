@@ -98,7 +98,7 @@ The MacBook has no USB-B upstream connection to either monitor — PBP/PIP split
 ### Tools
 
 - **Linux:** `ddcutil` (DDC/CI over I²C). Alice's user must be in the `i2c` group.
-- **macOS:** `ddcctl` (homebrew), `displayplacer` (homebrew) for layout restore.
+- **macOS:** `m1ddc` (homebrew), `displayplacer` (homebrew) for layout restore.
 
 ### Shell aliases (written to `~/.zshrc` by `section_ddcutil()`)
 
@@ -114,7 +114,7 @@ main-hdmi    switch main monitor   → MacBook (HDMI)
 mon-status   show current input on both monitors
 mon-linux    switch both → Linux + restore KDE layout (Linux only)
 mon-mac      switch both → MacBook + restore displayplacer layout (macOS only)
-mon-discover probe ddcctl display numbers (macOS only — run once)
+mon-discover probe m1ddc display numbers (macOS only -- run once)
 ```
 
 ### macOS one-time setup (must be done on the MacBook)
@@ -151,7 +151,7 @@ ddcutil --bus=8 getvcp 60    # main monitor current input
 **macOS:**
 ```bash
 ./setup.sh --verify --only ddcutil
-mon-discover                  # confirms ddcctl sees both monitors
+mon-discover                  # confirms m1ddc sees both monitors
 mon-status                    # shows current input on each
 ```
 

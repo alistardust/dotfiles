@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # Section: chatgpt
-# shellcheck disable=SC2088,SC2015
+# shellcheck disable=SC2088,SC2015,SC2010
 
 # -- 15. OpenAI Codex CLI (ChatGPT CLI) ---------------------------------------
 
@@ -92,28 +92,11 @@ section_chatgpt() {
 
     local agents_dir="$HOME/.codex"
     local agents_file="${agents_dir}/AGENTS.md"
-    run mkdir -p "$agents_dir"
-
-    if [[ -f "$agents_file" ]]; then
-        ok "Global Codex instructions already exist at ${agents_file}."
-    else
-        log "Writing global Codex instructions..."
-        local codex_src="${SCRIPT_DIR}/configs/codex-instructions.md"
-        if [[ "$DRY_RUN" == "true" ]]; then
-            printf '\e[2;37m  [dry] copy %s to %s\e[0m\n' "$codex_src" "$agents_file"
-        else
-            cp "$codex_src" "$agents_file"
-        fi
-        ok "Global Codex instructions written to ${agents_file}."
-    fi
+    local codex_src="${SCRIPT_DIR}/configs/codex-instructions.md"
+    install_instructions "$agents_dir" "$agents_file" "$codex_src" "Codex"
 
     # gstack — register skills with Codex (clone first if not yet present)
     local gstack_dir="$HOME/.claude/skills/gstack"
-    if [[ ! -d "$gstack_dir" ]]; then
-        ensure_bun || return 1
-        log "Installing gstack..."
-        run git clone --single-branch --depth 1 https://github.com/garrytan/gstack.git "$gstack_dir"
-    fi
     if [[ -d "$gstack_dir" ]]; then
         log "Registering gstack with Codex..."
         if [[ "$DRY_RUN" == "true" ]]; then
@@ -122,6 +105,8 @@ section_chatgpt() {
             bash -c "cd '$gstack_dir' && ./setup --host codex --quiet"
         fi
         ok "gstack registered with Codex."
+    else
+        install_gstack "$gstack_dir" "--host codex --quiet"
     fi
 
     ok "OpenAI Codex CLI configured."

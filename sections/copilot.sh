@@ -27,20 +27,8 @@ section_copilot() {
 
     local instructions_dir="$HOME/.copilot"
     local instructions_file="${instructions_dir}/copilot-instructions.md"
-    run mkdir -p "$instructions_dir"
-
-    if [[ -f "$instructions_file" ]]; then
-        ok "Global instructions already exist at ${instructions_file}."
-    else
-        log "Writing global Copilot instructions..."
-        local instructions_src="${SCRIPT_DIR}/configs/copilot-instructions.md"
-        if [[ "$DRY_RUN" == "true" ]]; then
-            printf '\e[2;37m  [dry] copy %s to %s\e[0m\n' "$instructions_src" "$instructions_file"
-        else
-            cp "$instructions_src" "$instructions_file"
-        fi
-        ok "Global instructions written to ${instructions_file}."
-    fi
+    local instructions_src="${SCRIPT_DIR}/configs/copilot-instructions.md"
+    install_instructions "$instructions_dir" "$instructions_file" "$instructions_src" "Copilot"
 
     local settings_file="${instructions_dir}/settings.json"
     if [[ -f "$settings_file" ]]; then
@@ -91,20 +79,12 @@ section_copilot() {
     if [[ -d "$gstack_runtime" ]]; then
         ok "gstack for Copilot already installed."
     else
-        ensure_bun || return 1
         log "Installing gstack for GitHub Copilot CLI..."
-        if [[ ! -d "$gstack_cache" ]]; then
-            run git clone --single-branch --depth 1 \
-                --branch add-copilot-cli-support \
-                "$(git_url git@github.com:ridermw/gstack.git)" \
-                "$gstack_cache"
-        fi
-        if [[ "$DRY_RUN" == "true" ]]; then
-            printf '\e[2;37m  [dry] cd %s && ./setup --host copilot\e[0m\n' "$gstack_cache"
-        else
-            bash -c "cd '$gstack_cache' && ./setup --host copilot"
-        fi
-        ok "gstack installed for Copilot."
+        install_gstack \
+            "$gstack_cache" \
+            "--host copilot" \
+            "git@github.com:ridermw/gstack.git" \
+            "--branch add-copilot-cli-support"
     fi
 
     log "To authenticate, run: copilot /login"

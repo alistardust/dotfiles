@@ -30,7 +30,7 @@ set -euo pipefail
 #   ./setup.sh --shellgpt                    # include ShellGPT in the standard run
 #   ./setup.sh --google-workspace            # include Google Workspace MCP in the standard run
 #
-# Sections: packages gnubin fonts tmux zsh vim alacritty wsl python keyd auto_cpufreq copilot claude chatgpt shellgpt google_workspace copilot_skills
+# Sections: packages gnubin fonts tmux zsh vim alacritty wsl python keyd auto_cpufreq ddcutil copilot claude chatgpt shellgpt google_workspace copilot_skills
 
 # -- Helpers -------------------------------------------------------------------
 
@@ -218,6 +218,7 @@ validate_collected_sections() {
     done
 }
 
+# shellcheck disable=SC2034  # SKILLS_PROFILE is used in sections/copilot_skills.sh
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --only)
@@ -272,8 +273,12 @@ elif [[ "$CHECK_ONLY" == "true" ]]; then
 fi
 log "Sections:$(for s in "${ALL_SECTIONS[@]}"; do [[ "${RUN[$s]}" == "true" ]] && printf ' %s' "$s"; done)"
 
-should_run packages && { [[ "$CHECK_ONLY" == "true" ]] && verify_packages || section_packages; }
-should_run gnubin   && { [[ "$CHECK_ONLY" == "true" ]] && verify_gnubin   || section_gnubin;   }
+dispatch() {
+    if [[ "$CHECK_ONLY" == "true" ]]; then "verify_$1"; else "section_$1"; fi
+}
+
+should_run packages && dispatch packages
+should_run gnubin   && dispatch gnubin
 
 # On macOS, prepend all Homebrew GNU tool paths into PATH for this session so
 # that gnu-sed (and friends) are used in subsequent sections rather than BSD tools.
@@ -287,22 +292,22 @@ if [[ "$OS" == "macos" ]] && [[ "$CHECK_ONLY" != "true" ]] && command_exists bre
     unset _brew_prefix _gnu_dir
 fi
 
-should_run fonts     && { [[ "$CHECK_ONLY" == "true" ]] && verify_fonts     || section_fonts;     }
-should_run tmux      && { [[ "$CHECK_ONLY" == "true" ]] && verify_tmux      || section_tmux;      }
-should_run zsh       && { [[ "$CHECK_ONLY" == "true" ]] && verify_zsh       || section_zsh;       }
-should_run vim       && { [[ "$CHECK_ONLY" == "true" ]] && verify_vim       || section_vim;       }
-should_run alacritty && { [[ "$CHECK_ONLY" == "true" ]] && verify_alacritty || section_alacritty; }
-should_run wsl       && { [[ "$CHECK_ONLY" == "true" ]] && verify_wsl       || section_wsl;       }
-should_run python    && { [[ "$CHECK_ONLY" == "true" ]] && verify_python    || section_python;    }
-should_run keyd        && { [[ "$CHECK_ONLY" == "true" ]] && verify_keyd        || section_keyd;        }
-should_run auto_cpufreq && { [[ "$CHECK_ONLY" == "true" ]] && verify_auto_cpufreq || section_auto_cpufreq; }
-should_run ddcutil     && { [[ "$CHECK_ONLY" == "true" ]] && verify_ddcutil     || section_ddcutil;     }
-should_run copilot   && { [[ "$CHECK_ONLY" == "true" ]] && verify_copilot   || section_copilot;   }
-should_run claude    && { [[ "$CHECK_ONLY" == "true" ]] && verify_claude    || section_claude;    }
-should_run chatgpt   && { [[ "$CHECK_ONLY" == "true" ]] && verify_chatgpt   || section_chatgpt;   }
-should_run shellgpt  && { [[ "$CHECK_ONLY" == "true" ]] && verify_shellgpt  || section_shellgpt;  }
-should_run google_workspace && { [[ "$CHECK_ONLY" == "true" ]] && verify_google_workspace || section_google_workspace; }
-should_run copilot_skills  && { [[ "$CHECK_ONLY" == "true" ]] && verify_copilot_skills  || section_copilot_skills;  }
+should_run fonts         && dispatch fonts
+should_run tmux          && dispatch tmux
+should_run zsh           && dispatch zsh
+should_run vim           && dispatch vim
+should_run alacritty     && dispatch alacritty
+should_run wsl           && dispatch wsl
+should_run python        && dispatch python
+should_run keyd          && dispatch keyd
+should_run auto_cpufreq  && dispatch auto_cpufreq
+should_run ddcutil       && dispatch ddcutil
+should_run copilot       && dispatch copilot
+should_run claude        && dispatch claude
+should_run chatgpt       && dispatch chatgpt
+should_run shellgpt      && dispatch shellgpt
+should_run google_workspace && dispatch google_workspace
+should_run copilot_skills   && dispatch copilot_skills
 
 if [[ "$CHECK_ONLY" == "true" ]]; then
     if [[ "$_check_failed" == "true" ]]; then

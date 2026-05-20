@@ -4,13 +4,7 @@
 
 # -- 8. WSL2 ------------------------------------------------------------------
 
-section_wsl() {
-    if [[ "$OS" != "wsl" ]]; then
-        warn "WSL section is WSL-only, skipping on $OS."
-        return
-    fi
-    log "Configuring WSL2 environment..."
-
+_wsl_install_packages() {
     # wslu provides wslview (open URLs/files in Windows), wslpath, etc.
     if ! command_exists wslview; then
         run sudo apt-get install -y wslu
@@ -24,6 +18,7 @@ section_wsl() {
         log "Installing win32yank for clipboard integration..."
         command_exists unzip || run sudo apt-get install -y unzip
         local winy_tmp
+
         winy_tmp="$(mktemp)"
         register_cleanup "$winy_tmp"
         run curl -fsSL -o "$winy_tmp" \
@@ -39,7 +34,9 @@ section_wsl() {
     else
         ok "win32yank already installed."
     fi
+}
 
+_wsl_write_system_config() {
     # /etc/wsl.conf  - enable systemd, lock in the default user.
     # Only written if the file doesn't exist; never overwrites existing config.
     if [[ ! -f /etc/wsl.conf ]]; then
@@ -63,9 +60,13 @@ EOF
     else
         ok "/etc/wsl.conf already exists  - not overwriting."
     fi
+}
+
+_wsl_patch_user_configs() {
+    local tmux_conf="$1"
+    local vimrc_local="$2"
 
     # ~/.tmux.conf.local  - true color + win32yank clipboard (idempotent)
-    local tmux_conf="$HOME/.tmux.conf.local"
     if [[ -f "$tmux_conf" ]] && ! grep -q "# >>> WSL config <<<" "$tmux_conf"; then
         log "Patching ~/.tmux.conf.local for WSL2 (true color + clipboard)..."
         if [[ "$DRY_RUN" == "true" ]]; then
@@ -100,7 +101,6 @@ TMUX_WSL
     fi
 
     # ~/.vimrc.local  - true color + win32yank clipboard (idempotent)
-    local vimrc_local="$HOME/.vimrc.local"
     if ! grep -q "\" >>> WSL config <<<" "$vimrc_local" 2>/dev/null; then
         log "Patching ~/.vimrc.local for WSL2 (true color + clipboard)..."
         if [[ "$DRY_RUN" == "true" ]]; then
@@ -139,15 +139,17 @@ VIM_WSL
     else
         ok "vim WSL config already present."
     fi
+}
 
+_wsl_print_windows_steps() {
     # Print the Windows-side steps that can't be scripted from inside WSL
     printf '\n'
     printf '  \e[1;33m┌- Windows-side steps (run these in PowerShell) --------------------------┐\e[0m\n'
     printf '  \e[1;33m│\e[0m                                                                          \e[1;33m│\e[0m\n'
     printf '  \e[1;33m│\e[0m  1. Install MesloLGM Nerd Font:                                         \e[1;33m│\e[0m\n'
     printf '  \e[1;33m│\e[0m     Invoke-WebRequest -Uri "https://github.com/ryanoasis/nerd-fonts/    \e[1;33m│\e[0m\n'
-    printf '  \e[1;33m│\e[0m       releases/latest/download/Meslo.zip" -OutFile "$env:TEMP\Meslo.zip"\e[1;33m│\e[0m\n'
-    printf '  \e[1;33m│\e[0m     Expand-Archive "$env:TEMP\Meslo.zip" "$env:TEMP\Meslo" -Force       \e[1;33m│\e[0m\n'
+    printf "  \e[1;33m│\e[0m       releases/latest/download/Meslo.zip\" -OutFile \"\$env:TEMP\\Meslo.zip\"\e[1;33m│\e[0m\n"
+    printf "  \e[1;33m│\e[0m     Expand-Archive \"\$env:TEMP\\Meslo.zip\" \"\$env:TEMP\\Meslo\" -Force       \e[1;33m│\e[0m\n"
     printf '  \e[1;33m│\e[0m     # Then right-click each .ttf -> Install for all users               \e[1;33m│\e[0m\n'
     printf '  \e[1;33m│\e[0m                                                                          \e[1;33m│\e[0m\n'
     printf '  \e[1;33m│\e[0m  2. Copy wslconfig.template -> %%USERPROFILE%%\\.wslconfig               \e[1;33m│\e[0m\n'
@@ -160,6 +162,22 @@ VIM_WSL
     printf '  \e[1;33m│\e[0m  4. Apply /etc/wsl.conf: run  wsl --shutdown  then reopen              \e[1;33m│\e[0m\n'
     printf '  \e[1;33m│\e[0m                                                                          \e[1;33m│\e[0m\n'
     printf '  \e[1;33m└--------------------------------------------------------------------------┘\e[0m\n'
+}
+
+section_wsl() {
+    local tmux_conf="$HOME/.tmux.conf.local"
+    local vimrc_local="$HOME/.vimrc.local"
+
+    if [[ "$OS" != "wsl" ]]; then
+        warn "WSL section is WSL-only, skipping on $OS."
+        return
+    fi
+    log "Configuring WSL2 environment..."
+
+    _wsl_install_packages
+    _wsl_write_system_config
+    _wsl_patch_user_configs "$tmux_conf" "$vimrc_local"
+    _wsl_print_windows_steps
 }
 
 # -- Verification (--verify mode) ---------------------------------------------

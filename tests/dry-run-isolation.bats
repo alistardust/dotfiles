@@ -8,12 +8,14 @@ setup() {
 }
 
 @test "dry-run with python section does not create .profile or .zprofile" {
-    "$SCRIPT_DIR/setup.sh" --dry-run --only python 2>&1 >/dev/null || true
+    run "$SCRIPT_DIR/setup.sh" --dry-run --only python
+    [ "$status" -eq 0 ]
     [[ ! -f "$HOME/.profile" ]]
     [[ ! -f "$HOME/.zprofile" ]]
 }
 
 @test "dry-run with tmux section does not create .tmux directory" {
-    "$SCRIPT_DIR/setup.sh" --dry-run --only tmux 2>&1 >/dev/null || true
+    run "$SCRIPT_DIR/setup.sh" --dry-run --only tmux
+    [ "$status" -eq 0 ]
     [[ ! -d "$HOME/.tmux" ]]
 }
