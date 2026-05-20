@@ -44,7 +44,7 @@ current platform. Exceptions: `gnubin` runs on macOS only, `wsl` on WSL2 only,
 | `google_workspace` | *(opt-in)* Google Workspace MCP server for Docs/Sheets/Drive integration |
 | `copilot_skills` | *(opt-in)* Installs Copilot CLI skills from shared, work, home, and local (repo-shipped) skill sets; requires `--skills-work` or `--skills-home` profile flag |
 | `auto_cpufreq` | *(Linux bare-metal only)* Installs and enables [auto-cpufreq](https://github.com/AdnanHodzic/auto-cpufreq) for CPU frequency/governor management |
-| `ddcutil` | Monitor input-switching aliases via DDC/CI (`ddcutil` on Linux, `ddcctl` on macOS); see Monitor Setup in copilot-instructions |
+| `ddcutil` | Monitor input-switching aliases via DDC/CI (`ddcutil` on Linux, `m1ddc` on macOS); see Monitor Setup in copilot-instructions |
 
 ### Selective Runs
 
@@ -97,12 +97,6 @@ Customisations applied to `~/.tmux.conf.local` by setup:
 On WSL2, copy-mode bindings are additionally wired to `win32yank.exe` and true-color
 passthrough is configured.
 
-To deploy the tmux config to a remote VM:
-
-```bash
-./scripts/setup_tmux_remote_vm.sh <host> <user>
-```
-
 ## Vim
 
 Uses [alistardust/.vim](https://github.com/alistardust/.vim) (`Divine` branch) with
@@ -143,17 +137,10 @@ Import `terminal_configs/windows-terminal-settings.json` into Windows Terminal:
 Copy `wslconfig.template` to `%USERPROFILE%\.wslconfig` on Windows and adjust
 `memory`/`processors` for your machine, then run `wsl --shutdown` from PowerShell.
 
-## Editor Configs
-
-- **VSCode:** `vscode/vscode_settings.json`
-- **JetBrains:** `idea_ides/` — exported settings for IntelliJ and PyCharm, plus the
-  Superdark color scheme (`Superdark.icls`)
-
 ## Utility Scripts
 
 | Script | Description |
 |--------|-------------|
-| `scripts/setup_tmux_remote_vm.sh <host> <user>` | SCP `~/.tmux.conf.local` to a remote host and clone the gpakosz/.tmux framework there |
 | `scripts/clean_python_cache` | Recursively remove `.pyc` files and `__pycache__` directories from the current directory |
 
 ## KDE Plasma (Linux)
