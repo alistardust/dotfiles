@@ -31,6 +31,7 @@ SKILLS_SHARED=(
 # Local skills shipped in this repo (skills/<name>/SKILL.md -> ~/.copilot/skills/<name>/)
 SKILLS_LOCAL=(
     code-audit
+    hunk-reviewer
 )
 
 section_copilot_skills() {
