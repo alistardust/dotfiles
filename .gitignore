@@ -11,3 +11,10 @@ __pycache__/
 *.pem
 *.key
 virtualenvwrapper
+node_modules/
+.venv/
+venv/
+dist/
+build/
+.idea/
+.vscode/
