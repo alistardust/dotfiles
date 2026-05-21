@@ -1,0 +1,6 @@
+mkdocs-material>=9.5,<10
+mkdocs-minify-plugin>=0.8,<1
+mkdocs-git-revision-date-localized-plugin>=1.2,<2
+mkdocs-pdf-export-plugin>=0.5,<1
+cairosvg>=2.7,<3
+pillow>=10,<11

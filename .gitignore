@@ -18,3 +18,5 @@ dist/
 build/
 .idea/
 .vscode/
+site/
+.build/

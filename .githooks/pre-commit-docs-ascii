@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Pre-commit hook: reject non-ASCII characters in docs/
+FILES=$(git diff --cached --name-only | grep '^docs/' || true)
+if [ -n "$FILES" ]; then
+  if echo "$FILES" | xargs grep -Pn '[^\x00-\x7F]' 2>/dev/null; then
+    echo "ERROR: Non-ASCII characters found in docs/. Fix before committing."
+    exit 1
+  fi
+fi

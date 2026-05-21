@@ -1,0 +1,32 @@
+/* Skip-to-content link: WCAG 2.4.1 Bypass Blocks */
+.skip-link {
+  position: absolute;
+  top: -40px;
+  left: 0;
+  padding: 8px;
+  z-index: 100;
+  background: var(--md-primary-fg-color);
+  color: var(--md-primary-bg-color);
+}
+.skip-link:focus {
+  top: 0;
+}
+
+/* Custom accessibility admonition */
+:root {
+  --md-admonition-icon--accessibility: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2a2 2 0 1 1 0 4 2 2 0 0 1 0-4zm9 7h-6v13h-2v-6h-2v6H9V9H3V7h18v2z"/></svg>');
+}
+.md-typeset .admonition.accessibility,
+.md-typeset details.accessibility {
+  border-color: #e91e63;
+}
+.md-typeset .accessibility > .admonition-title,
+.md-typeset .accessibility > summary {
+  background-color: rgba(233, 30, 99, 0.1);
+}
+.md-typeset .accessibility > .admonition-title::before,
+.md-typeset .accessibility > summary::before {
+  background-color: #e91e63;
+  -webkit-mask-image: var(--md-admonition-icon--accessibility);
+  mask-image: var(--md-admonition-icon--accessibility);
+}

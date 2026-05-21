@@ -1,0 +1,111 @@
+site_name: "Ali's Dotfiles"
+site_description: "Personal dev environment bootstrap and AI workflow guides"
+site_url: "https://alistardust.github.io/dotfiles/"
+repo_url: "https://github.com/alistardust/dotfiles"
+repo_name: "alistardust/dotfiles"
+
+theme:
+  name: material
+  language: en
+  palette:
+    - scheme: slate
+      primary: deep purple
+      accent: teal
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+    - scheme: default
+      primary: deep purple
+      accent: teal
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+  features:
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - navigation.indexes
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.tabs.link
+    - toc.integrate
+  custom_dir: docs/overrides
+
+extra_css:
+  - stylesheets/extra.css
+
+plugins:
+  - search
+  - minify:
+      minify_html: true
+  - git-revision-date-localized:
+      enable_creation_date: true
+      type: date
+      enable_git_follow: false
+  - social
+  - pdf-export:
+      enabled_if_env: ENABLE_PDF_EXPORT
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+  - tables
+
+nav:
+  - Home: index.md
+  - Setup:
+    - setup/index.md
+    - Platforms: setup/platforms.md
+    - Sections: setup/sections.md
+    - Selective runs: setup/selective-runs.md
+  - AI Guides:
+    - ai-guides/index.md
+    - For Engineers:
+      - ai-guides/engineers/index.md
+      - Getting started: ai-guides/engineers/getting-started.md
+      - The instruction system: ai-guides/engineers/instructions.md
+      - Writing effective prompts: ai-guides/engineers/prompts.md
+      - Skills: ai-guides/engineers/skills.md
+      - Writing your own skills: ai-guides/engineers/writing-skills.md
+      - Multi-model workflows: ai-guides/engineers/multi-model.md
+      - Real-world workflows: ai-guides/engineers/workflows.md
+      - Trust and safety: ai-guides/engineers/safety.md
+      - Quick start checklist: ai-guides/engineers/quickstart.md
+    - For Everyone:
+      - ai-guides/general/index.md
+      - Your first conversation: ai-guides/general/first-conversation.md
+      - The art of asking well: ai-guides/general/asking-well.md
+      - Research fundamentals: ai-guides/general/research-fundamentals.md
+      - Critical research: ai-guides/general/critical-research.md
+      - Writing workflows: ai-guides/general/writing-workflows.md
+      - Choosing your path: ai-guides/general/choosing-your-path.md
+      - Skills: ai-guides/general/skills.md
+      - Working in projects: ai-guides/general/collaboration.md
+      - Trust and safety: ai-guides/general/trust-and-safety.md
+      - Your 30-day plan: ai-guides/general/integration-plan.md
+  - Accessibility:
+    - accessibility/index.md
+    - Screen readers: accessibility/screen-readers.md
+    - Terminal setup: accessibility/terminal-setup.md
+    - Tool-specific notes: accessibility/tool-specific.md
+    - Keyboard workflows: accessibility/keyboard-workflows.md
+    - Platform matrix: accessibility/platform-matrix.md
+  - Reference:
+    - Skills catalog: reference/skills-catalog.md
+    - Prompt patterns: reference/prompt-patterns.md
+    - Model comparison: reference/model-matrix.md
+    - Command cheat sheet: reference/commands.md
+    - Compatibility matrix: reference/compatibility.md
+    - Glossary: reference/glossary.md
+    - Citation verification: reference/citation-verification.md
