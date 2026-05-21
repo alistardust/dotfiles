@@ -32,6 +32,10 @@ SKILLS_SHARED=(
 SKILLS_LOCAL=(
     code-audit
     hunk-reviewer
+    skill-conductor
+    skill-conductor-decision
+    skill-conductor-context
+    skill-conductor-execution
 )
 
 section_copilot_skills() {
@@ -81,6 +85,33 @@ section_copilot_skills() {
     done
 
     ok "Copilot skills installation complete."
+
+    # Install GSD (Get Shit Done) context engineering skills
+    _copilot_skills_install_gsd
+}
+
+_copilot_skills_install_gsd() {
+    if [[ -f "${HOME}/.copilot/skills/gsd-new-project/SKILL.md" ]]; then
+        ok "GSD skills already installed (Copilot)"
+    else
+        if command_exists npx; then
+            run npx get-shit-done-cc@latest --copilot --global --profile=full
+            ok "Installed GSD skills (Copilot)"
+        else
+            warn "npx not found; skipping GSD installation. Install Node.js first."
+        fi
+    fi
+
+    if [[ -f "${HOME}/.claude/skills/gsd-new-project/SKILL.md" ]]; then
+        ok "GSD skills already installed (Claude Code)"
+    else
+        if command_exists npx; then
+            run npx get-shit-done-cc@latest --claude --global --profile=full
+            ok "Installed GSD skills (Claude Code)"
+        else
+            warn "npx not found; skipping GSD installation for Claude Code."
+        fi
+    fi
 }
 
 # -- Verification (--verify mode) ---------------------------------------------
@@ -123,5 +154,31 @@ verify_copilot_skills() {
                 && pass "Skill installed: ${skill}" \
                 || fail "Skill missing: ${skill}"
         done
+    fi
+
+    # Verify GSD core skills are installed
+    local gsd_core_skills=(gsd-new-project gsd-plan-phase gsd-discuss-phase gsd-execute-phase gsd-map-codebase)
+    for skill in "${gsd_core_skills[@]}"; do
+        [[ -f "${skills_dir}/${skill}/SKILL.md" ]] \
+            && pass "GSD skill installed: ${skill}" \
+            || fail "GSD skill missing: ${skill} (run: npx get-shit-done-cc@latest --copilot --global --profile=full)"
+    done
+
+    # Verify conductor registry is not stale (warn if installed skills exist outside registry)
+    if [[ -f "${skills_dir}/skill-conductor/SKILL.md" ]]; then
+        local registry_file="${skills_dir}/skill-conductor/SKILL.md"
+        local unregistered=0
+        for dir in "${skills_dir}"/gstack-*/; do
+            [[ -d "$dir" ]] || continue
+            local skill_name
+            skill_name="$(basename "$dir" | sed 's/^gstack-//')"
+            if ! grep -q "$skill_name" "$registry_file" 2>/dev/null; then
+                warn "Unregistered skill in conductor: $(basename "$dir")"
+                unregistered=$((unregistered + 1))
+            fi
+        done
+        [[ $unregistered -eq 0 ]] \
+            && pass "Conductor registry covers all installed gstack skills" \
+            || warn "Conductor registry has ${unregistered} unregistered gstack skill(s)"
     fi
 }
