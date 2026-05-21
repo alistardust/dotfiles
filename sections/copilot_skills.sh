@@ -92,22 +92,22 @@ section_copilot_skills() {
 
 _copilot_skills_install_gsd() {
     if [[ -f "${HOME}/.copilot/skills/gsd-new-project/SKILL.md" ]]; then
-        ok "GSD core skills already installed (Copilot)"
+        ok "GSD skills already installed (Copilot)"
     else
         if command_exists npx; then
-            run npx get-shit-done-cc@latest --copilot --global --profile=core
-            ok "Installed GSD core skills (Copilot)"
+            run npx get-shit-done-cc@latest --copilot --global --profile=full
+            ok "Installed GSD skills (Copilot)"
         else
             warn "npx not found; skipping GSD installation. Install Node.js first."
         fi
     fi
 
     if [[ -f "${HOME}/.claude/skills/gsd-new-project/SKILL.md" ]]; then
-        ok "GSD core skills already installed (Claude Code)"
+        ok "GSD skills already installed (Claude Code)"
     else
         if command_exists npx; then
-            run npx get-shit-done-cc@latest --claude --global --profile=core
-            ok "Installed GSD core skills (Claude Code)"
+            run npx get-shit-done-cc@latest --claude --global --profile=full
+            ok "Installed GSD skills (Claude Code)"
         else
             warn "npx not found; skipping GSD installation for Claude Code."
         fi
@@ -157,11 +157,11 @@ verify_copilot_skills() {
     fi
 
     # Verify GSD core skills are installed
-    local gsd_core_skills=(gsd-new-project gsd-plan-phase gsd-discuss-phase gsd-execute-phase)
+    local gsd_core_skills=(gsd-new-project gsd-plan-phase gsd-discuss-phase gsd-execute-phase gsd-map-codebase)
     for skill in "${gsd_core_skills[@]}"; do
         [[ -f "${skills_dir}/${skill}/SKILL.md" ]] \
             && pass "GSD skill installed: ${skill}" \
-            || fail "GSD skill missing: ${skill} (run: npx get-shit-done-cc@latest --copilot --global --profile=core)"
+            || fail "GSD skill missing: ${skill} (run: npx get-shit-done-cc@latest --copilot --global --profile=full)"
     done
 
     # Verify conductor registry is not stale (warn if installed skills exist outside registry)

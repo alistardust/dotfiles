@@ -104,3 +104,63 @@ setup() {
 
     [[ "$status" -eq 0 ]]
 }
+
+# -- copilot_skills section tests --
+
+@test "copilot_skills: GSD helper exists and is callable" {
+    source "$SCRIPT_DIR/sections/copilot_skills.sh"
+    declare -A SKILLS_PROFILE=([work]=false [home]=false)
+
+    declare -F _copilot_skills_install_gsd >/dev/null
+}
+
+@test "copilot_skills: GSD install skips when npx not found" {
+    source "$SCRIPT_DIR/sections/copilot_skills.sh"
+    declare -A SKILLS_PROFILE=([work]=false [home]=false)
+
+    run _copilot_skills_install_gsd
+
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"npx not found"* ]]
+}
+
+@test "copilot_skills: GSD install skips when already installed" {
+    mkdir -p "$HOME/.copilot/skills/gsd-new-project"
+    echo "---" > "$HOME/.copilot/skills/gsd-new-project/SKILL.md"
+    mkdir -p "$HOME/.claude/skills/gsd-new-project"
+    echo "---" > "$HOME/.claude/skills/gsd-new-project/SKILL.md"
+
+    source "$SCRIPT_DIR/sections/copilot_skills.sh"
+    declare -A SKILLS_PROFILE=([work]=false [home]=false)
+
+    run _copilot_skills_install_gsd
+
+    [[ "$status" -eq 0 ]]
+    [[ "$output" == *"already installed"* ]]
+    [[ "$output" != *"npx not found"* ]]
+}
+
+@test "copilot_skills: verify detects missing GSD skills" {
+    mkdir -p "$HOME/.copilot/skills"
+
+    source "$SCRIPT_DIR/sections/copilot_skills.sh"
+    declare -A SKILLS_PROFILE=([work]=false [home]=false)
+
+    run verify_copilot_skills
+
+    [[ "$output" == *"GSD skill missing"* ]]
+}
+
+@test "copilot_skills: verify registry drift warns on unregistered gstack skill" {
+    mkdir -p "$HOME/.copilot/skills/skill-conductor"
+    cp "$SCRIPT_DIR/skills/skill-conductor/SKILL.md" "$HOME/.copilot/skills/skill-conductor/"
+    mkdir -p "$HOME/.copilot/skills/gstack-fake-nonexistent-skill"
+    echo "---" > "$HOME/.copilot/skills/gstack-fake-nonexistent-skill/SKILL.md"
+
+    source "$SCRIPT_DIR/sections/copilot_skills.sh"
+    declare -A SKILLS_PROFILE=([work]=false [home]=false)
+
+    run verify_copilot_skills
+
+    [[ "$output" == *"Unregistered skill in conductor"* ]]
+}

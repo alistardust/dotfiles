@@ -92,6 +92,7 @@ the caller. Complete your routing decision and stop.
 | Skill | Purpose |
 |-------|---------|
 | gsd-new-project | Initialize context artifacts (PROJECT.md, REQUIREMENTS.md, ROADMAP.md) |
+| gsd-map-codebase | Discover and document existing code before project setup |
 | gsd-discuss-phase | Capture implementation decisions before planning |
 | gsd-plan-phase | Research and plan a specific phase |
 | gsd-phase | Phase management |
