@@ -36,6 +36,8 @@ SKILLS_LOCAL=(
     skill-conductor-decision
     skill-conductor-context
     skill-conductor-execution
+    a11y-review
+    a11y-review-deep
 )
 
 section_copilot_skills() {
@@ -132,6 +134,18 @@ verify_copilot_skills() {
             && pass "Local skill installed: ${skill}" \
             || fail "Local skill missing: ${skill}"
     done
+
+    # Check a11y-review-deep phases directory
+    local phases_dir="${skills_dir}/a11y-review-deep/phases"
+    if [[ -d "$phases_dir" ]]; then
+        local phase_count
+        phase_count=$(find "$phases_dir" -name '*.md' | wc -l | tr -d ' ')
+        [[ "$phase_count" -ge 6 ]] \
+            && pass "a11y-review-deep phases: ${phase_count} documents" \
+            || fail "a11y-review-deep phases incomplete: ${phase_count}/6 documents"
+    else
+        fail "a11y-review-deep/phases/ directory missing"
+    fi
 
     # Check shared remote skills (always expected if copilot_skills was ever run)
     for skill in "${SKILLS_SHARED[@]}"; do

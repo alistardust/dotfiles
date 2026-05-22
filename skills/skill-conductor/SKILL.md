@@ -24,6 +24,16 @@ applies" responsibility. Do not also invoke using-superpowers.
 Read the user's message and check the environment. Match against these signals
 in priority order:
 
+### Priority 0: Custom Skills (direct invocation, skip layers)
+
+Route directly to a custom skill if the request clearly matches:
+
+- User says "accessibility review", "a11y review", "check accessibility",
+  "accessibility check" on a PR/diff or small scope: invoke `a11y-review`
+- User says "full accessibility audit", "deep a11y", "inclusive design review",
+  "accessibility audit" on a full codebase/app: invoke `a11y-review-deep`
+- User says "code audit", "audit this repo", "repo health check": invoke `code-audit`
+
 ### Priority 1: Context Layer (no foundation exists)
 
 Route to `skill-conductor-context` if ANY of these are true:
@@ -116,6 +126,8 @@ the caller. Complete your routing decision and stop.
 | Skill | Purpose |
 |-------|---------|
 | code-audit | Full repo audit with multiple tools and models |
+| a11y-review | PR/diff accessibility and inclusive design review (lite) |
+| a11y-review-deep | Full accessibility audit with persona simulation |
 | hunk-reviewer | Hunk-by-hunk code review with subagent dispatch |
 | incident-response | PagerDuty incident handling |
 | devops-rollout-plan | Deployment planning with rollback procedures |
