@@ -54,6 +54,7 @@ _global_cleanup() {
     for p in "${_cleanup_paths[@]}"; do
         [[ -e "$p" ]] && rm -rf "$p"
     done
+    return 0
 }
 trap _global_cleanup EXIT
 
