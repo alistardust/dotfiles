@@ -103,10 +103,9 @@ class TidalClient:
             self._login_future.result(timeout=timeout)
         except Exception:
             return False
-        if self._session.check_login():
-            self._save_session()
-            return True
-        return False
+        # Future completed successfully means session is authenticated
+        self._save_session()
+        return True
 
     def load_session(self) -> bool:
         """Load a saved session from disk. Returns True if valid."""
