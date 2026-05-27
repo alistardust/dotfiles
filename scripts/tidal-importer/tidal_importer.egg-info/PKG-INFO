@@ -1,0 +1,9 @@
+Metadata-Version: 2.4
+Name: tidal-importer
+Version: 0.1.0
+Summary: Import CSV playlists into Tidal
+Requires-Python: >=3.10
+Requires-Dist: tidalapi==0.8.11
+Provides-Extra: dev
+Requires-Dist: pytest>=7.0; extra == "dev"
+Requires-Dist: pytest-cov; extra == "dev"

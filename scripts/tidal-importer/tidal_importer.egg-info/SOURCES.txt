@@ -1,0 +1,12 @@
+pyproject.toml
+tidal_importer/__init__.py
+tidal_importer/__main__.py
+tidal_importer/cli.py
+tidal_importer/paths.py
+tidal_importer/sanitize.py
+tidal_importer.egg-info/PKG-INFO
+tidal_importer.egg-info/SOURCES.txt
+tidal_importer.egg-info/dependency_links.txt
+tidal_importer.egg-info/entry_points.txt
+tidal_importer.egg-info/requires.txt
+tidal_importer.egg-info/top_level.txt

@@ -1,0 +1,5 @@
+tidalapi==0.8.11
+
+[dev]
+pytest>=7.0
+pytest-cov

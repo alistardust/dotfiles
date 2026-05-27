@@ -1,0 +1,16 @@
+[project]
+name = "tidal-importer"
+version = "0.1.0"
+description = "Import CSV playlists into Tidal"
+requires-python = ">=3.10"
+dependencies = ["tidalapi==0.8.11"]
+
+[project.scripts]
+tidal-importer = "tidal_importer.cli:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0", "pytest-cov"]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"

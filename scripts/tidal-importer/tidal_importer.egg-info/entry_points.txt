@@ -1,0 +1,2 @@
+[console_scripts]
+tidal-importer = tidal_importer.cli:main
