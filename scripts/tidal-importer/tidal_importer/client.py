@@ -34,6 +34,9 @@ class TidalClientProtocol(typing.Protocol):
     def create_playlist(self, name: str, description: str = "") -> PlaylistInfo: ...
     def add_tracks(self, playlist_id: str, track_ids: list[int]) -> int: ...
     def get_playlist(self, playlist_id: str) -> PlaylistInfo | None: ...
+    def get_playlist_tracks(self, playlist_id: str) -> list[TrackResult]: ...
+    def remove_tracks(self, playlist_id: str, track_ids: list[int]) -> int: ...
+    def set_playlist_order(self, playlist_id: str, track_ids: list[int]) -> None: ...
 
 
 class RateLimiter:
@@ -192,6 +195,61 @@ class TidalClient:
                 return None
 
         return _retry_with_backoff(_do_get)
+
+    def get_playlist_tracks(self, playlist_id: str) -> list[TrackResult]:
+        """Get ordered list of tracks in playlist."""
+        self._ensure_session()
+        self._rate_limiter.wait()
+
+        def _do_get():
+            playlist = self._session.playlist(playlist_id)
+            tracks = playlist.tracks()
+            return [
+                TrackResult(
+                    tidal_id=t.id,
+                    title=t.name or "",
+                    artist=t.artist.name if t.artist else "",
+                    album=t.album.name if t.album else "",
+                )
+                for t in tracks
+            ]
+
+        return _retry_with_backoff(_do_get)
+
+    def remove_tracks(self, playlist_id: str, track_ids: list[int]) -> int:
+        """Remove tracks from playlist. Returns count removed."""
+        self._ensure_session()
+        self._rate_limiter.wait()
+
+        def _do_remove():
+            playlist = self._session.playlist(playlist_id)
+            # tidalapi may use indices instead of IDs for removal
+            current_tracks = playlist.tracks()
+            indices_to_remove = [
+                i for i, t in enumerate(current_tracks) if t.id in track_ids
+            ]
+            if indices_to_remove:
+                playlist.remove_by_indices(indices_to_remove)
+            return len(indices_to_remove)
+
+        return _retry_with_backoff(_do_remove)
+
+    def set_playlist_order(self, playlist_id: str, track_ids: list[int]) -> None:
+        """Reorder playlist to match given track_id sequence."""
+        self._ensure_session()
+        self._rate_limiter.wait()
+
+        def _do_reorder():
+            playlist = self._session.playlist(playlist_id)
+            # tidalapi doesn't have a direct reorder method
+            # We need to remove all tracks and re-add in order
+            current_tracks = playlist.tracks()
+            if current_tracks:
+                indices = list(range(len(current_tracks)))
+                playlist.remove_by_indices(indices)
+            playlist.add(track_ids)
+
+        return _retry_with_backoff(_do_reorder)
 
     def _ensure_session(self) -> None:
         if self._session is None or not self._session.check_login():

@@ -67,11 +67,42 @@ class FakeTidalClient:
             for p in self._playlists.values()
         ]
 
-    def get_playlist_tracks(self, playlist_id: str) -> list[int]:
-        """Test helper: inspect what tracks were added."""
+    def get_playlist_tracks(self, playlist_id: str) -> list[TrackResult]:
+        """Get ordered list of tracks in playlist."""
         if playlist_id not in self._playlists:
             return []
-        return list(self._playlists[playlist_id].track_ids)
+        # Return TrackResult objects instead of just IDs
+        return [
+            TrackResult(
+                tidal_id=tid,
+                title=f"Track {tid}",
+                artist=f"Artist {tid}",
+                album=f"Album {tid}",
+            )
+            for tid in self._playlists[playlist_id].track_ids
+        ]
+
+    def remove_tracks(self, playlist_id: str, track_ids: list[int]) -> int:
+        """Remove tracks from playlist. Returns count removed."""
+        if playlist_id not in self._playlists:
+            raise ValueError(f"Playlist {playlist_id} not found")
+        playlist = self._playlists[playlist_id]
+        removed_count = 0
+        for tid in track_ids:
+            if tid in playlist.track_ids:
+                playlist.track_ids.remove(tid)
+                removed_count += 1
+        return removed_count
+
+    def set_playlist_order(self, playlist_id: str, track_ids: list[int]) -> None:
+        """Reorder playlist to match given track_id sequence."""
+        if playlist_id not in self._playlists:
+            raise ValueError(f"Playlist {playlist_id} not found")
+        # Validate all track IDs are in the playlist
+        current = set(self._playlists[playlist_id].track_ids)
+        if set(track_ids) != current:
+            raise ValueError("Track IDs must match current playlist tracks")
+        self._playlists[playlist_id].track_ids = list(track_ids)
 
 
 @pytest.fixture

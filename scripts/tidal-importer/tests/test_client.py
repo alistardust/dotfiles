@@ -121,3 +121,39 @@ class TestFakeClientProtocolCompliance:
     def test_fake_get_nonexistent_playlist(self, fake_client):
         result = fake_client.get_playlist("nonexistent")
         assert result is None
+
+    def test_fake_has_get_playlist_tracks(self, fake_client):
+        """Test get_playlist_tracks returns ordered TrackResult list."""
+        info = fake_client.create_playlist("Test")
+        fake_client.add_tracks(info.playlist_id, [10, 20, 30])
+        tracks = fake_client.get_playlist_tracks(info.playlist_id)
+        assert isinstance(tracks, list)
+        assert len(tracks) == 3
+        assert all(isinstance(t, TrackResult) for t in tracks)
+        assert [t.tidal_id for t in tracks] == [10, 20, 30]
+
+    def test_fake_has_remove_tracks(self, fake_client):
+        """Test remove_tracks removes specified tracks."""
+        info = fake_client.create_playlist("Test")
+        fake_client.add_tracks(info.playlist_id, [1, 2, 3, 4])
+        count = fake_client.remove_tracks(info.playlist_id, [2, 4])
+        assert count == 2
+        tracks = fake_client.get_playlist_tracks(info.playlist_id)
+        assert [t.tidal_id for t in tracks] == [1, 3]
+
+    def test_fake_has_set_playlist_order(self, fake_client):
+        """Test set_playlist_order reorders tracks."""
+        info = fake_client.create_playlist("Test")
+        fake_client.add_tracks(info.playlist_id, [1, 2, 3])
+        fake_client.set_playlist_order(info.playlist_id, [3, 1, 2])
+        tracks = fake_client.get_playlist_tracks(info.playlist_id)
+        assert [t.tidal_id for t in tracks] == [3, 1, 2]
+
+    def test_fake_remove_nonexistent_track(self, fake_client):
+        """Test remove_tracks handles nonexistent track IDs."""
+        info = fake_client.create_playlist("Test")
+        fake_client.add_tracks(info.playlist_id, [1, 2, 3])
+        count = fake_client.remove_tracks(info.playlist_id, [99, 2])
+        assert count == 1  # Only track 2 was removed
+        tracks = fake_client.get_playlist_tracks(info.playlist_id)
+        assert [t.tidal_id for t in tracks] == [1, 3]
