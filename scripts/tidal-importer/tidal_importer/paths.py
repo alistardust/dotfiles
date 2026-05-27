@@ -5,22 +5,23 @@ from pathlib import Path
 
 
 def validate_no_symlink(path: Path) -> None:
-    """Abort if path or its parent resolves through a symlink."""
+    """Abort if path or any ancestor is a symlink.
+
+    Walks each component of the path checking for symlinks.
+    This catches both symlinked files and symlinked parent directories.
+    """
+    # Check the file itself
+    if path.exists() and path.is_symlink():
+        print(f"Error: refusing symlinked file: {path}", file=sys.stderr)
+        sys.exit(1)
+
+    # Walk parent chain checking for symlinks
     parent = path.parent
-    if parent.exists():
-        canonical_parent = Path(os.path.realpath(parent))
-        if canonical_parent != parent.resolve():
+    while parent != parent.parent:
+        if parent.exists() and parent.is_symlink():
             print(f"Error: symlink detected in parent path: {parent}", file=sys.stderr)
             sys.exit(1)
-
-    if path.exists():
-        canonical = Path(os.path.realpath(path))
-        if canonical != path.resolve():
-            print(f"Error: symlink detected: {path}", file=sys.stderr)
-            sys.exit(1)
-        if path.is_symlink():
-            print(f"Error: refusing symlinked file: {path}", file=sys.stderr)
-            sys.exit(1)
+        parent = parent.parent
 
 
 def validate_output_path(output_path: Path) -> Path:

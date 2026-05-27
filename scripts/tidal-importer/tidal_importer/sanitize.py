@@ -23,12 +23,14 @@ def sanitize_for_terminal(s: str) -> str:
 def sanitize_exception(e: Exception) -> str:
     """Redact potential tokens from exception messages."""
     msg = str(e)
-    msg = _TOKEN_PATTERNS.sub(r"\1=<REDACTED>", msg)
+    # Bearer pattern first (catches "Authorization: Bearer <token>" as a whole)
     msg = re.sub(
         r"Bearer\s+[A-Za-z0-9._~+/=-]+",
         "Bearer <REDACTED>",
         msg,
     )
+    # Then individual token key=value patterns
+    msg = _TOKEN_PATTERNS.sub(r"\1=<REDACTED>", msg)
     return msg
 
 

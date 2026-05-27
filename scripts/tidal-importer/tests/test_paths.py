@@ -24,6 +24,14 @@ class TestValidateNoSymlink:
     def test_nonexistent_path_passes(self, tmp_path):
         validate_no_symlink(tmp_path / "new_file.json")
 
+    def test_symlinked_parent_rejected(self, tmp_path):
+        real_dir = tmp_path / "real_dir"
+        real_dir.mkdir()
+        link_dir = tmp_path / "link_dir"
+        link_dir.symlink_to(real_dir)
+        with pytest.raises(SystemExit):
+            validate_no_symlink(link_dir / "file.json")
+
 
 class TestValidateOutputPath:
     def test_path_in_home_passes(self):

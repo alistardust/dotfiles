@@ -36,9 +36,8 @@ class TestSanitizeException:
 
     def test_redacts_bearer(self):
         result = sanitize_exception(Exception("Authorization: Bearer eyJhbGciOiJ"))
-        assert "Authorization=<REDACTED>" in result
-        # Note: the token after Bearer may not be fully redacted by the first pattern
-        # but the Authorization key is redacted
+        assert "eyJhbGciOiJ" not in result
+        assert "<REDACTED>" in result
 
     def test_preserves_non_token_message(self):
         result = sanitize_exception(Exception("Connection refused"))
