@@ -24,10 +24,10 @@ def normalize_title(title: str) -> str:
 def normalize_artist(artist: str) -> str:
     """Normalize an artist name for comparison."""
     artist = unicodedata.normalize("NFC", artist)
+    artist = artist.strip()
     artist = _THE_PREFIX_RE.sub("", artist)
     artist = artist.replace("&", "and")
-    artist = artist.strip().casefold()
-    return artist
+    return artist.casefold()
 
 
 def is_remaster(album: str) -> bool:
@@ -73,8 +73,10 @@ def score_match(
         norm_res_album = normalize_title(result_album)
         if norm_src_album == norm_res_album:
             score += 20
-        elif norm_src_album and norm_src_album in norm_res_album:
-            score += 10
+        elif norm_src_album and norm_res_album:
+            ratio = SequenceMatcher(None, norm_src_album, norm_res_album).ratio()
+            if ratio >= 0.75:
+                score += 10
 
     return score
 
