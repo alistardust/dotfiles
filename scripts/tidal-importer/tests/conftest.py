@@ -61,12 +61,6 @@ class FakeTidalClient:
             num_tracks=len(p.track_ids),
         )
 
-    def get_user_playlists(self) -> list[PlaylistInfo]:
-        return [
-            PlaylistInfo(playlist_id=p.playlist_id, name=p.name)
-            for p in self._playlists.values()
-        ]
-
     def get_playlist_tracks(self, playlist_id: str) -> list[TrackResult]:
         """Get ordered list of tracks in playlist."""
         if playlist_id not in self._playlists:

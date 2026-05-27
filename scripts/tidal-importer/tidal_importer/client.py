@@ -191,8 +191,11 @@ class TidalClient:
                     name=playlist.name,
                     num_tracks=playlist.num_tracks or 0,
                 )
-            except Exception:
-                return None
+            except Exception as e:
+                err_str = str(e).lower()
+                if "404" in err_str or "not found" in err_str:
+                    return None
+                raise
 
         return _retry_with_backoff(_do_get)
 
@@ -241,13 +244,16 @@ class TidalClient:
 
         def _do_reorder():
             playlist = self._session.playlist(playlist_id)
-            # tidalapi doesn't have a direct reorder method
-            # We need to remove all tracks and re-add in order
             current_tracks = playlist.tracks()
+            original_ids = [t.id for t in current_tracks]
             if current_tracks:
-                indices = list(range(len(current_tracks)))
-                playlist.remove_by_indices(indices)
-            playlist.add(track_ids)
+                playlist.remove_by_indices(list(range(len(current_tracks))))
+            try:
+                playlist.add(track_ids)
+            except Exception:
+                # Best-effort restore on failure
+                playlist.add(original_ids)
+                raise
 
         return _retry_with_backoff(_do_reorder)
 

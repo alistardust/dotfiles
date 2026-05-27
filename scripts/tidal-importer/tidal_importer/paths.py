@@ -47,8 +47,9 @@ def secure_write(path: Path, content: str) -> None:
     os.chmod(path.parent, 0o700)
     fd = os.open(str(path), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
     try:
-        with os.fdopen(fd, "w") as f:
-            f.write(content)
+        f = os.fdopen(fd, "w")
     except Exception:
         os.close(fd)
         raise
+    with f:
+        f.write(content)

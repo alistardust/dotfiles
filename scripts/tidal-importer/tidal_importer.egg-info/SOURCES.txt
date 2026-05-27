@@ -1,7 +1,11 @@
 pyproject.toml
+tests/test_matching.py
+tests/test_paths.py
+tests/test_sanitize.py
 tidal_importer/__init__.py
 tidal_importer/__main__.py
 tidal_importer/cli.py
+tidal_importer/matching.py
 tidal_importer/paths.py
 tidal_importer/sanitize.py
 tidal_importer.egg-info/PKG-INFO
