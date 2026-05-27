@@ -30,7 +30,7 @@ def validate_output_path(output_path: Path) -> Path:
     home = Path.home().resolve()
     cwd = Path.cwd().resolve()
 
-    if not (str(resolved).startswith(str(home)) or str(resolved).startswith(str(cwd))):
+    if not (resolved.is_relative_to(home) or resolved.is_relative_to(cwd)):
         print(
             f"Error: output path must be within home directory or working directory: {output_path}",
             file=sys.stderr,

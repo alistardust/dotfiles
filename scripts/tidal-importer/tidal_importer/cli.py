@@ -55,6 +55,7 @@ def _cmd_login() -> int:
 def _cmd_reconcile(args) -> int:
     from tidal_importer.client import TidalClient
     from tidal_importer.reconcile import reconcile_playlist, save_reconciled
+    from tidal_importer.sanitize import sanitize_exception
 
     client = TidalClient()
     if not client.load_session():
@@ -62,18 +63,21 @@ def _cmd_reconcile(args) -> int:
         return 1
 
     output_path = args.output or args.csv_path.with_suffix(".reconciled.json")
-    total_tracks = sum(1 for _ in open(args.csv_path)) - 1  # minus header
 
     def progress(current, total):
         print(f"\r  Reconciling: {current}/{total}", end="", flush=True)
 
     print(f"Reconciling {args.csv_path.name}...")
-    reconciled = reconcile_playlist(
-        args.csv_path,
-        client,
-        existing_playlist_id=args.playlist_id,
-        progress_callback=progress,
-    )
+    try:
+        reconciled = reconcile_playlist(
+            args.csv_path,
+            client,
+            existing_playlist_id=args.playlist_id,
+            progress_callback=progress,
+        )
+    except Exception as e:
+        print(f"\nError: {sanitize_exception(e)}", file=sys.stderr)
+        return 1
     print()  # newline after progress
 
     save_reconciled(reconciled, output_path)
@@ -91,6 +95,7 @@ def _cmd_reconcile(args) -> int:
 def _cmd_import(args) -> int:
     from tidal_importer.client import TidalClient
     from tidal_importer.importer import import_playlist
+    from tidal_importer.sanitize import sanitize_exception
 
     client = TidalClient()
     if not client.load_session():
@@ -100,15 +105,19 @@ def _cmd_import(args) -> int:
     def progress(phase, current, total):
         print(f"\r  {phase}: {current}/{total}", end="", flush=True)
 
-    result = import_playlist(
-        reconciled_path=args.json_path,
-        playlist_name=args.name,
-        client=client,
-        existing_playlist_id=args.playlist_id,
-        remove_extra=not args.no_remove,
-        dry_run=args.dry_run,
-        progress_callback=progress,
-    )
+    try:
+        result = import_playlist(
+            reconciled_path=args.json_path,
+            playlist_name=args.name,
+            client=client,
+            existing_playlist_id=args.playlist_id,
+            remove_extra=not args.no_remove,
+            dry_run=args.dry_run,
+            progress_callback=progress,
+        )
+    except Exception as e:
+        print(f"\nError: {sanitize_exception(e)}", file=sys.stderr)
+        return 1
     print()  # newline after progress
 
     prefix = "[DRY RUN] " if args.dry_run else ""

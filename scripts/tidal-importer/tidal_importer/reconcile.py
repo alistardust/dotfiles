@@ -8,7 +8,7 @@ from datetime import datetime, UTC
 
 from tidal_importer.client import TidalClientProtocol, TrackResult
 from tidal_importer.matching import score_match, classify_results, is_remaster
-from tidal_importer.paths import secure_write
+
 
 
 @dataclass
@@ -274,9 +274,9 @@ def save_reconciled(
         ]
     }
     
-    # Write securely
     json_str = json.dumps(data, indent=2)
-    secure_write(output_path, json_str)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json_str, encoding="utf-8")
 
 
 def load_reconciled(json_path: Path) -> list[ReconciledTrack]:

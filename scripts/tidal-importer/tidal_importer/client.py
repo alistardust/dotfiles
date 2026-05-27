@@ -8,6 +8,7 @@ from dataclasses import dataclass
 import tidalapi
 
 from tidal_importer.paths import secure_write, validate_no_symlink
+from tidal_importer.sanitize import sanitize_exception
 
 
 @dataclass(frozen=True)
@@ -86,18 +87,22 @@ class TidalClient:
         self._session_path = session_path or SESSION_FILE
         self._rate_limiter = RateLimiter(max_per_second=4.0)
         self._session: tidalapi.Session | None = None
+        self._login_future = None
 
     def login(self) -> str:
         """Start OAuth login flow. Returns the login URL for the user."""
         self._session = tidalapi.Session()
-        login, future = self._session.login_oauth()
+        login, self._login_future = self._session.login_oauth()
         return login.verification_uri_complete
 
-    def login_wait(self) -> bool:
+    def login_wait(self, timeout: float = 300.0) -> bool:
         """Wait for the user to complete OAuth. Returns True on success."""
-        if self._session is None:
+        if self._session is None or self._login_future is None:
             raise RuntimeError("Call login() first")
-        # tidalapi handles the polling internally
+        try:
+            self._login_future.result(timeout=timeout)
+        except Exception:
+            return False
         if self._session.check_login():
             self._save_session()
             return True
