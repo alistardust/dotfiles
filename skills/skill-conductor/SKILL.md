@@ -24,6 +24,14 @@ applies" responsibility. Do not also invoke using-superpowers.
 Read the user's message and check the environment. Match against these signals
 in priority order:
 
+### Opt-Out Detection
+
+Before routing, check for review gate opt-out signals in the **current user message**:
+- User says "skip reviews", "no reviews", or passes `--skip-reviews` / `--no-gate`
+- Signal must be explicit in the current message; do not infer from prior context
+- If detected: set `SKIP_GATES=true` and bypass all gate invocations for this routing
+- Opt-out is per-invocation only; does not persist across messages
+
 ### Priority 0: Custom Skills (direct invocation, skip layers)
 
 Route directly to a custom skill if the request clearly matches:
@@ -133,9 +141,51 @@ the caller. Complete your routing decision and stop.
 | devops-rollout-plan | Deployment planning with rollback procedures |
 | conventional-commit | Structured commit message generation |
 
+### Review Gate (invoke `skill-conductor-review-gate` at transitions)
+
+| Skill | Purpose |
+|-------|---------|
+| skill-conductor-review-gate | Recursive multi-agent review at workflow transitions |
+
 ## After Routing
 
 Once you determine the layer:
 1. State which layer you detected and why (one sentence)
-2. Invoke the appropriate sub-skill (`skill-conductor-decision`, `skill-conductor-context`, or `skill-conductor-execution`)
-3. Follow that sub-skill's instructions
+2. Invoke the appropriate sub-skill (`skill-conductor-decision`,
+   `skill-conductor-context`, or `skill-conductor-execution`)
+3. Follow that sub-skill's instructions until it produces its artifact
+4. **Review gate check (post-artifact):** Once the sub-skill produces an artifact
+   (spec, plan, or MR), check whether a gate applies to this transition AND
+   `SKIP_GATES` is not set. If so, invoke `skill-conductor-review-gate` with
+   the gate ID and artifact paths. Proceed to the next workflow stage only if
+   the gate returns `PASSED`. If the gate returns `ESCALATED_BLOCKING`, halt
+   and present findings to the user.
+5. If `SKIP_GATES` is set, log "Review gate skipped by user request" at the
+   conductor level and proceed to the next workflow stage immediately.
+
+### Gate trigger mapping
+
+| Transition | Gate | Inputs to pass |
+|-----------|------|----------------|
+| Sub-skill produces spec/design doc | post-spec | `gate_id=post-spec`, `artifact_paths=[path to spec]` |
+| Sub-skill produces plan | post-plan | `gate_id=post-plan`, `artifact_paths=[path to plan]` |
+| Sub-skill opens MR/PR | mr | `gate_id=mr`, `artifact_paths=[changed files]`, `changeset_scope=[list of diff files]`, `base_ref=<target branch>`, `head_ref=<source branch>` |
+
+### Artifact detection
+
+The conductor does NOT require sub-skills to return structured data. It monitors
+the conversation for artifact creation signals:
+- **post-spec:** A file was created/edited under `docs/superpowers/specs/` or a
+  spec/design document path was mentioned as complete
+- **post-plan:** A file was created/edited under `docs/superpowers/plans/` or a
+  plan document path was mentioned as complete
+- **mr:** `gh pr create` was run, or a PR/MR URL was output
+
+For MR gates, run `git diff --name-only <base>..<head>` to populate
+`changeset_scope`, and read the PR's base/head refs.
+
+### Control flow
+
+Gates fire AFTER a sub-skill produces its artifact, BEFORE the next workflow
+stage begins. This is observational, not contractual: existing sub-skills do
+not need modification.
