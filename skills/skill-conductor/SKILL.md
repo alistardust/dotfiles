@@ -156,10 +156,14 @@ Once you determine the layer:
 3. Follow that sub-skill's instructions until it produces its artifact
 4. **Review gate check (post-artifact):** Once the sub-skill produces an artifact
    (spec, plan, or MR), check whether a gate applies to this transition AND
-   `SKIP_GATES` is not set. If so, invoke `skill-conductor-review-gate` with
-   the gate ID and artifact paths. Proceed to the next workflow stage only if
-   the gate returns `PASSED`. If the gate returns `ESCALATED_BLOCKING`, halt
-   and present findings to the user.
+   `SKIP_GATES` is not set. If so, invoke `skill-conductor-review-gate` as a
+   blocking sub-skill call (wait for it to complete). Pass the gate ID and artifact
+   paths. Proceed to the next workflow stage only if the gate returns `PASSED`.
+   If the gate returns `ESCALATED_BLOCKING`, halt and present findings to the user.
+
+   Example invocation message to the gate skill:
+   "Review gate requested. gate_id: post-spec. artifact_paths:
+   [docs/superpowers/specs/auth-system.md]. overrides: none."
 5. If `SKIP_GATES` is set, log "Review gate skipped by user request" at the
    conductor level and proceed to the next workflow stage immediately.
 
@@ -183,6 +187,12 @@ the conversation for artifact creation signals:
 
 For MR gates, run `git diff --name-only <base>..<head>` to populate
 `changeset_scope`, and read the PR's base/head refs.
+
+**Fallback:** If no artifact signals are detected but the sub-skill conversation
+indicates completion (e.g., "spec is complete", "plan finished", "PR ready"),
+prompt the user: "An artifact appears complete but was not auto-detected.
+Provide the artifact path(s) to trigger the review gate, or say 'skip' to
+proceed without review."
 
 ### Control flow
 
