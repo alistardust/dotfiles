@@ -16,7 +16,6 @@ SKILLS_WORK=(
 )
 
 SKILLS_HOME=(
-    web-coder
     playwright-generate-test
     agent-governance
     agentic-eval
