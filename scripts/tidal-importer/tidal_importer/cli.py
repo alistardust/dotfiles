@@ -1,5 +1,6 @@
 """CLI entrypoint for tidal-importer."""
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -92,6 +93,28 @@ def main(argv: list[str] | None = None) -> int:
         help="Service to authenticate",
     )
 
+    # atmos subcommand
+    atmos_parser = subparsers.add_parser(
+        "atmos", help="Create Atmos derivative playlist"
+    )
+    atmos_parser.add_argument("playlist_id", help="Source Tidal playlist ID or UUID")
+    atmos_parser.add_argument(
+        "--name", help="Name for the Atmos playlist (default: original name + Atmos)"
+    )
+    atmos_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show matches without creating playlist",
+    )
+    atmos_parser.add_argument(
+        "--sequence",
+        action="store_true",
+        help="Auto-sequence the Atmos playlist after creation",
+    )
+    atmos_parser.add_argument(
+        "--profile", default="default", help="Sequencing profile (if --sequence)"
+    )
+
     args = parser.parse_args(argv)
 
     if args.command == "login":
@@ -104,6 +127,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_sequence(args)
     elif args.command == "auth":
         return _cmd_auth(args)
+    elif args.command == "atmos":
+        return _cmd_atmos(args)
     return 1
 
 
@@ -342,7 +367,18 @@ def _cmd_sequence(args) -> int:
         try:
             import anthropic
 
-            anthropic_client = anthropic.Anthropic()
+            anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
+            if not anthropic_key:
+                anthropic_creds = creds_dir / "anthropic_credentials.json"
+                if anthropic_creds.exists():
+                    import json as _json
+
+                    anthropic_key = _json.loads(
+                        anthropic_creds.read_text()
+                    ).get("api_key")
+            anthropic_client = anthropic.Anthropic(
+                api_key=anthropic_key
+            ) if anthropic_key else anthropic.Anthropic()
             classifier = TrackClassifier(client=anthropic_client)
 
             def classify_progress(current, total):
@@ -461,6 +497,183 @@ def _cmd_auth(args) -> int:
         )
         print("Anthropic credentials saved.")
 
+    return 0
+
+
+def _cmd_atmos(args) -> int:
+    """Create an Atmos derivative playlist from an existing playlist."""
+    import re
+    import time
+    from difflib import SequenceMatcher
+
+    import tidalapi
+    import json
+
+    from tidal_importer.client import TidalClient
+
+    session_file = Path.home() / ".local" / "share" / "tidal-importer" / "session.json"
+    if not session_file.exists():
+        print("Not logged in. Run 'tidal-importer login' first.", file=sys.stderr)
+        return 1
+
+    data = json.loads(session_file.read_text())
+    session = tidalapi.Session()
+    session.load_oauth_session(
+        token_type=data["token_type"],
+        access_token=data["access_token"],
+        refresh_token=data.get("refresh_token"),
+    )
+
+    print(f"Fetching playlist {args.playlist_id}...")
+    playlist = session.playlist(args.playlist_id)
+    tracks = playlist.tracks()
+    playlist_name = playlist.name
+    print(f"  '{playlist_name}' - {len(tracks)} tracks")
+
+    # Collect unique artists from the playlist
+    artist_ids = {}
+    for t in tracks:
+        if t.artist and t.artist.id not in artist_ids:
+            artist_ids[t.artist.id] = t.artist
+
+    # Search for Atmos albums from these artists
+    print(f"Searching Atmos catalog for {len(artist_ids)} artists...")
+    atmos_index = {}  # (normalized_artist, normalized_title) -> track_id
+
+    def strip_extras(title):
+        t = title.lower().strip()
+        for p in [
+            r'\s*\(.*?remaster.*?\)', r'\s*\(.*?remix.*?\)',
+            r'\s*\(.*?mix.*?\)', r'\s*\(.*?version.*?\)',
+            r'\s*\(.*?deluxe.*?\)', r'\s*\(.*?live.*?\)',
+            r'\s*\(.*?edition.*?\)', r'\s*\(.*?anniversary.*?\)',
+            r'\s*\[.*?\]', r'\s*-\s*\d{4}\s*remaster',
+            r'\s*\(atmos.*?\)', r'\s*\(2\d{3}.*?\)',
+        ]:
+            t = re.sub(p, '', t, flags=re.IGNORECASE)
+        return t.strip()
+
+    for artist_id, artist_obj in artist_ids.items():
+        time.sleep(0.3)
+        try:
+            all_albums = []
+            all_albums.extend(artist_obj.get_albums(limit=50))
+            time.sleep(0.2)
+            try:
+                all_albums.extend(artist_obj.get_albums_other(limit=50))
+            except Exception:
+                pass
+            time.sleep(0.2)
+            try:
+                all_albums.extend(artist_obj.get_ep_singles(limit=50))
+            except Exception:
+                pass
+
+            for album in all_albums:
+                if (hasattr(album, 'audio_modes') and album.audio_modes
+                        and 'DOLBY_ATMOS' in album.audio_modes):
+                    time.sleep(0.2)
+                    try:
+                        album_tracks = album.tracks()
+                        for at in album_tracks:
+                            artist_name = strip_extras(
+                                at.artist.name if at.artist else artist_obj.name
+                            )
+                            title = strip_extras(at.name or "")
+                            key = (artist_name, title)
+                            if key not in atmos_index:
+                                atmos_index[key] = at.id
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    print(f"  Found {len(atmos_index)} Atmos tracks from playlist artists")
+
+    # Match playlist tracks to Atmos versions
+    matches = []
+    for t in tracks:
+        artist_raw = t.artist.name if t.artist else ""
+        title_raw = t.name or ""
+        artist_stripped = strip_extras(artist_raw)
+        title_stripped = strip_extras(title_raw)
+
+        key = (artist_stripped, title_stripped)
+        if key in atmos_index:
+            matches.append({
+                "original": f"{artist_raw} - {title_raw}",
+                "atmos_id": atmos_index[key],
+            })
+            continue
+
+        # Fuzzy title match within same artist
+        for (idx_artist, idx_title), atmos_id in atmos_index.items():
+            if title_stripped == idx_title:
+                if (idx_artist in artist_stripped
+                        or artist_stripped in idx_artist
+                        or SequenceMatcher(
+                            None, idx_artist, artist_stripped
+                        ).ratio() > 0.6):
+                    matches.append({
+                        "original": f"{artist_raw} - {title_raw}",
+                        "atmos_id": atmos_id,
+                    })
+                    break
+
+    print(f"\n  Matched: {len(matches)}/{len(tracks)} tracks have Atmos versions")
+
+    if not matches:
+        print("No Atmos tracks found for this playlist.", file=sys.stderr)
+        return 1
+
+    if args.dry_run:
+        print(f"\nAtmos tracks ({len(matches)}):")
+        for m in matches:
+            print(f"  + {m['original']}")
+        print("\n[DRY RUN] No playlist created.")
+        return 0
+
+    # Create the Atmos playlist
+    atmos_name = args.name or f"{playlist_name} (Atmos)"
+    print(f"\nCreating playlist: {atmos_name}")
+
+    client = TidalClient()
+    client.load_session()
+    new_playlist = client.create_playlist(
+        atmos_name, f"Atmos derivative of {playlist_name}"
+    )
+
+    atmos_ids = [m["atmos_id"] for m in matches]
+    client.add_tracks(new_playlist.playlist_id, atmos_ids)
+    print(f"  Created: {new_playlist.playlist_id} ({len(atmos_ids)} tracks)")
+
+    if args.sequence:
+        print(f"\nSequencing with profile '{args.profile}'...")
+        seq_argv = [
+            "sequence", new_playlist.playlist_id,
+            "--profile", args.profile,
+        ]
+        from unittest.mock import patch
+        with patch("sys.argv", ["tidal-importer"] + seq_argv):
+            seq_args = type("Args", (), {
+                "playlist_id": new_playlist.playlist_id,
+                "profile": args.profile,
+                "arc": None,
+                "dry_run": False,
+                "save_as": None,
+                "bold_jump": None,
+                "artist_sep": None,
+                "verbose": False,
+                "themes": None,
+                "energy": None,
+                "instrumentation": None,
+                "bpm": None,
+                "mode": None,
+                "key": None,
+            })()
+            _cmd_sequence(seq_args)
+
+    print("Done!")
     return 0
 
 
