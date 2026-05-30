@@ -1,4 +1,9 @@
 tidalapi==0.8.11
+spotipy>=2.23
+musicbrainzngs>=0.7
+pylast>=5.0
+anthropic>=0.40
+pyyaml>=6.0
 
 [dev]
 pytest>=7.0

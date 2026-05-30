@@ -1,9 +1,14 @@
 Metadata-Version: 2.4
 Name: tidal-importer
-Version: 0.1.0
-Summary: Import CSV playlists into Tidal
+Version: 0.2.0
+Summary: Import CSV playlists into Tidal with fuzzy matching and audio-aware sequencing
 Requires-Python: >=3.10
 Requires-Dist: tidalapi==0.8.11
+Requires-Dist: spotipy>=2.23
+Requires-Dist: musicbrainzngs>=0.7
+Requires-Dist: pylast>=5.0
+Requires-Dist: anthropic>=0.40
+Requires-Dist: pyyaml>=6.0
 Provides-Extra: dev
 Requires-Dist: pytest>=7.0; extra == "dev"
 Requires-Dist: pytest-cov; extra == "dev"
