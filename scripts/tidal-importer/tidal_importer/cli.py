@@ -415,6 +415,9 @@ def _cmd_sequence(args) -> int:
         arc=arc,
         artist_min_separation=artist_sep,
         bold_jump_chance=bold_jump,
+        narrative_mode=profile.narrative_mode,
+        context_window=profile.context_window,
+        penalty_overrides=profile.penalty_overrides or None,
     )
 
     if args.dry_run or args.verbose:

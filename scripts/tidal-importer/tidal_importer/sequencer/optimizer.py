@@ -3,6 +3,7 @@ import math
 import random
 
 from tidal_importer.sequencer.cache import TrackMetadata
+from tidal_importer.sequencer.modifiers import SequenceContext, score_candidate
 from tidal_importer.sequencer.scoring import score_pair
 
 
@@ -110,7 +111,7 @@ def break_artist_runs(
                 valid = True
                 for check_idx in [mid_idx, target_idx]:
                     start = max(0, check_idx - 2)
-                    end = min(len(result) - 2, check_idx + 1)
+                    end = min(len(result) - 3, check_idx)
                     for candidate_index in range(start, end + 1):
                         if (
                             result[candidate_index].artist
@@ -140,8 +141,11 @@ def optimize_sequence(
     arc: str = "wave",
     artist_min_separation: int = 4,
     bold_jump_chance: float = 0.10,
+    narrative_mode: str = "river",
+    context_window: int = 5,
+    penalty_overrides: dict[str, float] | None = None,
 ) -> list[TrackMetadata]:
-    """Produce optimized track sequence using greedy + 2-opt."""
+    """Produce optimized track sequence using context-aware greedy + 2-opt."""
     if len(tracks) <= 2:
         return list(tracks)
 
@@ -152,7 +156,17 @@ def optimize_sequence(
     closer = select_closer(remaining, arc)
     remaining = [track for track in remaining if track.isrc != closer.isrc]
 
+    # Initialize context
+    context = SequenceContext(
+        position=0,
+        total=track_count,
+        narrative_mode=narrative_mode,
+        context_window=context_window,
+    )
+
     sequence = [opener]
+    context.advance(opener)
+
     available = {track.isrc for track in remaining}
     track_map = {track.isrc: track for track in remaining}
     bold_jump_cooldown = 0
@@ -163,21 +177,15 @@ def optimize_sequence(
 
         current = sequence[-1]
         candidates: list[tuple[float, TrackMetadata]] = []
+
         for isrc in available:
             candidate = track_map[isrc]
-            recent_artists = [track.artist for track in sequence[-artist_min_separation:]]
-            if candidate.artist in recent_artists:
-                continue
-            base_score = score_pair(current, candidate, weights)
+            base = score_pair(current, candidate, weights)
             arc_mult = _arc_fit_multiplier(candidate, position, track_count, arc)
-            candidates.append((base_score * arc_mult, candidate))
-
-        if not candidates:
-            for isrc in available:
-                candidate = track_map[isrc]
-                base_score = score_pair(current, candidate, weights)
-                arc_mult = _arc_fit_multiplier(candidate, position, track_count, arc)
-                candidates.append((base_score * arc_mult, candidate))
+            adjusted = score_candidate(
+                candidate, current, context, base * arc_mult, penalty_overrides
+            )
+            candidates.append((adjusted, candidate))
 
         candidates.sort(key=lambda item: item[0], reverse=True)
 
@@ -196,11 +204,13 @@ def optimize_sequence(
             chosen = candidates[0][1]
 
         sequence.append(chosen)
+        context.advance(chosen)
         available.remove(chosen.isrc)
 
     sequence.append(closer)
     sequence = _two_opt(sequence, weights, max_iterations=100)
-    sequence = break_artist_runs(sequence, min_separation=min(artist_min_separation, 2))
+    # Safety net: break extreme artist runs (5+ consecutive)
+    sequence = break_artist_runs(sequence, min_separation=5)
     return sequence
 
 

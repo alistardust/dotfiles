@@ -22,6 +22,9 @@ class WeightProfile:
     arc: str = "wave"
     bold_jump_chance: float = 0.10
     artist_min_separation: int = 4
+    narrative_mode: str = "river"  # "river" | "chapter" | "dj_set"
+    context_window: int = 5
+    penalty_overrides: dict[str, float] = field(default_factory=dict)
 
 
 _BUILTIN_PROFILES: dict[str, WeightProfile] = {
@@ -32,6 +35,8 @@ _BUILTIN_PROFILES: dict[str, WeightProfile] = {
         arc="wave",
         bold_jump_chance=0.10,
         artist_min_separation=4,
+        narrative_mode="river",
+        context_window=5,
     ),
     "psych-journey": WeightProfile(
         name="psych-journey",
@@ -41,6 +46,8 @@ _BUILTIN_PROFILES: dict[str, WeightProfile] = {
         arc="narrative",
         bold_jump_chance=0.15,
         artist_min_separation=3,
+        narrative_mode="dj_set",
+        context_window=5,
     ),
     "sunset-chill": WeightProfile(
         name="sunset-chill",
@@ -50,6 +57,8 @@ _BUILTIN_PROFILES: dict[str, WeightProfile] = {
         arc="descending",
         bold_jump_chance=0.05,
         artist_min_separation=5,
+        narrative_mode="river",
+        context_window=6,
     ),
     "folk-narrative": WeightProfile(
         name="folk-narrative",
@@ -59,6 +68,8 @@ _BUILTIN_PROFILES: dict[str, WeightProfile] = {
         arc="narrative",
         bold_jump_chance=0.08,
         artist_min_separation=4,
+        narrative_mode="chapter",
+        context_window=5,
     ),
     "road-trip": WeightProfile(
         name="road-trip",
@@ -68,6 +79,8 @@ _BUILTIN_PROFILES: dict[str, WeightProfile] = {
         arc="wave",
         bold_jump_chance=0.12,
         artist_min_separation=3,
+        narrative_mode="dj_set",
+        context_window=4,
     ),
 }
 
