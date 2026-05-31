@@ -11,23 +11,23 @@ verify, ship.
 
 ## Decision Tree
 
+Priority-ordered: first matching branch wins.
+
 ```
 What phase of execution are you in?
   PLANNING (need implementation plan)
     --> invoke writing-plans
   IMPLEMENTING (plan exists, building features)
-    --> Is TDD appropriate (new behavior, not config/docs)?
-          YES --> invoke test-driven-development
-          NO  --> invoke executing-plans
-    --> Are there 2+ independent tasks?
-          YES --> invoke dispatching-parallel-agents
-    --> Is it complex multi-step with shared state?
-          YES --> invoke subagent-driven-development
+    --> Priority order (first match wins):
+        1. Complex multi-step with shared state? --> subagent-driven-development
+        2. 2+ independent tasks, no shared state? --> dispatching-parallel-agents
+        3. New behavior where tests should drive design? --> test-driven-development
+        4. Otherwise --> executing-plans
   DEBUGGING (something is broken)
     --> invoke systematic-debugging
   REVIEWING (code is written, needs review)
-    --> invoke requesting-code-review (for others to review you)
-    --> invoke receiving-code-review (responding to review feedback)
+    --> Has review feedback already been received? --> receiving-code-review
+    --> No feedback yet, want to request it? --> requesting-code-review
   VERIFYING (think you are done)
     --> invoke verification-before-completion
   SHIPPING (verified, ready to merge)
@@ -37,60 +37,56 @@ What phase of execution are you in?
 ## Skill Descriptions
 
 ### writing-plans
-**When:** Requirements are clear, need a step-by-step implementation plan.
-**What it does:** Creates a detailed plan with phases, dependencies, and
-acceptance criteria. Saves to plan.md.
-**Follows:** Decision layer (office-hours/brainstorming produced a design)
+**When:** Requirements clear, need step-by-step implementation plan.
+**Model:** `claude-sonnet-4.5` (structured reasoning, dependency analysis)
 **Output:** plan.md with numbered steps
 
 ### executing-plans
 **When:** Plan exists, time to build step by step.
-**What it does:** Executes plan with review checkpoints. Marks steps complete.
-**Prerequisite:** plan.md must exist
+**Model:** `claude-sonnet-4.5` (precision, follows plan faithfully)
+**Prerequisite:** A plan artifact must exist (`plan.md`, `docs/superpowers/plans/*`,
+or `.planning/*/PLAN.md`). For GSD plans (`.planning/`), prefer `gsd-execute-phase`
+via the Context layer instead.
 **Output:** Implemented code, updated plan status
 
 ### test-driven-development
-**When:** Building new behavior where tests should drive the design.
-**What it does:** RED (write failing test) -> GREEN (make it pass) -> REFACTOR.
-Strict cycle enforcement.
-**Best for:** New functions, services, APIs, business logic
-**Not for:** Config changes, documentation, scaffolding
+**When:** Building new behavior where tests should drive design.
+**Model:** `claude-sonnet-4.5` (TDD requires disciplined cycle adherence)
+**Best for:** Functions, services, APIs, business logic
+**Not for:** Config, docs, scaffolding
 
 ### dispatching-parallel-agents
 **When:** 2+ independent tasks that can run simultaneously.
-**What it does:** Launches multiple agents in parallel, each with a focused task.
-Collects results.
-**Best for:** Multiple file edits, independent modules, research threads
+**Model:** `claude-haiku-4.5` per agent; `claude-sonnet-4.5` for orchestrator
+**Best for:** Multiple file edits, independent modules, research
 
 ### subagent-driven-development
 **When:** Complex multi-step work requiring coordination.
-**What it does:** Manages a team of subagents with shared context and handoffs.
+**Model:** `claude-sonnet-4.5` orchestrator; per-agent model depends on task complexity
 **Best for:** Large features spanning many files/modules
 
 ### systematic-debugging
-**When:** Something is broken and the cause is not obvious.
-**What it does:** Four phases: investigate, analyze, hypothesize, implement.
-Iron rule: no fixes without root cause.
-**Best for:** Intermittent bugs, mysterious failures, regression hunting
+**When:** Something broken, cause not obvious.
+**Model:** `claude-sonnet-4.5` (hypothesis generation, root cause analysis)
+**Best for:** Intermittent bugs, mysterious failures, regressions
 
 ### requesting-code-review
-**When:** Code is written, want feedback before merging.
-**What it does:** Prepares a structured review request with context.
+**When:** Code written, want feedback before merging.
+**Model:** `claude-haiku-4.5` (preparing review request is mechanical)
 
 ### receiving-code-review
 **When:** Review feedback received, need to address it.
-**What it does:** Guides systematic response to each review comment.
+**Model:** `claude-sonnet-4.5` (judgment needed for non-trivial feedback)
 
 ### verification-before-completion
 **When:** Implementation seems done, need to confirm.
-**What it does:** Checks that all acceptance criteria are met, tests pass,
-no regressions introduced.
+**Model:** `claude-sonnet-4.5` (needs to reason about acceptance criteria)
 **Output:** Verification report
 
 ### finishing-a-development-branch
 **When:** Verified, ready to merge/ship.
-**What it does:** Guides PR creation, merge strategy, cleanup.
-**Output:** Merged branch, cleaned up
+**Model:** `claude-haiku-4.5` (mechanical: PR creation, cleanup)
+**Output:** Merged branch
 
 ## Choosing Between Similar Skills
 
@@ -106,5 +102,8 @@ no regressions introduced.
 
 ## After Choosing
 
-Invoke the chosen skill. Let it run its own flow. Each Superpowers skill is
-self-contained with its own process and checkpoints.
+Invoke the chosen skill. The per-skill model recommendations above are authoritative
+for the primary skill invocation. Pass `COMPLEXITY_TIER` from the conductor if
+available; skills that spawn nested subagents use it for THOSE agent selections
+(e.g., `claude-haiku-4.5` for trivial sub-tasks within a parallel dispatch).
+Each Superpowers skill is self-contained with its own process and checkpoints.
