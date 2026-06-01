@@ -219,7 +219,10 @@ def _two_opt(
     weights: dict[str, float],
     max_iterations: int = 100,
 ) -> list[TrackMetadata]:
-    """2-opt local search: swap non-adjacent pairs to improve total score."""
+    """2-opt local search: swap non-adjacent pairs to improve total score.
+
+    Includes artist adjacency penalty to prevent re-clustering.
+    """
     track_count = len(sequence)
     if track_count <= 3:
         return sequence
@@ -227,24 +230,29 @@ def _two_opt(
     result = list(sequence)
     no_improvement_count = 0
 
+    def _local_score(idx: int) -> float:
+        """Score for a position considering its neighbors + artist penalty."""
+        s = 0.0
+        if idx > 0:
+            pair_s = score_pair(result[idx - 1], result[idx], weights)
+            if result[idx - 1].artist == result[idx].artist:
+                pair_s *= 0.3
+            s += pair_s
+        if idx < track_count - 1:
+            pair_s = score_pair(result[idx], result[idx + 1], weights)
+            if result[idx].artist == result[idx + 1].artist:
+                pair_s *= 0.3
+            s += pair_s
+        return s
+
     for _ in range(max_iterations):
         improved = False
         for left_index in range(1, track_count - 2):
             for right_index in range(left_index + 2, track_count - 1):
-                current_score = (
-                    score_pair(result[left_index - 1], result[left_index], weights)
-                    + score_pair(result[left_index], result[left_index + 1], weights)
-                    + score_pair(result[right_index - 1], result[right_index], weights)
-                    + score_pair(result[right_index], result[right_index + 1], weights)
-                )
+                current_score = _local_score(left_index) + _local_score(right_index)
 
                 result[left_index], result[right_index] = result[right_index], result[left_index]
-                new_score = (
-                    score_pair(result[left_index - 1], result[left_index], weights)
-                    + score_pair(result[left_index], result[left_index + 1], weights)
-                    + score_pair(result[right_index - 1], result[right_index], weights)
-                    + score_pair(result[right_index], result[right_index + 1], weights)
-                )
+                new_score = _local_score(left_index) + _local_score(right_index)
 
                 if new_score > current_score + 0.001:
                     improved = True

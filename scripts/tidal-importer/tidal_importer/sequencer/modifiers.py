@@ -54,7 +54,10 @@ def artist_recency_penalty(
 ) -> float:
     """Penalize candidates whose artist appeared recently.
 
-    Decay: 1 back = 0.3, 2 = 0.5, 3 = 0.7, 4 = 0.85, 5+ = 1.0
+    Aggressive decay curve that counteracts inflated base scores caused by
+    identical classification data for same-artist tracks. The penalty must
+    be strong enough to overcome a ~0.95 base score vs ~0.5 for different
+    artists.
     """
     if candidate.artist not in context.seen_artists:
         return 1.0
@@ -63,9 +66,9 @@ def artist_recency_penalty(
     distance = context.position - last_pos
 
     if distance <= 0:
-        return 0.3 * strength + (1.0 - strength)
+        return 0.10 * strength + (1.0 - strength)
 
-    decay_table = {1: 0.3, 2: 0.5, 3: 0.7, 4: 0.85}
+    decay_table = {1: 0.10, 2: 0.15, 3: 0.25, 4: 0.40, 5: 0.55, 6: 0.70, 7: 0.82, 8: 0.90, 9: 0.95}
     raw_penalty = decay_table.get(distance, 1.0)
 
     # Blend toward 1.0 based on strength (strength=0 means no penalty)
@@ -304,6 +307,13 @@ def score_candidate(
     """
     strengths = penalty_strengths or {}
 
+    # Cap inflated base scores from identical classification data (same artist)
+    # When two tracks share an artist, their classification similarity is artificial
+    # (populated from the same artist-level heuristics). Deflate to a neutral score.
+    effective_base = base_score
+    if candidate.artist == current.artist:
+        effective_base = min(base_score, 0.55)
+
     modifiers = [
         artist_recency_penalty(candidate, context, strengths.get("artist_recency", 1.0)),
         artist_variety_bonus(candidate, context, strengths.get("artist_variety", 1.0)),
@@ -317,5 +327,5 @@ def score_candidate(
     for m in modifiers:
         product *= m
 
-    result = base_score * product
+    result = effective_base * product
     return max(result, SCORE_FLOOR)

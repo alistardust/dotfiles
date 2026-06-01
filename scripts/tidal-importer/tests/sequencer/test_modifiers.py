@@ -70,7 +70,7 @@ class TestArtistRecencyPenalty:
         ctx.advance(_make_track(0, "Beatles"))
         candidate = _make_track(1, "Beatles")
         result = artist_recency_penalty(candidate, ctx)
-        assert result == pytest.approx(0.3)
+        assert result == pytest.approx(0.10)
 
     def test_decay_with_distance(self):
         ctx = SequenceContext(total=10)
@@ -80,14 +80,14 @@ class TestArtistRecencyPenalty:
         candidate = _make_track(3, "Beatles")
         # Beatles was 3 positions ago
         result = artist_recency_penalty(candidate, ctx)
-        assert result == pytest.approx(0.7)
+        assert result == pytest.approx(0.25)
 
     def test_far_back_no_penalty(self):
         ctx = SequenceContext(total=20)
         ctx.advance(_make_track(0, "Beatles"))
-        for i in range(1, 6):
+        for i in range(1, 10):
             ctx.advance(_make_track(i, f"Other{i}"))
-        candidate = _make_track(6, "Beatles")
+        candidate = _make_track(10, "Beatles")
         result = artist_recency_penalty(candidate, ctx)
         assert result == pytest.approx(1.0)
 
