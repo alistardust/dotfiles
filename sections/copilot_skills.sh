@@ -35,6 +35,7 @@ SKILLS_LOCAL=(
     skill-conductor-decision
     skill-conductor-context
     skill-conductor-execution
+    skill-conductor-review-gate
     a11y-review
     a11y-review-deep
 )
