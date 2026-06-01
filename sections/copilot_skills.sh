@@ -45,28 +45,34 @@ section_copilot_skills() {
     log "Installing Copilot skills (profiles: work=${SKILLS_PROFILE[work]}, home=${SKILLS_PROFILE[home]})..."
 
     # Ensure ~/.copilot/settings.json exists with required defaults
+    # Model selection: work=sonnet (balanced cost/quality), home=haiku (cheapest interface)
     local settings_file="${HOME}/.copilot/settings.json"
+    local default_model="claude-sonnet-4.5"
+    if [[ "${SKILLS_PROFILE[home]}" == "true" && "${SKILLS_PROFILE[work]}" != "true" ]]; then
+        default_model="claude-haiku-4.5"
+    fi
     run mkdir -p "${HOME}/.copilot"
     if [[ ! -f "$settings_file" ]]; then
-        run tee "$settings_file" <<< '{"memory":{"enabled":true},"model":"claude-opus-4.6","experimental":true}'
-        ok "Created settings.json with defaults (memory, model, experimental)"
+        run tee "$settings_file" <<< '{"memory":{"enabled":true},"model":"'"${default_model}"'","experimental":true}'
+        ok "Created settings.json (model: ${default_model})"
     else
         run python3 -c "
 import json,sys
 p=sys.argv[1]
+model=sys.argv[2]
 d=json.load(open(p))
 changed=False
 if not d.get('memory',{}).get('enabled'):
     d.setdefault('memory',{})['enabled']=True
     changed=True
-if d.get('model')!='claude-opus-4.6':
-    d['model']='claude-opus-4.6'
+if d.get('model')!=model:
+    d['model']=model
     changed=True
 if changed:
     json.dump(d,open(p,'w'),indent=2)
     sys.exit(0)
 sys.exit(1)
-" "$settings_file" && ok "Updated settings.json (memory + model)" || true
+" "$settings_file" "$default_model" && ok "Updated settings.json (model: ${default_model})" || true
     fi
 
     # Install local skills from this repo first
@@ -162,10 +168,10 @@ verify_copilot_skills() {
     fi
 
     # Check default model is set to Anthropic
-    if python3 -c "import json,sys; d=json.load(open(sys.argv[1])); assert d.get('model')=='claude-opus-4.6'" "$settings_file" 2>/dev/null; then
-        pass "Default model set to claude-opus-4.6"
+    if python3 -c "import json,sys; d=json.load(open(sys.argv[1])); assert d.get('model','').startswith('claude-')" "$settings_file" 2>/dev/null; then
+        pass "Default model is Anthropic ($(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('model','unset'))" "$settings_file"))"
     else
-        fail "Default model not set to claude-opus-4.6 in settings.json"
+        fail "Default model is not Anthropic in settings.json"
     fi
 
     # Check local skills (always expected if copilot_skills was ever run)

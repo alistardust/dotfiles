@@ -3,7 +3,7 @@
 <!-- BACK-SYNC NOTE: This is the generic dotfiles bootstrap. The live file at
      ~/.copilot/copilot-instructions.md intentionally diverges in these ways:
      - Adds "## Identity and Preferences" (Sam identity, Ali preferences)
-     - Adds "## Model Preference" (pins claude-opus-4.6; also set in settings.json)
+     - Adds "## Model Preference" (pins claude-sonnet-4.5 default; delegation table; never-GPT rule)
      - Adds "## Context" (Iodine/SRE work context)
      - Adds work-specific sections (Tachikoma, AWX, PagerDuty, Jira, etc.)
      - Adds Superpowers skills section
