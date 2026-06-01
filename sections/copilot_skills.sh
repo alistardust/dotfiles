@@ -48,17 +48,25 @@ section_copilot_skills() {
     local settings_file="${HOME}/.copilot/settings.json"
     run mkdir -p "${HOME}/.copilot"
     if [[ ! -f "$settings_file" ]]; then
-        run tee "$settings_file" <<< '{"memory":{"enabled":true},"experimental":true}'
-        ok "Created settings.json with memory enabled"
-    elif ! python3 -c "import json,sys; d=json.load(open(sys.argv[1])); assert d.get('memory',{}).get('enabled')" "$settings_file" 2>/dev/null; then
+        run tee "$settings_file" <<< '{"memory":{"enabled":true},"model":"claude-opus-4.6","experimental":true}'
+        ok "Created settings.json with defaults (memory, model, experimental)"
+    else
         run python3 -c "
 import json,sys
 p=sys.argv[1]
 d=json.load(open(p))
-d.setdefault('memory',{})['enabled']=True
-json.dump(d,open(p,'w'),indent=2)
-" "$settings_file"
-        ok "Enabled memory in settings.json"
+changed=False
+if not d.get('memory',{}).get('enabled'):
+    d.setdefault('memory',{})['enabled']=True
+    changed=True
+if d.get('model')!='claude-opus-4.6':
+    d['model']='claude-opus-4.6'
+    changed=True
+if changed:
+    json.dump(d,open(p,'w'),indent=2)
+    sys.exit(0)
+sys.exit(1)
+" "$settings_file" && ok "Updated settings.json (memory + model)" || true
     fi
 
     # Install local skills from this repo first
@@ -151,6 +159,13 @@ verify_copilot_skills() {
         pass "Copilot memory enabled in settings.json"
     else
         fail "Copilot memory not enabled in settings.json"
+    fi
+
+    # Check default model is set to Anthropic
+    if python3 -c "import json,sys; d=json.load(open(sys.argv[1])); assert d.get('model')=='claude-opus-4.6'" "$settings_file" 2>/dev/null; then
+        pass "Default model set to claude-opus-4.6"
+    else
+        fail "Default model not set to claude-opus-4.6 in settings.json"
     fi
 
     # Check local skills (always expected if copilot_skills was ever run)
