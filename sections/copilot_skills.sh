@@ -38,6 +38,7 @@ SKILLS_LOCAL=(
     skill-conductor-review-gate
     a11y-review
     a11y-review-deep
+    using-git-worktrees
 )
 
 section_copilot_skills() {
