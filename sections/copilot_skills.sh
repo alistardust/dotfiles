@@ -44,6 +44,23 @@ SKILLS_LOCAL=(
 section_copilot_skills() {
     log "Installing Copilot skills (profiles: work=${SKILLS_PROFILE[work]}, home=${SKILLS_PROFILE[home]})..."
 
+    # Ensure ~/.copilot/settings.json exists with required defaults
+    local settings_file="${HOME}/.copilot/settings.json"
+    run mkdir -p "${HOME}/.copilot"
+    if [[ ! -f "$settings_file" ]]; then
+        run tee "$settings_file" <<< '{"memory":{"enabled":true},"experimental":true}'
+        ok "Created settings.json with memory enabled"
+    elif ! python3 -c "import json,sys; d=json.load(open(sys.argv[1])); assert d.get('memory',{}).get('enabled')" "$settings_file" 2>/dev/null; then
+        run python3 -c "
+import json,sys
+p=sys.argv[1]
+d=json.load(open(p))
+d.setdefault('memory',{})['enabled']=True
+json.dump(d,open(p,'w'),indent=2)
+" "$settings_file"
+        ok "Enabled memory in settings.json"
+    fi
+
     # Install local skills from this repo first
     local skill
     for skill in "${SKILLS_LOCAL[@]}"; do
@@ -127,6 +144,14 @@ verify_copilot_skills() {
     [[ -d "$skills_dir" ]] \
         && pass "~/.copilot/skills/ directory exists" \
         || { fail "~/.copilot/skills/ directory missing"; return; }
+
+    # Check memory is enabled in settings.json
+    local settings_file="${HOME}/.copilot/settings.json"
+    if python3 -c "import json,sys; d=json.load(open(sys.argv[1])); assert d.get('memory',{}).get('enabled')" "$settings_file" 2>/dev/null; then
+        pass "Copilot memory enabled in settings.json"
+    else
+        fail "Copilot memory not enabled in settings.json"
+    fi
 
     # Check local skills (always expected if copilot_skills was ever run)
     local skill
