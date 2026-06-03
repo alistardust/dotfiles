@@ -1,0 +1,24 @@
+[project]
+name = "tuneshift"
+version = "0.1.0"
+description = "Canonical playlist manager with cross-platform distribution"
+requires-python = ">=3.10"
+dependencies = [
+    "tidalapi==0.8.11",
+    "spotipy==2.24.0",
+    "ytmusicapi==1.8.2",
+    "anthropic==0.40.0",
+    "musicbrainzngs==0.7.1",
+    "pyyaml==6.0.2",
+    "shtab==1.7.1",
+]
+
+[project.scripts]
+tuneshift = "tuneshift.cli:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0", "pytest-cov", "pip-audit"]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"

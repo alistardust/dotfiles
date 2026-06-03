@@ -1,0 +1,69 @@
+"""tests/test_matching.py"""
+from tuneshift.matching import (
+    normalize_title,
+    normalize_artist,
+    score_match,
+    classify_results,
+    is_remaster,
+)
+
+
+def test_normalize_title_strips_remaster() -> None:
+    assert normalize_title("Heroes (Remastered 2017)") == "heroes"
+
+
+def test_normalize_title_strips_deluxe() -> None:
+    assert normalize_title("Ziggy Stardust (Deluxe Edition)") == "ziggy stardust"
+
+
+def test_normalize_title_empty() -> None:
+    assert normalize_title("") == ""
+
+
+def test_normalize_artist_strips_the() -> None:
+    assert normalize_artist("The Beatles") == "beatles"
+
+
+def test_normalize_artist_ampersand() -> None:
+    assert normalize_artist("Simon & Garfunkel") == "simon and garfunkel"
+
+
+def test_normalize_artist_empty() -> None:
+    assert normalize_artist("") == ""
+
+
+def test_score_exact_match() -> None:
+    score = score_match("Heroes", "David Bowie", "Heroes", "Heroes", "David Bowie", "Heroes")
+    assert score == 100
+
+
+def test_score_no_album() -> None:
+    score = score_match("Heroes", "David Bowie", None, "Heroes", "David Bowie", "Best Of")
+    assert score == 80
+
+
+def test_score_wrong_artist() -> None:
+    score = score_match("Heroes", "David Bowie", None, "Heroes", "Wallflowers", "Bringing Down")
+    assert score < 60
+
+
+def test_classify_high_confidence() -> None:
+    assert classify_results([90, 50, 40]) == "high"
+
+
+def test_classify_ambiguous() -> None:
+    assert classify_results([85, 82]) == "ambiguous"
+
+
+def test_classify_not_found() -> None:
+    assert classify_results([30, 20]) == "not_found"
+    assert classify_results([]) == "not_found"
+
+
+def test_is_remaster() -> None:
+    assert is_remaster("Heroes (2017 Remastered)")
+    assert not is_remaster("Heroes")
+
+
+def test_is_remaster_empty() -> None:
+    assert not is_remaster("")
