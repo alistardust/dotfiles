@@ -8,7 +8,7 @@ from pathlib import Path
 
 from tuneshift.models import PlatformMapping, Playlist, Track
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS tracks (
@@ -28,7 +28,12 @@ CREATE TABLE IF NOT EXISTS tracks (
     themes TEXT,
     metadata JSON,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    mb_recording_id TEXT,
+    mb_release_group_id TEXT,
+    confidence_tier TEXT,
+    confidence_score REAL,
+    resolved_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS platform_tracks (
@@ -86,6 +91,18 @@ CREATE TABLE IF NOT EXISTS sync_log (
     timestamp TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS evidence (
+    id INTEGER PRIMARY KEY,
+    track_id INTEGER NOT NULL REFERENCES tracks(id),
+    source TEXT NOT NULL,
+    evidence_type TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    raw_data TEXT,
+    is_current INTEGER NOT NULL DEFAULT 1,
+    superseded_by INTEGER REFERENCES evidence(id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS schema_meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -98,6 +115,7 @@ CREATE INDEX IF NOT EXISTS idx_platform_tracks_lookup
 CREATE INDEX IF NOT EXISTS idx_playlist_tracks_order
     ON playlist_tracks(playlist_id, position);
 CREATE INDEX IF NOT EXISTS idx_tracks_isrc ON tracks(isrc) WHERE isrc IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_evidence_track ON evidence(track_id, is_current);
 """
 
 _REMIX_RE = re.compile(r"\s*\((?:remaster(?:ed)?|deluxe edition)[^)]*\)\s*", re.IGNORECASE)
@@ -160,6 +178,56 @@ class Database:
             ("version", str(_SCHEMA_VERSION)),
         )
         self.conn.commit()
+        self._migrate_schema()
+
+    def _migrate_schema(self) -> None:
+        """Migrate database from v1 to v2 if needed."""
+        row = self.conn.execute(
+            "SELECT value FROM schema_meta WHERE key = 'version'"
+        ).fetchone()
+        if row is None:
+            return
+        current_version = int(row[0])
+        if current_version >= _SCHEMA_VERSION:
+            return
+
+        with self.conn:
+            cols = {r[1] for r in self.conn.execute("PRAGMA table_info(tracks)").fetchall()}
+            track_identity_columns = {
+                "mb_recording_id": "TEXT",
+                "mb_release_group_id": "TEXT",
+                "confidence_tier": "TEXT",
+                "confidence_score": "REAL",
+                "resolved_at": "TEXT",
+            }
+            for column_name, column_type in track_identity_columns.items():
+                if column_name not in cols:
+                    self.conn.execute(
+                        f"ALTER TABLE tracks ADD COLUMN {column_name} {column_type}"
+                    )
+
+            self.conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS evidence (
+                    id INTEGER PRIMARY KEY,
+                    track_id INTEGER NOT NULL REFERENCES tracks(id),
+                    source TEXT NOT NULL,
+                    evidence_type TEXT NOT NULL,
+                    confidence REAL NOT NULL,
+                    raw_data TEXT,
+                    is_current INTEGER NOT NULL DEFAULT 1,
+                    superseded_by INTEGER REFERENCES evidence(id),
+                    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                )
+                """
+            )
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_evidence_track ON evidence(track_id, is_current)"
+            )
+            self.conn.execute(
+                "UPDATE schema_meta SET value = ? WHERE key = 'version'",
+                (str(_SCHEMA_VERSION),),
+            )
 
     def insert_track(self, track: Track) -> int:
         """Insert a track and return its ID."""
@@ -225,6 +293,141 @@ class Database:
         if row is None:
             return None
         return self._row_to_track(row)
+
+    def get_resolution_state(
+        self,
+        track_id: int,
+    ) -> tuple[str | None, float | None, str | None]:
+        """Get the current resolution state of a track."""
+        row = self.conn.execute(
+            "SELECT confidence_tier, confidence_score, resolved_at FROM tracks WHERE id = ?",
+            (track_id,),
+        ).fetchone()
+        if row is None:
+            return None, None, None
+        return row["confidence_tier"], row["confidence_score"], row["resolved_at"]
+
+    def get_isrc(self, track_id: int) -> str | None:
+        """Get the ISRC for a track."""
+        row = self.conn.execute("SELECT isrc FROM tracks WHERE id = ?", (track_id,)).fetchone()
+        return row["isrc"] if row else None
+
+    def store_resolution(
+        self,
+        track_id: int,
+        mb_recording_id: str | None,
+        mb_release_group_id: str | None,
+        confidence_tier: str,
+        confidence_score: float,
+        evidence: list[dict],
+        isrc: str | None = None,
+    ) -> None:
+        """Store a successful resolution result."""
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc).isoformat()
+
+        with self.conn:
+            new_evidence_ids = []
+            for evidence_row in evidence:
+                cursor = self.conn.execute(
+                    """INSERT INTO evidence (track_id, source, evidence_type, confidence, raw_data, is_current)
+                       VALUES (?, ?, ?, ?, ?, 1)""",
+                    (
+                        track_id,
+                        evidence_row["source"],
+                        evidence_row["evidence_type"],
+                        evidence_row["confidence"],
+                        evidence_row.get("raw_data"),
+                    ),
+                )
+                new_evidence_ids.append(cursor.lastrowid)
+
+            anchor_id = new_evidence_ids[0] if new_evidence_ids else None
+            if anchor_id is not None:
+                placeholders = ",".join("?" for _ in new_evidence_ids)
+                self.conn.execute(
+                    f"""UPDATE evidence
+                       SET is_current = 0, superseded_by = ?
+                       WHERE track_id = ? AND is_current = 1 AND id NOT IN ({placeholders})""",
+                    (anchor_id, track_id, *new_evidence_ids),
+                )
+
+            update_sql = """UPDATE tracks SET
+                mb_recording_id = ?,
+                mb_release_group_id = ?,
+                confidence_tier = ?,
+                confidence_score = ?,
+                resolved_at = ?"""
+            params: list[object] = [
+                mb_recording_id,
+                mb_release_group_id,
+                confidence_tier,
+                confidence_score,
+                now,
+            ]
+            if isrc is not None:
+                update_sql += ", isrc = ?"
+                params.append(isrc)
+            update_sql += " WHERE id = ?"
+            params.append(track_id)
+            self.conn.execute(update_sql, params)
+
+    def store_failed_evidence(self, track_id: int, evidence: list[dict]) -> None:
+        """Store evidence from a failed resolution attempt."""
+        with self.conn:
+            for evidence_row in evidence:
+                self.conn.execute(
+                    """INSERT INTO evidence (track_id, source, evidence_type, confidence, raw_data, is_current)
+                       VALUES (?, ?, ?, ?, ?, 1)""",
+                    (
+                        track_id,
+                        evidence_row["source"],
+                        evidence_row["evidence_type"],
+                        evidence_row["confidence"],
+                        evidence_row.get("raw_data"),
+                    ),
+                )
+
+    def find_unresolved(self, below_tier: str | None = None) -> list[Track]:
+        """Find tracks that still need identity resolution."""
+        tier_order = {"VERIFIED": 4, "CONFIRMED": 3, "PROBABLE": 2, "UNCERTAIN": 1}
+
+        if below_tier is None:
+            rows = self.conn.execute(
+                "SELECT * FROM tracks WHERE confidence_tier IS NULL"
+            ).fetchall()
+        else:
+            threshold = tier_order.get(below_tier, 0)
+            tiers_below = [tier for tier, order in tier_order.items() if order < threshold]
+            if not tiers_below:
+                rows = self.conn.execute(
+                    "SELECT * FROM tracks WHERE confidence_tier IS NULL"
+                ).fetchall()
+            else:
+                placeholders = ",".join("?" for _ in tiers_below)
+                rows = self.conn.execute(
+                    f"SELECT * FROM tracks WHERE confidence_tier IS NULL OR confidence_tier IN ({placeholders})",
+                    tiers_below,
+                ).fetchall()
+
+        return [self._row_to_track(row) for row in rows]
+
+    def find_tracks_by_playlist(self, playlist_id: int) -> list[Track]:
+        """Find all tracks in a playlist."""
+        return self.get_playlist_tracks(playlist_id)
+
+    def find_tracks_by_title_artist(self, title: str, artist: str) -> list[Track]:
+        """Find tracks by title and artist using normalized columns."""
+        norm_title = normalize_title(title)
+        norm_artist = normalize_artist(artist)
+        if norm_title is None:
+            return []
+        rows = self.conn.execute(
+            "SELECT * FROM tracks WHERE norm_title = ? AND norm_artist = ?",
+            (norm_title, norm_artist),
+        ).fetchall()
+        return [self._row_to_track(row) for row in rows]
 
     def create_playlist(self, name: str, description: str | None = None) -> int:
         """Create a playlist and return its ID."""
