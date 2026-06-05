@@ -140,3 +140,31 @@ class ResolvedTrack:
     best_album: Album | None = None
     evidence: list[Evidence] = field(default_factory=list)
     platform_tracks: list[PlatformTrack] = field(default_factory=list)
+
+
+@dataclass
+class TrackInput:
+    """Input track for the resolver pipeline (not a DB entity)."""
+    platform: str
+    platform_id: str
+    title: str
+    artist: str
+    album: str | None = None
+    duration_ms: int | None = None
+    isrc: str | None = None
+    platform_artist_id: str | None = None
+
+
+@dataclass
+class ResolutionResult:
+    """Result from the resolver pipeline."""
+    platform: str
+    platform_id: str
+    title: str
+    artist: str
+    mb_recording_id: str | None = None
+    confidence: float = 0.0
+    tier: ConfidenceTier = ConfidenceTier.UNCERTAIN
+    evidence: list[Evidence] = field(default_factory=list)
+    resolved_at: "datetime | None" = None
+

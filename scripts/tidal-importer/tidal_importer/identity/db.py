@@ -11,6 +11,8 @@ from tidal_importer.identity.models import (
     Artist,
     Evidence,
     Recording,
+    RecordingCandidate,
+    ResolutionResult,
 )
 
 SCHEMA_VERSION = 1
@@ -345,3 +347,134 @@ class IdentityDB:
 
     def close(self) -> None:
         self.conn.close()
+
+    def get_resolved_track(self, platform: str, platform_id: str) -> ResolutionResult | None:
+        """Get a resolved track by platform and platform ID."""
+        row = self.execute(
+            """SELECT pt.recording_id, r.title, a.name, r.mb_recording_id,
+                      pt.platform, pt.platform_track_id, pt.created_at
+               FROM platform_tracks pt
+               JOIN recordings r ON pt.recording_id = r.id
+               JOIN artists a ON r.artist_id = a.id
+               WHERE pt.platform = ? AND pt.platform_track_id = ?""",
+            (platform, platform_id),
+        ).fetchone()
+        if row is None:
+            return None
+
+        evidence = self.get_current_evidence_for_recording(row[0])
+
+        from tidal_importer.identity.confidence import compute_confidence
+        from tidal_importer.identity.models import ConfidenceTier
+        from datetime import datetime, timezone
+
+        if evidence:
+            score, _ = compute_confidence(evidence)
+        else:
+            score = 0.0
+        resolved_at_str = row[6]
+        resolved_at = None
+        if resolved_at_str:
+            try:
+                resolved_at = datetime.fromisoformat(resolved_at_str).replace(
+                    tzinfo=timezone.utc
+                )
+            except (ValueError, TypeError):
+                resolved_at = datetime.now(timezone.utc)
+
+        return ResolutionResult(
+            platform=row[4],
+            platform_id=row[5],
+            title=row[1],
+            artist=row[2],
+            mb_recording_id=row[3],
+            confidence=score,
+            tier=ConfidenceTier.from_score(score),
+            evidence=evidence,
+            resolved_at=resolved_at,
+        )
+
+    def store_resolved_track(self, resolved: ResolutionResult) -> None:
+        """Store a resolved track (artist, recording, platform_track, evidence)."""
+        import uuid
+
+        artist_id = str(uuid.uuid4())
+        self.execute(
+            "INSERT OR IGNORE INTO artists (id, name) VALUES (?, ?)",
+            (artist_id, resolved.artist),
+        )
+        # Get actual artist_id (may already exist)
+        row = self.execute(
+            "SELECT id FROM artists WHERE name = ?", (resolved.artist,)
+        ).fetchone()
+        if row:
+            artist_id = row[0]
+
+        recording_id = str(uuid.uuid4())
+        self.execute(
+            """INSERT OR IGNORE INTO recordings (id, title, artist_id, mb_recording_id)
+               VALUES (?, ?, ?, ?)""",
+            (recording_id, resolved.title, artist_id, resolved.mb_recording_id),
+        )
+        # Get actual recording_id
+        if resolved.mb_recording_id:
+            row = self.execute(
+                "SELECT id FROM recordings WHERE mb_recording_id = ?",
+                (resolved.mb_recording_id,),
+            ).fetchone()
+            if row:
+                recording_id = row[0]
+
+        pt_id = str(uuid.uuid4())
+        resolved_at_str = None
+        if resolved.resolved_at:
+            resolved_at_str = resolved.resolved_at.strftime("%Y-%m-%d %H:%M:%S")
+        self.execute(
+            """INSERT OR REPLACE INTO platform_tracks
+               (id, recording_id, platform, platform_track_id, created_at)
+               VALUES (?, ?, ?, ?, COALESCE(?, datetime('now')))""",
+            (pt_id, recording_id, resolved.platform, resolved.platform_id, resolved_at_str),
+        )
+
+        for ev in resolved.evidence:
+            ev_with_recording = Evidence(
+                id=ev.id,
+                recording_id=recording_id,
+                source=ev.source,
+                evidence_type=ev.evidence_type,
+                confidence=ev.confidence,
+                raw_data=ev.raw_data,
+                is_current=ev.is_current,
+                superseded_by=ev.superseded_by,
+                created_at=ev.created_at,
+            )
+            self.add_evidence(ev_with_recording)
+
+    def store_candidates(
+        self, platform: str, platform_id: str, candidates: list[RecordingCandidate]
+    ) -> None:
+        """Store unresolved candidates for future processing."""
+        import json
+        import uuid
+
+        candidate_data = json.dumps([
+            {
+                "title": c.title,
+                "artist": c.artist,
+                "mb_recording_id": c.mb_recording_id,
+                "duration_ms": c.duration_ms,
+                "score": c.score,
+            }
+            for c in candidates
+        ])
+
+        artist_query = candidates[0].artist if candidates else ""
+        title_query = candidates[0].title if candidates else ""
+
+        self.execute(
+            """INSERT OR REPLACE INTO resolution_candidates
+               (id, artist_query, title_query, tidal_track_id, status, candidate_data)
+               VALUES (?, ?, ?, ?, 'pending', ?)""",
+            (str(uuid.uuid4()), artist_query, title_query, platform_id, candidate_data),
+        )
+
