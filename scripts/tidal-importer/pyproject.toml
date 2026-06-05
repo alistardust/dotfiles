@@ -10,13 +10,15 @@ dependencies = [
     "pylast>=5.0",
     "anthropic>=0.40",
     "pyyaml>=6.0",
+    "python3-discogs-client>=2.7",
+    "rapidfuzz>=3.0",
 ]
 
 [project.scripts]
 tidal-importer = "tidal_importer.cli:main"
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0", "pytest-cov"]
+dev = ["pytest>=7.0", "pytest-cov", "vcrpy>=6.0"]
 
 [build-system]
 requires = ["setuptools>=68.0"]
