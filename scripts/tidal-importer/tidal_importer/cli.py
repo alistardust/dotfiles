@@ -115,6 +115,26 @@ def main(argv: list[str] | None = None) -> int:
         "--profile", default="default", help="Sequencing profile (if --sequence)"
     )
 
+    # resolve subcommand
+    resolve_parser = subparsers.add_parser(
+        "resolve", help="Resolve track identity via MusicBrainz/Discogs"
+    )
+    resolve_parser.add_argument(
+        "query", nargs="?", help="'Artist - Title' to resolve a single track"
+    )
+    resolve_parser.add_argument(
+        "--isrc", help="ISRC code to look up directly"
+    )
+    resolve_parser.add_argument(
+        "--duration", type=int, help="Track duration in ms (improves matching)"
+    )
+    resolve_parser.add_argument(
+        "--upgrade", action="store_true", help="Upgrade mode: only accept VERIFIED"
+    )
+    resolve_parser.add_argument(
+        "--db", type=Path, help="Path to identity DB (default: ~/.local/share/tidal-importer/tuneshift.db)"
+    )
+
     args = parser.parse_args(argv)
 
     if args.command == "login":
@@ -129,6 +149,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_auth(args)
     elif args.command == "atmos":
         return _cmd_atmos(args)
+    elif args.command == "resolve":
+        return _cmd_resolve(args)
     return 1
 
 
@@ -677,6 +699,73 @@ def _cmd_atmos(args) -> int:
             _cmd_sequence(seq_args)
 
     print("Done!")
+    return 0
+
+
+def _cmd_resolve(args) -> int:
+    """Resolve track identity via MusicBrainz/Discogs pipeline."""
+    from pathlib import Path as P
+
+    from tidal_importer.identity.db import IdentityDB
+    from tidal_importer.identity.models import TrackInput
+    from tidal_importer.identity.resolver import ResolverConfig, TrackResolver
+    from tidal_importer.identity.sources.musicbrainz import MusicBrainzSource
+
+    db_path = args.db or P.home() / ".local" / "share" / "tidal-importer" / "tuneshift.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    db = IdentityDB(str(db_path))
+    mb = MusicBrainzSource()
+
+    # Try loading Discogs
+    discogs = None
+    try:
+        from tidal_importer.identity.sources.discogs import DiscogsSource
+        discogs = DiscogsSource()
+    except Exception:
+        pass
+
+    config = ResolverConfig(upgrade_mode=args.upgrade)
+    resolver = TrackResolver(db=db, musicbrainz=mb, discogs=discogs, config=config)
+
+    if args.isrc:
+        track = TrackInput(
+            platform="cli",
+            platform_id=f"isrc-{args.isrc}",
+            title="",
+            artist="",
+            isrc=args.isrc,
+            duration_ms=args.duration,
+        )
+    elif args.query:
+        parts = args.query.split(" - ", 1)
+        if len(parts) == 2:
+            artist, title = parts
+        else:
+            artist, title = "", args.query
+        track = TrackInput(
+            platform="cli",
+            platform_id=f"query-{args.query[:20]}",
+            title=title.strip(),
+            artist=artist.strip(),
+            duration_ms=args.duration,
+        )
+    else:
+        print("Error: provide either a query ('Artist - Title') or --isrc", file=sys.stderr)
+        return 1
+
+    print(f"Resolving: {track.artist} - {track.title}" if track.artist else f"Resolving ISRC: {track.isrc}")
+    result = resolver.resolve(track)
+
+    if result:
+        print(f"  Resolved: {result.artist} - {result.title}")
+        print(f"  MusicBrainz ID: {result.mb_recording_id}")
+        print(f"  Confidence: {result.confidence:.2f} ({result.tier.value})")
+        print(f"  Evidence: {len(result.evidence)} source(s)")
+    else:
+        print("  No resolution found (below confidence threshold)")
+
+    db.close()
     return 0
 
 

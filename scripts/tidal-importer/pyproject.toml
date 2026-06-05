@@ -23,3 +23,9 @@ dev = ["pytest>=7.0", "pytest-cov", "vcrpy>=6.0"]
 [build-system]
 requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: live API tests (deselect with '-m not integration')",
+]
+addopts = "-m 'not integration'"

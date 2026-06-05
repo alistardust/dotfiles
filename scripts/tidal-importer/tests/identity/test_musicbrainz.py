@@ -16,14 +16,14 @@ class TestISRCLookup:
     @patch("tidal_importer.identity.sources.musicbrainz.musicbrainzngs.get_recordings_by_isrc")
     def test_single_isrc_match(self, mock_isrc):
         mock_isrc.return_value = {
-            "recording-list": [
+            "isrc": {"recording-list": [
                 {
                     "id": "abc123",
                     "title": "Test Song",
                     "length": "240000",
                     "artist-credit": [{"artist": {"name": "Test Artist"}}],
                 }
-            ]
+            ]}
         }
         result = self.source.lookup_isrc("USAB12345678")
         assert result is not None
@@ -36,7 +36,7 @@ class TestISRCLookup:
     @patch("tidal_importer.identity.sources.musicbrainz.musicbrainzngs.get_recordings_by_isrc")
     def test_multiple_isrc_disambiguated_by_duration(self, mock_isrc):
         mock_isrc.return_value = {
-            "recording-list": [
+            "isrc": {"recording-list": [
                 {
                     "id": "abc1",
                     "title": "Test Song",
@@ -49,7 +49,7 @@ class TestISRCLookup:
                     "length": "360000",
                     "artist-credit": [{"artist": {"name": "Artist"}}],
                 },
-            ]
+            ]}
         }
         result = self.source.lookup_isrc("USAB12345678", duration_ms=241000)
         assert result is not None
@@ -59,7 +59,7 @@ class TestISRCLookup:
 
     @patch("tidal_importer.identity.sources.musicbrainz.musicbrainzngs.get_recordings_by_isrc")
     def test_no_results_returns_none(self, mock_isrc):
-        mock_isrc.return_value = {"recording-list": []}
+        mock_isrc.return_value = {"isrc": {"recording-list": []}}
         result = self.source.lookup_isrc("USAB00000000")
         assert result is None
 

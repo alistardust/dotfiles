@@ -27,7 +27,7 @@ class MusicBrainzSource:
             logger.warning("MusicBrainz ISRC lookup failed for %s: %s", isrc, e)
             return None
 
-        recordings = result.get("recording-list", [])
+        recordings = result.get("isrc", {}).get("recording-list", [])
         if not recordings:
             return None
 
