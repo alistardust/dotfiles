@@ -15,6 +15,7 @@ from tuneshift.platforms.rate_limiter import RateLimiter
 
 _TOKEN_DIR = Path.home() / ".local" / "share" / "tuneshift"
 _TOKEN_FILE = _TOKEN_DIR / "tidal.json"
+_LEGACY_TOKEN_FILE = Path.home() / ".local" / "share" / "tidal-importer" / "session.json"
 
 
 def _retry(fn: Callable[[], Any], max_retries: int = 3) -> Any:
@@ -64,11 +65,16 @@ class TidalClient:
         return True
 
     def load_session(self) -> bool:
-        """Load a saved OAuth session from disk."""
-        validate_no_symlink(self._token_path)
-        if not self._token_path.exists():
-            return False
-        data = json.loads(self._token_path.read_text(encoding="utf-8"))
+        """Load a saved OAuth session from disk. Falls back to tidal-importer session."""
+        token_path = self._token_path
+        if not token_path.exists():
+            # Fall back to legacy tidal-importer session
+            if _LEGACY_TOKEN_FILE.exists():
+                token_path = _LEGACY_TOKEN_FILE
+            else:
+                return False
+        validate_no_symlink(token_path)
+        data = json.loads(token_path.read_text(encoding="utf-8"))
         expiry_time = _parse_expiry_time(data.get("expiry_time"))
         self._session = tidalapi.Session()
         return bool(

@@ -11,10 +11,18 @@ def handle_login(args, db) -> int:
         print(f"Unknown platform: {args.platform}", file=sys.stderr)
         return 1
 
+    # Check if already logged in
+    if client.load_session():
+        print(f"Already authenticated with {args.platform}.")
+        return 0
+
     print(f"Logging in to {args.platform}...")
-    if client.login():
+    url = client.login()
+    print(f"\nOpen this URL to authenticate:\n  {url}\n")
+    print("Waiting for authorization...")
+    if client.login_wait(timeout=300.0):
         print(f"Authenticated with {args.platform}.")
         return 0
     else:
-        print(f"Authentication failed for {args.platform}.", file=sys.stderr)
+        print(f"Authentication timed out for {args.platform}.", file=sys.stderr)
         return 1

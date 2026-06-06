@@ -1,4 +1,4 @@
-"""Remove command: remove a track from a playlist."""
+"""Remove command: remove a track from a playlist and sync to platforms."""
 import sys
 
 from tuneshift.db import Database
@@ -12,18 +12,21 @@ def handle_rm(args, db: Database) -> int:
         return 1
 
     target = args.target
+    tracks = db.get_playlist_tracks(playlist.id)
 
     # Try as position number first
     try:
         position = int(target)
-        db.remove_playlist_track_by_position(playlist.id, position)
-        print(f"Removed track at position {position} from \"{playlist.name}\"")
+        if position < 1 or position > len(tracks):
+            print(f"Position {position} out of range (1-{len(tracks)})", file=sys.stderr)
+            return 1
+        track = tracks[position - 1]
+        _remove_and_sync(db, playlist, track, position)
         return 0
     except ValueError:
         pass
 
     # Match by title
-    tracks = db.get_playlist_tracks(playlist.id)
     target_lower = target.lower()
     matches = [(i + 1, t) for i, t in enumerate(tracks) if target_lower in t.title.lower()]
 
@@ -33,8 +36,7 @@ def handle_rm(args, db: Database) -> int:
 
     if len(matches) == 1:
         pos, track = matches[0]
-        db.remove_playlist_track_by_position(playlist.id, pos)
-        print(f"Removed \"{track.title}\" (position {pos}) from \"{playlist.name}\"")
+        _remove_and_sync(db, playlist, track, pos)
         return 0
 
     # Multiple matches: show and ask
@@ -44,9 +46,47 @@ def handle_rm(args, db: Database) -> int:
     choice = input("Remove which position? ").strip()
     try:
         pos = int(choice)
-        db.remove_playlist_track_by_position(playlist.id, pos)
-        print(f"Removed track at position {pos}")
+        track = tracks[pos - 1]
+        _remove_and_sync(db, playlist, track, pos)
         return 0
-    except ValueError:
+    except (ValueError, IndexError):
         print("Cancelled.", file=sys.stderr)
         return 1
+
+
+def _remove_and_sync(db: Database, playlist, track, position: int) -> None:
+    """Remove from DB and sync removal to all linked platforms."""
+    from tuneshift.commands.ingest_cmd import _load_client
+
+    db.remove_playlist_track_by_position(playlist.id, position)
+    print(f"Removed \"{track.title} - {track.artist}\" (position {position}) from \"{playlist.name}\"")
+
+    # Sync removal to linked platforms
+    platforms = db.get_linked_platforms(playlist.id)
+    for platform_name in platforms:
+        client = _load_client(platform_name)
+        if not client or not client.load_session():
+            print(f"  {platform_name}: skipped (not logged in)")
+            continue
+
+        platform_playlist_id = db.get_platform_playlist_id(playlist.id, platform_name)
+        if not platform_playlist_id:
+            print(f"  {platform_name}: skipped (no linked playlist)")
+            continue
+
+        # Find the track on the platform by position and remove it
+        try:
+            platform_tracks = client.get_playlist_tracks(platform_playlist_id)
+            # Find by matching title (position may differ due to prior divergence)
+            target_lower = track.title.lower()
+            matches = [
+                i for i, pt in enumerate(platform_tracks)
+                if target_lower in pt.title.lower()
+            ]
+            if matches:
+                client.remove_tracks_by_positions(platform_playlist_id, matches)
+                print(f"  {platform_name}: removed")
+            else:
+                print(f"  {platform_name}: track not found on platform")
+        except Exception as exc:
+            print(f"  {platform_name}: sync failed ({exc})")

@@ -14,6 +14,7 @@ def validate_no_symlink(path: Path) -> None:
     resolved = path.resolve()
     expected_prefixes = (
         Path.home() / ".local" / "share" / "tuneshift",
+        Path.home() / ".local" / "share" / "tidal-importer",
         Path.home() / "dotfiles" / "tools" / "tuneshift",
     )
     if not any(str(resolved).startswith(str(p)) for p in expected_prefixes):
