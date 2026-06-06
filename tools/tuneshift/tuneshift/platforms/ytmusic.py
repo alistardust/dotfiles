@@ -208,14 +208,20 @@ class YTMusicClient:
 
     def add_tracks(self, playlist_id: str, track_ids: list[str]) -> int:
         """Add tracks (video IDs) to a YT Music playlist via Data API v3."""
+        added = 0
         for video_id in track_ids:
-            self._data_api("post", "playlistItems", params={"part": "snippet"}, json_body={
-                "snippet": {
-                    "playlistId": playlist_id,
-                    "resourceId": {"kind": "youtube#video", "videoId": video_id},
-                },
-            })
-        return len(track_ids)
+            try:
+                self._data_api("post", "playlistItems", params={"part": "snippet"}, json_body={
+                    "snippet": {
+                        "playlistId": playlist_id,
+                        "resourceId": {"kind": "youtube#video", "videoId": video_id},
+                    },
+                })
+                added += 1
+            except Exception:
+                # 409 = duplicate, 404 = video unavailable; skip and continue
+                continue
+        return added
 
     def remove_tracks_by_positions(self, playlist_id: str, positions: list[int]) -> int:
         """Remove playlist entries by zero-based positions via Data API v3."""
@@ -244,15 +250,21 @@ class YTMusicClient:
         """Clear the playlist and re-add tracks in order."""
         # Remove all existing items
         params: dict[str, Any] = {"part": "id", "playlistId": playlist_id, "maxResults": 50}
-        while True:
-            data = self._data_api("get", "playlistItems", params=params)
-            items = data.get("items", [])
-            if not items:
-                break
-            for item in items:
-                self._data_api("delete", "playlistItems", params={"id": item["id"]})
-            if not data.get("nextPageToken"):
-                break
+        try:
+            while True:
+                data = self._data_api("get", "playlistItems", params=params)
+                items = data.get("items", [])
+                if not items:
+                    break
+                for item in items:
+                    try:
+                        self._data_api("delete", "playlistItems", params={"id": item["id"]})
+                    except Exception:
+                        continue
+                if not data.get("nextPageToken"):
+                    break
+        except Exception:
+            pass  # Playlist might be empty or newly created
         # Add new tracks
         self.add_tracks(playlist_id, track_ids)
 

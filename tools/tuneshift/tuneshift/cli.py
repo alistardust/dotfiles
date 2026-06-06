@@ -36,6 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_sync.add_argument("platform", nargs="?", help="Target platform")
     p_sync.add_argument("--all", action="store_true", help="Sync all playlists")
     p_sync.add_argument("--reconcile", action="store_true", help="Force re-reconciliation")
+    p_sync.add_argument("--auto", action="store_true", help="Accept all best matches without prompting")
 
     # diff
     p_diff = sub.add_parser("diff", help="Show what would change on sync")
