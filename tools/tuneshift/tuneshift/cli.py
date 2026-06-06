@@ -70,6 +70,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_order.add_argument("playlist", help="Playlist name")
     p_order.add_argument("--arc", default="wave", help="Arc shape (default: wave)")
 
+    # resolve
+    p_resolve = sub.add_parser("resolve", help="Resolve track identity via MusicBrainz/Discogs")
+    p_resolve.add_argument("playlist", nargs="?", help="Playlist name to resolve")
+    p_resolve.add_argument("--track", nargs=2, metavar=("TITLE", "ARTIST"), help="Resolve single track")
+    p_resolve.add_argument("--all", action="store_true", help="Resolve all unresolved tracks")
+    p_resolve.add_argument("--upgrade", action="store_true", help="Re-resolve tracks below CONFIRMED")
+    p_resolve.add_argument("--force", action="store_true", help="Re-resolve all tracks (requires --upgrade)")
+    p_resolve.add_argument("--status", action="store_true", help="Show resolution statistics")
+    p_resolve.add_argument("--verbose", "-v", action="store_true", help="Show skipped tracks")
+
     # Shell completions via shtab
     try:
         import shtab
@@ -121,6 +131,10 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "order":
             from tuneshift.commands.order_cmd import handle_order
             return handle_order(args, db)
+        elif args.command == "resolve":
+            from tuneshift.commands.resolve import run_resolve
+            run_resolve(args, db)
+            return 0
         else:
             parser.print_help()
             return 1
