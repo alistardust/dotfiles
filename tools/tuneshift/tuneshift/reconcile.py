@@ -36,9 +36,24 @@ def reconcile_track(
 
     platform_name = client.platform_name  # type: ignore[attr-defined]
 
-    # Check cached mapping
     if not force:
         mapping = cached_mapping or db.get_platform_mapping(track_id, platform_name)
+
+        # Identity resolution shortcut: resolved tracks can reuse an existing mapping.
+        tier, _, _ = db.get_resolution_state(track_id)
+        if tier is not None and mapping is not None:
+            if mapping.status == "unavailable":
+                return ReconcileResult(confidence="not_found", from_cache=True)
+            return ReconcileResult(
+                platform_track_id=mapping.platform_track_id,
+                score=mapping.match_score or 100,
+                confidence="high",
+                is_divergent=mapping.is_divergent,
+                divergence_note=mapping.divergence_note,
+                from_cache=True,
+            )
+
+        # Check cached mapping
         if mapping and mapping.user_approved:
             if mapping.status == "unavailable":
                 return ReconcileResult(confidence="not_found", from_cache=True)
@@ -75,10 +90,7 @@ def reconcile_track(
     # Score each result
     scored: list[tuple[int, TrackResult]] = []
     for r in results:
-        s = score_match(
-            track.title, track.artist, track.album,
-            r.title, r.artist, r.album,
-        )
+        s = score_match(track, r)
         scored.append((s, r))
 
     scored.sort(key=lambda x: x[0], reverse=True)

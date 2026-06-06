@@ -42,14 +42,37 @@ def is_remaster(album: str) -> bool:
 
 
 def score_match(
-    source_title: str,
-    source_artist: str,
-    source_album: str | None,
-    result_title: str,
-    result_artist: str,
-    result_album: str,
+    source_title: str | object,
+    source_artist: str | object,
+    source_album: str | None = None,
+    result_title: str | None = None,
+    result_artist: str | None = None,
+    result_album: str | None = None,
 ) -> int:
     """Score a search result against source metadata. Returns 0-100."""
+    canonical = None
+    candidate = None
+    if result_title is None and result_artist is None and result_album is None:
+        canonical = source_title
+        candidate = source_artist
+        if not all(hasattr(obj, attr) for obj, attr in (
+            (canonical, "title"),
+            (canonical, "artist"),
+            (candidate, "title"),
+            (candidate, "artist"),
+            (candidate, "album"),
+        )):
+            raise TypeError("score_match requires either 6 fields or track-like objects")
+        source_title = canonical.title
+        source_artist = canonical.artist
+        source_album = canonical.album
+        result_title = candidate.title
+        result_artist = candidate.artist
+        result_album = candidate.album
+
+    if result_title is None or result_artist is None or result_album is None:
+        raise TypeError("score_match requires complete candidate metadata")
+
     score = 0
 
     norm_src_title = normalize_title(source_title)
@@ -84,7 +107,13 @@ def score_match(
             if ratio >= 0.75:
                 score += 10
 
-    return score
+    if canonical is not None and candidate is not None:
+        canonical_isrc = getattr(canonical, "isrc", None)
+        candidate_isrc = getattr(candidate, "isrc", None)
+        if canonical_isrc and candidate_isrc and canonical_isrc.upper() == candidate_isrc.upper():
+            score = min(100, score + 15)
+
+    return min(100, score)
 
 
 def classify_results(scores: list[int]) -> str:
