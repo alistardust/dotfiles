@@ -217,6 +217,28 @@ class TidalClient:
         if self._session is None or not self._session.check_login():
             raise RuntimeError("Not logged in. Run: tuneshift login tidal")
 
+    def get_track_metadata(self, platform_track_id: str) -> dict[str, Any] | None:
+        """Fetch audio metadata (BPM, key, duration) for a single track."""
+        self._ensure_session()
+
+        def _fetch() -> dict[str, Any] | None:
+            assert self._session is not None
+            track = self._session.track(int(platform_track_id))
+            meta: dict[str, Any] = {}
+            if track.bpm:
+                meta["tempo"] = float(track.bpm)
+            if track.duration:
+                meta["duration_seconds"] = int(track.duration)
+            if track.key:
+                meta["key"] = str(track.key)
+                if hasattr(track, "key_scale") and track.key_scale:
+                    meta["key_scale"] = str(track.key_scale)
+            if track.isrc:
+                meta["isrc"] = str(track.isrc)
+            return meta if meta else None
+
+        return self._call_with_retry(_fetch)
+
     def _call_with_retry(self, fn: Callable[[], Any]) -> Any:
         self._rate_limiter.wait()
         return _retry(fn)

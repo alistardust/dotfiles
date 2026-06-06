@@ -459,6 +459,14 @@ class Database:
             )
         self.conn.commit()
 
+    def clear_playlist_tracks(self, playlist_id: int) -> None:
+        """Remove all tracks from a playlist without deleting the playlist."""
+        self.conn.execute(
+            "DELETE FROM playlist_tracks WHERE playlist_id = ?",
+            (playlist_id,),
+        )
+        self.conn.commit()
+
     def get_playlist_tracks(self, playlist_id: int) -> list[Track]:
         """Get ordered tracks for a playlist."""
         rows = self.conn.execute(
@@ -585,6 +593,41 @@ class Database:
             themes=json.loads(row["themes"]) if row["themes"] else [],
             metadata=json.loads(row["metadata"]) if row["metadata"] else {},
         )
+
+    def update_track_metadata(self, track_id: int, meta: dict) -> None:
+        """Update a track's audio metadata fields from enrichment data."""
+        updates = []
+        params = []
+        if "tempo" in meta:
+            updates.append("tempo = ?")
+            params.append(meta["tempo"])
+        if "key" in meta:
+            updates.append("key = ?")
+            params.append(meta["key"])
+        if "duration_seconds" in meta and meta["duration_seconds"]:
+            updates.append("duration_seconds = ?")
+            params.append(meta["duration_seconds"])
+        if "isrc" in meta and meta["isrc"]:
+            updates.append("isrc = ?")
+            params.append(meta["isrc"])
+        # Store extra fields in metadata JSON
+        track = self.get_track(track_id)
+        if track:
+            existing_meta = track.metadata or {}
+            for k in ("key_scale", "energy", "valence"):
+                if k in meta:
+                    existing_meta[k] = meta[k]
+            if existing_meta != (track.metadata or {}):
+                updates.append("metadata = ?")
+                import json as _json
+                params.append(_json.dumps(existing_meta))
+        if updates:
+            params.append(track_id)
+            self.conn.execute(
+                f"UPDATE tracks SET {', '.join(updates)} WHERE id = ?",
+                params,
+            )
+            self.conn.commit()
 
     def close(self) -> None:
         """Close the database connection if it is open."""

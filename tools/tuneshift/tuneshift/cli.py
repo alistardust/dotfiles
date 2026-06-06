@@ -69,6 +69,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_order = sub.add_parser("order", help="Reorder playlist by energy arc")
     p_order.add_argument("playlist", help="Playlist name")
     p_order.add_argument("--arc", default="wave", help="Arc shape (default: wave)")
+    p_order.add_argument("--no-sync", action="store_true", help="Skip pushing to platforms")
 
     # resolve
     p_resolve = sub.add_parser("resolve", help="Resolve track identity via MusicBrainz/Discogs")
@@ -79,6 +80,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_resolve.add_argument("--force", action="store_true", help="Re-resolve all tracks (requires --upgrade)")
     p_resolve.add_argument("--status", action="store_true", help="Show resolution statistics")
     p_resolve.add_argument("--verbose", "-v", action="store_true", help="Show skipped tracks")
+
+    # import-text
+    p_import_text = sub.add_parser("import-text", help="Import playlist from a text file")
+    p_import_text.add_argument("file", help="Path to playlist text file")
+    p_import_text.add_argument("--name", help="Override playlist name")
+    p_import_text.add_argument("--force", action="store_true", help="Overwrite existing playlist")
+
+    # enrich
+    p_enrich = sub.add_parser("enrich", help="Fetch audio metadata (BPM, key) from platform")
+    p_enrich.add_argument("playlist", help="Playlist name")
+    p_enrich.add_argument("--platform", default="tidal", help="Source platform (default: tidal)")
 
     # Shell completions via shtab
     try:
@@ -135,6 +147,12 @@ def main(argv: list[str] | None = None) -> int:
             from tuneshift.commands.resolve import run_resolve
             run_resolve(args, db)
             return 0
+        elif args.command == "import-text":
+            from tuneshift.commands.import_text_cmd import handle_import_text
+            return handle_import_text(args, db)
+        elif args.command == "enrich":
+            from tuneshift.commands.enrich_cmd import handle_enrich
+            return handle_enrich(args, db)
         else:
             parser.print_help()
             return 1

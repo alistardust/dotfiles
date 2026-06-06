@@ -7,6 +7,7 @@ def ingest_from_platform(
     db: Database,
     client: object,
     playlist_id: str,
+    enrich: bool = True,
 ) -> tuple[str, int, int]:
     """Ingest a playlist from a platform into the canonical database.
 
@@ -37,6 +38,8 @@ def ingest_from_platform(
 
     # Process each track
     new_count = 0
+    track_ids_to_enrich: list[tuple[int, str]] = []
+
     for position, tr in enumerate(raw_tracks, start=1):
         # Find or create canonical track
         existing = db.find_track(tr.title, tr.artist, tr.album)
@@ -53,6 +56,7 @@ def ingest_from_platform(
             )
             track_id = db.add_track(new_track)
             new_count += 1
+            track_ids_to_enrich.append((track_id, tr.platform_id))
 
         # Add to playlist (skip if already there)
         db.add_track_to_playlist(playlist_db_id, track_id, position)
@@ -74,4 +78,26 @@ def ingest_from_platform(
     # Link platform playlist
     db.link_platform_playlist(playlist_db_id, platform_name, playlist_id)
 
+    # Enrich new tracks with audio metadata (BPM, key)
+    if enrich and track_ids_to_enrich and hasattr(client, "get_track_metadata"):
+        _enrich_tracks(db, client, track_ids_to_enrich)
+
     return name, len(raw_tracks), new_count
+
+
+def _enrich_tracks(db: Database, client: object, tracks: list[tuple[int, str]]) -> None:
+    """Fetch and store audio metadata (BPM, key) for new tracks."""
+    import sys
+
+    enriched = 0
+    for track_id, platform_track_id in tracks:
+        try:
+            meta = client.get_track_metadata(platform_track_id)  # type: ignore[attr-defined]
+            if meta:
+                db.update_track_metadata(track_id, meta)
+                enriched += 1
+        except Exception:
+            continue
+
+    if enriched:
+        print(f"  Enriched {enriched}/{len(tracks)} tracks with audio metadata", file=sys.stderr)
