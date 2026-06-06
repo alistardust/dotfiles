@@ -59,7 +59,7 @@ def _resolve_named_playlist(args, db, mb, discogs, rate_limiters) -> None:
         del index, total
         track = db.get_track(track_id)
         if track is not None:
-            _print_result(track, result, verbose=args.verbose)
+            _print_result(track, result, verbose=args.verbose, db=db)
 
     results = resolve_playlist(
         db,
@@ -104,7 +104,7 @@ def _resolve_single_track(args, db, mb, discogs, rate_limiters) -> None:
         discogs=discogs,
         rate_limiters=rate_limiters,
     )
-    _print_result(track, result, verbose=True)
+    _print_result(track, result, verbose=True, db=db)
 
 
 def _resolve_all(args, db, mb, discogs, rate_limiters) -> None:
@@ -123,7 +123,7 @@ def _resolve_all(args, db, mb, discogs, rate_limiters) -> None:
             discogs=discogs,
             rate_limiters=rate_limiters,
         )
-        _print_result(track, result, verbose=args.verbose)
+        _print_result(track, result, verbose=args.verbose, db=db)
 
     print(f"\nDone. Resolved {len(tracks)} tracks.")
 
@@ -153,14 +153,24 @@ def _show_status(args, db) -> None:
         print(f"  Unresolved tracks: {len(all_unresolved)}")
 
 
-def _print_result(track, result, verbose: bool = False) -> None:
+def _print_result(track, result, verbose: bool = False, db: "Database | None" = None) -> None:
     """Print a single resolution result."""
     if result.status == ResolutionStatus.SKIPPED and not verbose:
         return
-    tier = result.confidence_tier.value if result.confidence_tier else "FAILED"
+    if result.confidence_tier:
+        tier = result.confidence_tier.value
+    elif result.status == ResolutionStatus.SKIPPED and db is not None:
+        existing_tier, _, _ = db.get_resolution_state(result.track_id)
+        tier = existing_tier or "SKIPPED"
+    elif result.status == ResolutionStatus.SKIPPED:
+        tier = "SKIPPED"
+    else:
+        tier = "FAILED"
     suffix = ""
     if result.status == ResolutionStatus.UNCHANGED:
         suffix = " (unchanged)"
+    elif result.status == ResolutionStatus.SKIPPED:
+        suffix = " (cached)"
     elif result.status == ResolutionStatus.FAILED:
         suffix = f" ({result.error})" if result.error else ""
     print(f"  [{tier}]{suffix}  {track.title} - {track.artist}")

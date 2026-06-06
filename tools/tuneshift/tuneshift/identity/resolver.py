@@ -129,7 +129,10 @@ class TrackResolver:
             top = sorted(best_candidates, key=lambda c: c.score, reverse=True)[0]
             return self._finalize(track_id, top, all_evidence)
 
-        # Failed
+        # Failed to find a confident match this attempt.
+        # Check if there's an existing resolution we should preserve.
+        existing_tier, existing_score, _ = self._store.get_resolution_state(track_id)
+
         if all_evidence:
             self._store.store_failed_evidence(
                 track_id=track_id,
@@ -137,6 +140,14 @@ class TrackResolver:
             )
         else:
             self._store.store_failed_evidence(track_id=track_id, evidence=[])
+
+        if existing_tier is not None:
+            # Prior resolution still valid; report unchanged rather than failed
+            return ResolutionResult(
+                track_id=track_id,
+                status=ResolutionStatus.UNCHANGED,
+                confidence_tier=ConfidenceTier(existing_tier),
+            )
 
         return ResolutionResult(
             track_id=track_id,

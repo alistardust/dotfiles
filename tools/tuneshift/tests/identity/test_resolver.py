@@ -115,7 +115,9 @@ class TestResolverAdditionalCases:
             track=TrackInput(title="Heroes", artist="David Bowie", isrc="GBAYE7700012"),
         )
 
-        assert result.status == ResolutionStatus.FAILED
+        # Re-resolution failed but existing CONFIRMED preserved as UNCHANGED
+        assert result.status == ResolutionStatus.UNCHANGED
+        assert result.confidence_tier == ConfidenceTier.CONFIRMED
         mock_mb.lookup_isrc.assert_called_once_with("GBAYE7700012", duration_ms=None)
         mock_mb.search.assert_called_once_with("David Bowie", "Heroes", duration_ms=None)
 
@@ -131,7 +133,9 @@ class TestResolverAdditionalCases:
 
         result = resolver.resolve(track_id=1, track=TrackInput(title="Heroes", artist="David Bowie"))
 
-        assert result.status == ResolutionStatus.FAILED
+        # Upgrade attempt failed but existing CONFIRMED preserved as UNCHANGED
+        assert result.status == ResolutionStatus.UNCHANGED
+        assert result.confidence_tier == ConfidenceTier.CONFIRMED
         mock_mb.search.assert_called_once_with("David Bowie", "Heroes", duration_ms=None)
 
     def test_prefers_highest_scoring_candidate_from_search(self, mock_store, mock_mb):
