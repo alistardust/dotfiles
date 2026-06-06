@@ -154,18 +154,22 @@ class TrackResolver:
         if self._config.force:
             return None
 
-        if self._config.upgrade_mode:
-            tier_order = _TIER_ORDER.get(tier, 0)
-            if tier_order < _TIER_ORDER["CONFIRMED"]:
+        if resolved_at:
+            resolved_dt = datetime.fromisoformat(resolved_at)
+            if resolved_dt.tzinfo is None:
+                resolved_dt = resolved_dt.replace(tzinfo=timezone.utc)
+            age = datetime.now(timezone.utc) - resolved_dt
+            if age > timedelta(days=CACHE_FRESHNESS_DAYS):
                 return None
-            if resolved_at:
-                resolved_dt = datetime.fromisoformat(resolved_at)
-                if resolved_dt.tzinfo is None:
-                    resolved_dt = resolved_dt.replace(tzinfo=timezone.utc)
-                age = datetime.now(timezone.utc) - resolved_dt
-                if age > timedelta(days=CACHE_FRESHNESS_DAYS):
-                    return None
-            return ResolutionResult(track_id=track_id, status=ResolutionStatus.SKIPPED)
+
+        required_tier = "VERIFIED" if self._config.upgrade_mode else "CONFIRMED"
+        required_score = VERIFIED_THRESHOLD if self._config.upgrade_mode else CONFIRMED_THRESHOLD
+
+        if score is not None:
+            if score < required_score:
+                return None
+        elif _TIER_ORDER.get(tier, 0) < _TIER_ORDER[required_tier]:
+            return None
 
         return ResolutionResult(track_id=track_id, status=ResolutionStatus.SKIPPED)
 

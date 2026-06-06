@@ -1,6 +1,6 @@
 """Tests for Discogs identity source."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from tuneshift.identity.sources.discogs import DiscogsSource
 
@@ -40,10 +40,20 @@ class TestDiscogsSearch:
 
 
 class TestDiscogsCredentials:
-    @patch("tuneshift.identity.sources.discogs.Path")
-    def test_missing_credentials_raises(self, mock_path):
-        mock_path.return_value.exists.return_value = False
+    def test_missing_credentials_returns_empty_results(self, tmp_path):
+        source = DiscogsSource(credentials_path=tmp_path / "missing-token")
+
+        result = source.search("Artist", "Title")
+
+        assert result.recordings == []
+        assert result.evidence is None
+
+    def test_search_client_error_returns_empty_results(self):
         source = DiscogsSource.__new__(DiscogsSource)
-        source._credentials_path = mock_path.return_value
-        source._client = None
-        # Should not crash on init, client is lazy
+        source._client = MagicMock()
+        source._client.search.side_effect = RuntimeError("boom")
+
+        result = source.search("Artist", "Title")
+
+        assert result.recordings == []
+        assert result.evidence is None

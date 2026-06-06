@@ -1,6 +1,7 @@
 """Tests for the track identity resolver pipeline."""
 
-from unittest.mock import MagicMock
+from datetime import datetime, timedelta, timezone
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -99,6 +100,85 @@ class TestResolverFailure:
         result = resolver.resolve(track_id=1, track=track)
         assert result.status == ResolutionStatus.FAILED
         mock_store.store_failed_evidence.assert_called_once()
+
+
+class TestResolverAdditionalCases:
+    def test_stale_confirmed_cache_is_rechecked(self, mock_store, mock_mb):
+        stale_time = (datetime.now(timezone.utc) - timedelta(days=91)).isoformat()
+        mock_store.get_resolution_state.return_value = ("CONFIRMED", 0.85, stale_time)
+        mock_mb.lookup_isrc.return_value = None
+        mock_mb.search.return_value = SourceResult(recordings=[])
+        resolver = TrackResolver(store=mock_store, musicbrainz=mock_mb)
+
+        result = resolver.resolve(
+            track_id=1,
+            track=TrackInput(title="Heroes", artist="David Bowie", isrc="GBAYE7700012"),
+        )
+
+        assert result.status == ResolutionStatus.FAILED
+        mock_mb.lookup_isrc.assert_called_once_with("GBAYE7700012", duration_ms=None)
+        mock_mb.search.assert_called_once_with("David Bowie", "Heroes", duration_ms=None)
+
+    def test_upgrade_mode_rechecks_fresh_confirmed_cache(self, mock_store, mock_mb):
+        fresh_time = datetime.now(timezone.utc).isoformat()
+        mock_store.get_resolution_state.return_value = ("CONFIRMED", 0.85, fresh_time)
+        mock_mb.search.return_value = SourceResult(recordings=[])
+        resolver = TrackResolver(
+            store=mock_store,
+            musicbrainz=mock_mb,
+            config=ResolverConfig(upgrade_mode=True),
+        )
+
+        result = resolver.resolve(track_id=1, track=TrackInput(title="Heroes", artist="David Bowie"))
+
+        assert result.status == ResolutionStatus.FAILED
+        mock_mb.search.assert_called_once_with("David Bowie", "Heroes", duration_ms=None)
+
+    def test_prefers_highest_scoring_candidate_from_search(self, mock_store, mock_mb):
+        mock_mb.lookup_isrc.return_value = None
+        mock_mb.search.return_value = SourceResult(
+            recordings=[
+                RecordingCandidate(
+                    title="Heroes",
+                    artist="David Bowie",
+                    mb_recording_id="mb-lower",
+                    score=0.81,
+                ),
+                RecordingCandidate(
+                    title="Heroes",
+                    artist="David Bowie",
+                    mb_recording_id="mb-higher",
+                    score=0.96,
+                ),
+            ],
+            evidence=Evidence(source="musicbrainz", evidence_type="text_search", confidence=0.80),
+        )
+        resolver = TrackResolver(store=mock_store, musicbrainz=mock_mb)
+
+        result = resolver.resolve(track_id=1, track=TrackInput(title="Heroes", artist="David Bowie"))
+
+        assert result.status == ResolutionStatus.RESOLVED
+        assert result.mb_recording_id == "mb-higher"
+
+    def test_waits_for_rate_limiter_before_search(self, mock_store, mock_mb):
+        limiter = MagicMock()
+        limiter.acquire.return_value = False
+        limiter.wait_time.return_value = 0.25
+        mock_mb.search.return_value = SourceResult(recordings=[])
+        resolver = TrackResolver(
+            store=mock_store,
+            musicbrainz=mock_mb,
+            rate_limiters={"musicbrainz": limiter},
+        )
+
+        with patch("tuneshift.identity.resolver.time.sleep") as mock_sleep:
+            result = resolver.resolve(track_id=1, track=TrackInput(title="Heroes", artist="David Bowie"))
+
+        assert result.status == ResolutionStatus.FAILED
+        limiter.acquire.assert_called_once_with()
+        limiter.wait_time.assert_called_once_with()
+        mock_sleep.assert_called_once_with(0.25)
+        mock_mb.search.assert_called_once_with("David Bowie", "Heroes", duration_ms=None)
 
 
 class TestPublicAPI:

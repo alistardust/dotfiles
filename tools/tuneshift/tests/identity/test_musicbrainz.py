@@ -2,6 +2,8 @@
 
 from unittest.mock import patch
 
+import pytest
+
 from tuneshift.identity.sources.musicbrainz import MusicBrainzSource
 
 
@@ -73,3 +75,52 @@ class TestMusicBrainzSearch:
         source = MusicBrainzSource()
         result = source.search("Unknown", "Nonexistent")
         assert result.recordings == []
+
+    @patch("tuneshift.identity.sources.musicbrainz.musicbrainzngs")
+    def test_search_api_error_returns_empty_results(self, mock_mb):
+        mock_mb.search_recordings.side_effect = RuntimeError("timeout")
+        source = MusicBrainzSource()
+
+        result = source.search("Artist", "Title")
+
+        assert result.recordings == []
+        assert result.evidence is None
+
+
+class TestMusicBrainzAdditionalLookupISRC:
+    @patch("tuneshift.identity.sources.musicbrainz.musicbrainzngs")
+    def test_multiple_matches_are_filtered_by_duration(self, mock_mb):
+        mock_mb.get_recordings_by_isrc.return_value = {
+            "isrc": {
+                "recording-list": [
+                    {
+                        "id": "abc-short",
+                        "title": "Heroes",
+                        "artist-credit": [{"artist": {"name": "David Bowie"}}],
+                        "length": "372000",
+                    },
+                    {
+                        "id": "abc-live",
+                        "title": "Heroes (Live)",
+                        "artist-credit": [{"artist": {"name": "David Bowie"}}],
+                        "length": "420000",
+                    },
+                ]
+            }
+        }
+        source = MusicBrainzSource()
+
+        result = source.lookup_isrc("GBAYE7700012", duration_ms=372000)
+
+        assert result is not None
+        assert [candidate.mb_recording_id for candidate in result.recordings] == ["abc-short"]
+        assert result.evidence is not None
+        assert result.evidence.evidence_type == "isrc_lookup"
+        assert result.evidence.confidence == pytest.approx(0.90)
+
+    @patch("tuneshift.identity.sources.musicbrainz.musicbrainzngs")
+    def test_lookup_isrc_no_results_returns_none(self, mock_mb):
+        mock_mb.get_recordings_by_isrc.return_value = {"isrc": {"recording-list": []}}
+        source = MusicBrainzSource()
+
+        assert source.lookup_isrc("GBAYE0000000") is None
