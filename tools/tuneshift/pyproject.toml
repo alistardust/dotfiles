@@ -6,7 +6,7 @@ requires-python = ">=3.10"
 dependencies = [
     "tidalapi==0.8.11",
     "spotipy==2.24.0",
-    "ytmusicapi==1.8.2",
+    "ytmusicapi>=1.8.2",
     "anthropic==0.40.0",
     "musicbrainzngs==0.7.1",
     "python3-discogs-client>=2.7,<3.0",

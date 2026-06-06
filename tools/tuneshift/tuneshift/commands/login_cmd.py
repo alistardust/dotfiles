@@ -17,12 +17,24 @@ def handle_login(args, db) -> int:
         return 0
 
     print(f"Logging in to {args.platform}...")
-    url = client.login()
-    print(f"\nOpen this URL to authenticate:\n  {url}\n")
-    print("Waiting for authorization...")
-    if client.login_wait(timeout=300.0):
-        print(f"Authenticated with {args.platform}.")
-        return 0
+
+    # Tidal uses a two-step flow: login() returns URL, login_wait() polls
+    # YT Music uses a single-step flow: login() runs interactively and returns bool
+    if hasattr(client, "login_wait"):
+        url = client.login()
+        print(f"\nOpen this URL to authenticate:\n  {url}\n")
+        print("Waiting for authorization...")
+        if client.login_wait(timeout=300.0):
+            print(f"Authenticated with {args.platform}.")
+            return 0
+        else:
+            print(f"Authentication timed out for {args.platform}.", file=sys.stderr)
+            return 1
     else:
-        print(f"Authentication timed out for {args.platform}.", file=sys.stderr)
-        return 1
+        result = client.login()
+        if result:
+            print(f"Authenticated with {args.platform}.")
+            return 0
+        else:
+            print(f"Authentication failed for {args.platform}.", file=sys.stderr)
+            return 1
