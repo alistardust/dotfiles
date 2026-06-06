@@ -93,6 +93,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_enrich.add_argument("playlist", help="Playlist name")
     p_enrich.add_argument("--platform", default="tidal", help="Source platform (default: tidal)")
 
+    # export
+    p_export = sub.add_parser("export", help="Export playlist to file")
+    p_export.add_argument("playlist", help="Playlist name")
+    p_export.add_argument("-f", "--format", default="text",
+                          choices=["text", "csv", "json", "soundiiz", "tunemymusic"],
+                          help="Output format (default: text)")
+    p_export.add_argument("-o", "--output", default="-", help="Output file (default: stdout)")
+
     # Shell completions via shtab
     try:
         import shtab
@@ -154,6 +162,9 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "enrich":
             from tuneshift.commands.enrich_cmd import handle_enrich
             return handle_enrich(args, db)
+        elif args.command == "export":
+            from tuneshift.commands.export_cmd import handle_export
+            return handle_export(args, db)
         else:
             parser.print_help()
             return 1
