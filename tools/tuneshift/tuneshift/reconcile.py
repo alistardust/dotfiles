@@ -2,7 +2,7 @@
 from dataclasses import dataclass, field
 
 from tuneshift.db import Database
-from tuneshift.matching import normalize_title, normalize_artist, score_match, classify_results, is_remaster
+from tuneshift.matching import normalize_title, normalize_artist, score_match, score_match_with_version, classify_results, is_remaster
 from tuneshift.models import TrackResult, PlatformMapping
 
 
@@ -11,6 +11,9 @@ class ReconcileResult:
     """Result of reconciling a track against a platform."""
 
     platform_track_id: str = ""
+    platform_title: str = ""
+    platform_artist: str = ""
+    platform_album: str = ""
     score: int = 0
     confidence: str = "not_found"
     is_divergent: bool = False
@@ -74,6 +77,9 @@ def reconcile_track(
             div_note = f"ISRC match but album differs: {isrc_result.album}" if is_div else None
             return ReconcileResult(
                 platform_track_id=isrc_result.platform_id,
+                platform_title=isrc_result.title,
+                platform_artist=isrc_result.artist,
+                platform_album=isrc_result.album,
                 score=100,
                 confidence="high",
                 is_divergent=is_div,
@@ -87,10 +93,13 @@ def reconcile_track(
     if not results:
         return ReconcileResult(confidence="not_found")
 
-    # Score each result
+    # Score each result with version preference
     scored: list[tuple[int, TrackResult]] = []
     for r in results:
-        s = score_match(track, r)
+        s = score_match_with_version(
+            track.title, track.artist, track.album,
+            r.title, r.artist, r.album,
+        )
         scored.append((s, r))
 
     scored.sort(key=lambda x: x[0], reverse=True)
@@ -106,6 +115,9 @@ def reconcile_track(
 
     return ReconcileResult(
         platform_track_id=best_result.platform_id,
+        platform_title=best_result.title,
+        platform_artist=best_result.artist,
+        platform_album=best_result.album,
         score=best_score,
         confidence=confidence,
         is_divergent=is_div,

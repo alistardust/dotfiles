@@ -116,6 +116,92 @@ def score_match(
     return min(100, score)
 
 
+_LIVE_RE = re.compile(
+    r"\b(live|concert|in concert|unplugged|mtv unplugged|"
+    r"here and there|one night only|at the|at madison|"
+    r"17-11-70|11-17-70)\b",
+    re.IGNORECASE,
+)
+_REMIX_RE = re.compile(
+    r"\b(remix|remixed|mix(?:ed)?)\b", re.IGNORECASE
+)
+_REMASTER_RE = re.compile(
+    r"\b(remaster(?:ed)?)\b", re.IGNORECASE
+)
+_DELUXE_RE = re.compile(
+    r"\b(deluxe|expanded|anniversary|special edition|bonus track|"
+    r"celebration)\b",
+    re.IGNORECASE,
+)
+_COMPILATION_RE = re.compile(
+    r"\b(greatest hits|best of|essentials|collection|anthology|"
+    r"now that's what|various artists|soundtrack|love songs|"
+    r"to be continued|diamonds|the definitive|rocket man:\s|"
+    r"the very best)\b",
+    re.IGNORECASE,
+)
+_TRIBUTE_RE = re.compile(
+    r"\b(tribute|reimagin|covers?|revamp)\b", re.IGNORECASE
+)
+_ACOUSTIC_RE = re.compile(
+    r"\b(acoustic|stripped)\b", re.IGNORECASE
+)
+
+
+def version_penalty(title: str, album: str) -> int:
+    """Return a 0-30 penalty for undesirable track versions.
+
+    Penalties (cumulative, capped at 30):
+    - Live: 20
+    - Remix: 20
+    - Tribute/reimagining: 20
+    - Compilation/various artists: 15
+    - Remaster: 10
+    - Deluxe edition: 5
+    - Acoustic/stripped: 10
+    """
+    combined = f"{title} {album}"
+    penalty = 0
+
+    if _LIVE_RE.search(combined):
+        penalty += 20
+    if _REMIX_RE.search(combined):
+        penalty += 20
+    if _TRIBUTE_RE.search(combined):
+        penalty += 20
+    if _COMPILATION_RE.search(combined):
+        penalty += 15
+    if _ACOUSTIC_RE.search(combined):
+        penalty += 10
+    if _REMASTER_RE.search(combined):
+        penalty += 10
+    if _DELUXE_RE.search(combined):
+        penalty += 5
+
+    return min(30, penalty)
+
+
+def score_match_with_version(
+    source_title: str,
+    source_artist: str,
+    source_album: str | None,
+    result_title: str,
+    result_artist: str,
+    result_album: str,
+) -> int:
+    """Score a search result with version preference applied.
+
+    Combines similarity scoring from score_match with a penalty for
+    undesirable versions (live, remix, compilation, etc.).
+    """
+    base = score_match(
+        source_title, source_artist, source_album,
+        result_title, result_artist, result_album,
+    )
+    penalty = version_penalty(result_title, result_album)
+    return max(0, base - penalty)
+
+
 def classify_results(scores: list[int]) -> str:
     """Classify match confidence.
 

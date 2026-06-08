@@ -115,6 +115,9 @@ def _sync_one(db, playlist, platforms, args) -> int:
             db.upsert_platform_mapping(PlatformMapping(
                 track_id=track.id, platform=platform_name,
                 platform_track_id=result.platform_track_id,
+                platform_title=result.platform_title,
+                platform_artist=result.platform_artist,
+                platform_album=result.platform_album,
                 match_score=result.score,
                 is_divergent=result.is_divergent,
                 divergence_note=result.divergence_note,
