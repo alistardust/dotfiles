@@ -190,6 +190,14 @@ gate_triggered(gate_config):
       else:
         raw_results = run_parallel(active_reviewers, default_models)
 
+      # --- Early termination: CRITICAL finding shortcut ---
+      # After this tier's parallel batch returns, check for CRITICAL before
+      # proceeding to fix loop or next tier. Saves budget on remaining tiers.
+      critical_early = [f for r in raw_results if r.parseable
+                        for f in r.findings if f.severity == "CRITICAL"]
+      if critical_early:
+        return ESCALATED_BLOCKING(critical_early)
+
       # Build reviewer_results: {reviewer_name -> {status, findings[]}}
       # Normalize all non-parseable outcomes (ADAPTER_FAILED, TIMEOUT, EMPTY,
       # NOT_INSTALLED) to a single FAILED status before processing.
@@ -381,6 +389,32 @@ The pseudocode handles them uniformly:
      `skipped_optional` set). Log as advisory.
 
 ## Fix Application
+
+### Efficiency: incremental re-review after fixes
+
+After fixes are applied, do NOT re-run all reviewers on all files. Instead:
+
+1. Identify which files/chunks were modified by the fix
+2. Only re-run reviewers whose findings touched those files
+3. For unchanged files: carry forward previous review results (cached by content hash)
+4. Only the fix iteration itself costs budget; the scoped re-review is free
+
+```
+after_fix_applied(fixed_files, previous_results):
+  # previous_results: list of {reviewer, model, findings[], scope_files[]}
+  affected = [r for r in previous_results
+              if any(f.file in fixed_files for f in r.findings)]
+  # Re-run only affected reviewers, scoped to fixed files only
+  new_results = run_parallel(
+    [(r.reviewer, r.model, fixed_files) for r in affected]
+  )
+  # Merge: unchanged files keep cached results; fixed files use new results
+  for r in previous_results:
+    if r not in affected:
+      yield r  # unchanged, carry forward
+  for r in new_results:
+    yield r  # fresh analysis of fixed files
+```
 
 ### Model selection for fixes
 

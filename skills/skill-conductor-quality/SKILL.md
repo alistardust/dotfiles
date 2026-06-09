@@ -156,7 +156,12 @@ enforce_ratchet(current_metrics, baseline):
 ## Orchestration Protocol
 
 The quality layer wraps the test-gate and review-gate, adding severity remapping,
-ratchet checks, and exemption management:
+ratchet checks, and exemption management.
+
+**Efficiency: parallel gate dispatch.** Test-gate and review-gate are independent
+analyses. When both are needed (post-execution, mr), dispatch them in PARALLEL
+(background agents or parallel tool calls). Merge findings after both complete.
+Do not run them sequentially unless one depends on the other's output.
 
 ```
 quality_gate(config):
@@ -164,24 +169,21 @@ quality_gate(config):
 
   # --- Phase-appropriate gate dispatch ---
   if config.gate_phase == "post-execution":
-    # Run test gate first
-    test_result = invoke_test_gate(config)
-    test_findings = remap_all_blocking(test_result.findings)
-
-    # Then run review gate (MR-equivalent on changed code)
-    review_result = invoke_review_gate({
-      gate_id: "mr",
-      changeset_scope: config.changeset_scope,
-      complexity_tier: config.complexity_tier,
-      base_ref: config.base_ref,
-      head_ref: "HEAD"
-    })
-    review_findings = remap_all_blocking(review_result.findings)
-
-    all_findings = test_findings + review_findings
+    # Run test gate and review gate IN PARALLEL (independent analyses)
+    test_result, review_result = run_parallel(
+      invoke_test_gate(config),
+      invoke_review_gate({
+        gate_id: "mr",
+        changeset_scope: config.changeset_scope,
+        complexity_tier: config.complexity_tier,
+        base_ref: config.base_ref,
+        head_ref: "HEAD"
+      })
+    )
+    all_findings = remap_all_blocking(test_result.findings + review_result.findings)
 
   elif config.gate_phase in ("post-spec", "post-plan"):
-    # Specs/plans only need review gate
+    # Specs/plans only need review gate (no test gate)
     review_result = invoke_review_gate({
       gate_id: config.gate_phase,
       artifact_paths: config.changeset_scope,
@@ -190,15 +192,17 @@ quality_gate(config):
     all_findings = remap_all_blocking(review_result.findings)
 
   elif config.gate_phase == "mr":
-    # Full MR gate: test + review
-    test_result = invoke_test_gate(config)
-    review_result = invoke_review_gate({
-      gate_id: "mr",
-      changeset_scope: config.changeset_scope,
-      complexity_tier: config.complexity_tier,
-      base_ref: config.base_ref,
-      head_ref: config.head_ref
-    })
+    # Full MR gate: test + review IN PARALLEL
+    test_result, review_result = run_parallel(
+      invoke_test_gate(config),
+      invoke_review_gate({
+        gate_id: "mr",
+        changeset_scope: config.changeset_scope,
+        complexity_tier: config.complexity_tier,
+        base_ref: config.base_ref,
+        head_ref: config.head_ref
+      })
+    )
     all_findings = remap_all_blocking(test_result.findings + review_result.findings)
 
   # --- Ratchet check ---
