@@ -180,7 +180,7 @@ quality_gate(config):
         head_ref: "HEAD"
       })
     )
-    all_findings = remap_all_blocking(test_result.findings + review_result.findings)
+    all_findings = collect_gate_findings(test_result, review_result)
 
   elif config.gate_phase in ("post-spec", "post-plan"):
     # Specs/plans only need review gate (no test gate)
@@ -189,7 +189,7 @@ quality_gate(config):
       artifact_paths: config.changeset_scope,
       complexity_tier: config.complexity_tier
     })
-    all_findings = remap_all_blocking(review_result.findings)
+    all_findings = collect_gate_findings(review_result)
 
   elif config.gate_phase == "mr":
     # Full MR gate: test + review IN PARALLEL
@@ -203,7 +203,23 @@ quality_gate(config):
         head_ref: config.head_ref
       })
     )
-    all_findings = remap_all_blocking(test_result.findings + review_result.findings)
+    all_findings = collect_gate_findings(test_result, review_result)
+
+# --- Gate outcome merging ---
+# Handles heterogeneous outcomes (PASSED, ESCALATED_BLOCKING, ERROR)
+collect_gate_findings(*results):
+  findings = []
+  escalations = []
+  for result in results:
+    if result.status == "PASSED":
+      findings += remap_all_blocking(result.findings)
+    elif result.status == "ESCALATED_BLOCKING":
+      escalations += result.unresolved_findings
+    elif result.status == "ERROR":
+      escalations += [{severity: "CRITICAL", summary: "Gate failed: " + result.error}]
+  if escalations:
+    return remap_all_blocking(findings + escalations)
+  return remap_all_blocking(findings)
 
   # --- Ratchet check ---
   current_metrics = compute_current_metrics(config)

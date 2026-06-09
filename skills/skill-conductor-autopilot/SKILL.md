@@ -97,6 +97,17 @@ CREATE TABLE IF NOT EXISTS conductor_phase_log (
   started_at TEXT DEFAULT (datetime('now')),
   completed_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS routing_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_message_summary TEXT NOT NULL,
+  detected_layer TEXT NOT NULL,
+  confidence REAL NOT NULL,
+  routed_to TEXT NOT NULL,
+  overridden INTEGER DEFAULT 0,
+  corrected_to TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
+);
 ```
 
 ## Initialization

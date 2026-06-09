@@ -37,9 +37,9 @@ Gate depth scales with complexity and work type:
 
 | Tier | Dimensions evaluated | Auto-fix budget | Coverage required |
 |------|---------------------|----------------|-------------------|
-| **trivial** | Coverage only (spot check) | 0 (advisory only) | Line: 80%, Branch: 70% |
+| **trivial** | Gate returns PASSED (no evaluation) | 0 | N/A |
 | **moderate** | Coverage + Assertions + Boundaries | 2 iterations | Line: 85%, Branch: 75% |
-| **substantial** | All 5 dimensions | 4 iterations | Line: 90%, Branch: 80% |
+| **substantial** | All 5 dimensions | 5 iterations | Line: 90%, Branch: 80% |
 
 Work type modifiers:
 
@@ -218,7 +218,7 @@ test_gate_triggered(gate_config):
   iteration = 0
 
   loop:
-    if iteration > budget:
+    if iteration >= budget:
       return ESCALATED_BLOCKING(all_findings)
 
     # --- Evaluate each applicable dimension ---

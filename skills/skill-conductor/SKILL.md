@@ -38,9 +38,9 @@ These rules govern the entire skill-conductor system and all sub-skills:
    - moderate: single-tier review, budget=2, single ecosystem
    - substantial: full gate, both tiers, cross-ecosystem, budget=5
 
-6. **Cheapest correct model.** Use Haiku/mini for pattern matching, checklists,
-   mechanical fixes. Use Sonnet for reasoning. Use Opus only for genuine ambiguity
-   or creative decisions. Never use Opus for a task Haiku can handle correctly.
+6. **Cheapest correct model.** Use fast-tier models for pattern matching, checklists,
+   mechanical fixes. Use reasoning-tier for analysis. Use frontier only for genuine
+   ambiguity or creative decisions. Never use frontier for a task fast-tier handles.
 
 7. **Skip redundant phases.** If context is already established (SESSION has recent
    context work), skip the CONTEXT phase in autopilot. If a plan already exists

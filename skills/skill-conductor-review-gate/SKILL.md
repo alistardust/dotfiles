@@ -41,18 +41,31 @@ Gate behavior scales with complexity:
 
 ## Model Dispatch Table
 
-Each reviewer runs as a subagent. Use the cheapest model that produces reliable results:
+Each reviewer runs as a subagent. These tier assignments are **suggestions** based
+on typical capability requirements. Override when context warrants it (e.g., a
+particularly complex code-audit may benefit from a reasoning-tier model).
 
-| Reviewer | Default model | Cross-ecosystem alt | Rationale |
-|----------|--------------|--------------------:|-----------|
-| `cso` | `claude-sonnet-4.5` | `gpt-5.2` | Attack path reasoning |
-| `plan-eng-review` | `claude-sonnet-4.5` | `gpt-5.2` | Architecture analysis |
-| `plan-ceo-review` | `claude-opus-4.6` | `gpt-5.4` | Strategy/ambiguity |
-| `code-audit` | `claude-haiku-4.5` | `gpt-5.4-mini` | Pattern matching |
-| `a11y-review` | `claude-haiku-4.5` | `gpt-5.4-mini` | Checklist evaluation |
-| `plan-design-review` | `claude-sonnet-4.5` | `gpt-5.2` | Design judgment |
-| Fix agent (mechanical) | `claude-haiku-4.5` | `gpt-5.4-mini` | Simple edits |
-| Fix agent (judgment) | `claude-sonnet-4.5` | `gpt-5.2` | Restructuring |
+Do NOT hardcode model version strings; use capability tiers:
+
+| Tier | Capability | Typical use |
+|------|-----------|-------------|
+| **fast** | Pattern matching, checklists, mechanical edits | Code audit, a11y checks, formatting fixes |
+| **reasoning** | Architecture analysis, security reasoning, design judgment | CSO, eng review, design review, complex fixes |
+| **frontier** | Strategy, ambiguity resolution, creative decisions | CEO review, novel architecture |
+
+| Reviewer | Suggested tier | Cross-ecosystem | Rationale |
+|----------|---------------|-----------------|-----------|
+| `cso` | reasoning | Yes (substantial only) | Attack path reasoning |
+| `plan-eng-review` | reasoning | Yes (substantial only) | Architecture analysis |
+| `plan-ceo-review` | frontier | Yes (substantial only) | Strategy/ambiguity |
+| `code-audit` | fast | Yes (substantial only) | Pattern matching |
+| `a11y-review` | fast | Yes (substantial only) | Checklist evaluation |
+| `plan-design-review` | reasoning | Yes (substantial only) | Design judgment |
+| Fix agent (mechanical) | fast | No | Simple edits |
+| Fix agent (judgment) | reasoning | No | Restructuring |
+
+The agent runtime resolves tier names to actual model IDs. Upgrade or downgrade
+a reviewer's tier based on the specific content being reviewed.
 
 ### Cross-ecosystem dispatch
 
@@ -81,7 +94,7 @@ multi-reviewer output into collective intelligence:
 reviewer/model combinations.
 
 **Synthesis agent:**
-- Model: `claude-haiku-4.5` (cheap; the synthesis is structural, not creative)
+- Suggested tier: fast (the synthesis is structural, not creative)
 - Input: all raw findings (post-dedup) plus reviewer source metadata
 - Prompt pattern:
   ```
@@ -230,8 +243,8 @@ gate_triggered(gate_config):
       # --- Consensus synthesis (cross-ecosystem or 2+ reviewers with findings) ---
       if cross_eco or count_reviewers_with_findings(reviewer_results) >= 2:
         findings = consensus_synthesis(findings, reviewer_results)
-      # consensus_synthesis dispatches a cheap model (claude-haiku-4.5) with ALL
-      # raw findings as input. It produces a unified list that:
+      # consensus_synthesis dispatches a fast-tier model with ALL raw findings
+      # as input. It produces a unified list that:
       #   - identifies agreement (same area flagged by multiple reviewers = higher confidence)
       #   - resolves contradictions (conflicting advice on same unit)
       #   - surfaces emergent patterns (N symptoms of one root cause = escalate)
@@ -279,10 +292,11 @@ gate_triggered(gate_config):
   return PASSED
 ```
 
-**Budget semantics:** Budget counts fix iterations (not review passes). Each time
-fixes are applied, budget decrements by 1. The review pass that follows a fix does
-not cost budget; only the fix itself does. Each tier gets its own budget allocation
-(the same cap). Reviewer retries on adapter failure also cost one budget unit.
+**Budget semantics:** Budget is a shared pool covering BOTH fix iterations AND
+reviewer retries. Each fix application costs 1 unit. Each required-reviewer retry
+on adapter failure also costs 1 unit. The review pass that follows a fix does not
+cost budget. Each tier gets its own independent budget allocation (same cap).
+Plan accordingly: if 2 retries occur, budget=5 leaves 3 remaining fix iterations.
 
 ### Gate outcomes
 
@@ -419,11 +433,11 @@ after_fix_applied(fixed_files, previous_results):
 ### Model selection for fixes
 
 ```
-select_fix_model(findings):
+select_fix_tier(findings):
   if all findings are mechanical (typos, missing sections, formatting):
-    return "claude-haiku-4.5"  # cheap and fast
+    return "fast"  # pattern matching sufficient
   if any finding requires judgment (restructure, logic, architecture):
-    return "claude-sonnet-4.5"  # needs design sense
+    return "reasoning"  # needs design sense
 ```
 
 ### Ownership
