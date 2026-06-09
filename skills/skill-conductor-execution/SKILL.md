@@ -98,7 +98,31 @@ via the Context layer instead.
 | Complex coordinated work | subagent-driven-development |
 | Bug fix | systematic-debugging |
 | "Am I done?" | verification-before-completion |
-| "Ship it" | finishing-a-development-branch |
+| "Ship it" | verification-before-completion (then finishing-a-development-branch) |
+
+## Mandatory Verification Gate
+
+Verification is NOT optional. It is a required gate between execution and shipping:
+
+1. **Never skip:** Code changes cannot be committed, merged, or shipped without
+   running `verification-before-completion` first. This is non-negotiable.
+2. **Fail loudly:** If verification fails, invoke `systematic-debugging` to
+   diagnose, or escalate to the user. Do not proceed past a failed verification.
+3. **No direct path to ship:** You cannot transition from implementing/TDD/executing
+   directly to `finishing-a-development-branch`. Verification is always between them.
+
+```
+executing-plans / test-driven-development / subagent-driven-development / dispatching-parallel-agents
+    |
+    v (always, when work produces shippable code)
+verification-before-completion
+    |
+    v (pass only)
+finishing-a-development-branch
+```
+
+**Exception:** Debugging and review flows that do not produce shippable changes
+(e.g., investigation-only, requesting-code-review) do not require this gate.
 
 ## After Choosing
 

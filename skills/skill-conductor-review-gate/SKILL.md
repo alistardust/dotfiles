@@ -71,6 +71,41 @@ parallel passes often outperform one expensive sequential pass.
 
 When `complexity_tier` is `moderate`, use default model only (single ecosystem).
 
+### Consensus synthesis
+
+When cross-ecosystem dispatch is active OR two or more reviewers produce findings
+on the same tier, run a synthesis pass before classification. This transforms raw
+multi-reviewer output into collective intelligence:
+
+**When to run:** After deduplication, if findings originated from 2+ distinct
+reviewer/model combinations.
+
+**Synthesis agent:**
+- Model: `claude-haiku-4.5` (cheap; the synthesis is structural, not creative)
+- Input: all raw findings (post-dedup) plus reviewer source metadata
+- Prompt pattern:
+  ```
+  You are a review synthesis agent. Given findings from multiple reviewers/models,
+  produce a unified findings list. For each finding or group:
+  1. If 2+ reviewers flag the same area: mark confidence=high, keep highest severity
+  2. If reviewers contradict on the same unit: mark class=judgment, note both positions
+  3. If N findings across reviewers are symptoms of one root cause: consolidate into
+     one finding at the highest severity, reference the others as supporting evidence
+  4. If a finding is unique to one reviewer: keep as-is (single-source)
+  Emit findings in the standard YAML schema with an added `consensus` field:
+    consensus: "unanimous" | "majority" | "single-source" | "disputed"
+  ```
+- Output: replaces the raw merged findings for downstream classification
+
+**Consensus field effects:**
+- `unanimous`: finding severity cannot be downgraded by classification
+- `majority`: standard processing
+- `single-source`: standard processing
+- `disputed`: automatically classified as `judgment` (escalates to user)
+
+**Skip condition:** If all findings come from a single reviewer instance (single
+ecosystem, only one reviewer produced output), skip synthesis (no value added).
+
 ## Default Reviewer Matrix
 
 Tier 1 (blockers) must pass before Tier 2 (quality) runs.
@@ -184,6 +219,17 @@ gate_triggered(gate_config):
       # Merge and deduplicate all successful findings
       findings = deduplicate_by_fingerprint(flatten(r.findings for r in reviewer_results.values() if r.status != FAILED))
 
+      # --- Consensus synthesis (cross-ecosystem or 2+ reviewers with findings) ---
+      if cross_eco or count_reviewers_with_findings(reviewer_results) >= 2:
+        findings = consensus_synthesis(findings, reviewer_results)
+      # consensus_synthesis dispatches a cheap model (claude-haiku-4.5) with ALL
+      # raw findings as input. It produces a unified list that:
+      #   - identifies agreement (same area flagged by multiple reviewers = higher confidence)
+      #   - resolves contradictions (conflicting advice on same unit)
+      #   - surfaces emergent patterns (N symptoms of one root cause = escalate)
+      #   - adjusts severity based on cross-reviewer agreement strength
+      # Output replaces the raw merged findings for classification.
+
       # Classify each blocking finding (gate-internal, see Finding classification rules)
       findings = classify_findings(findings, gate_config)
 
@@ -269,9 +315,13 @@ findings:
     blocking: true
 ```
 
-Severity-to-blocking mapping:
+Severity-to-blocking mapping (review-gate default):
 - CRITICAL / HIGH: `blocking: true`
 - MEDIUM / LOW: `blocking: false`
+
+**Note:** When invoked through `skill-conductor-quality` (the standard path),
+the quality layer overrides this mapping: ALL severities become blocking. The
+mapping above applies only when the review gate is invoked standalone (rare).
 
 A tier passes when zero blocking findings remain.
 

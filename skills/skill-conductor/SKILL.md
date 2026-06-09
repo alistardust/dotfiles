@@ -181,10 +181,12 @@ If invoked BY a sub-skill or routing skill, do NOT re-invoke the caller. Route a
 | devops-rollout-plan | Deployment planning | `claude-sonnet-4.5` |
 | conventional-commit | Commit message generation | `claude-haiku-4.5` |
 
-### Review Gate (invoke `skill-conductor-review-gate` at transitions)
+### Quality Gate (invoke `skill-conductor-quality` at transitions)
 
 | Skill | Purpose | Model |
 |-------|---------|-------|
+| skill-conductor-quality | Zero-debt enforcement wrapper; dispatches test-gate and review-gate | Per-gate (see quality skill) |
+| skill-conductor-test-gate | Test quality validation (coverage, assertions, boundaries, independence, regression) | `claude-sonnet-4.5` |
 | skill-conductor-review-gate | Recursive multi-agent review at transitions | Per-reviewer (see gate skill) |
 
 ## After Routing
@@ -192,30 +194,37 @@ If invoked BY a sub-skill or routing skill, do NOT re-invoke the caller. Route a
 1. State which layer you detected and why (one sentence)
 2. Pass `COMPLEXITY_TIER` to the sub-skill
 3. Invoke the sub-skill
-4. **Review gate check (post-artifact):** Once the sub-skill produces an artifact
-   (spec, plan, or MR), check if a gate applies AND `SKIP_GATES` is not set:
-   - **trivial tier:** Skip gates entirely (log "Gate skipped: trivial change")
-   - **moderate tier:** Run gates with `budget=2`, single-tier only
-   - **substantial tier:** Full gate protocol (both tiers, full budget)
+4. **Quality gate check (post-artifact):** Once the sub-skill produces an artifact
+   (spec, plan, code, or MR), check if a gate applies AND `SKIP_GATES` is not set:
+   - **trivial tier:** Run quality gate in lightweight mode (findings presented
+     inline, no auto-fix loop, but ALL findings still block)
+   - **moderate tier:** Run quality gate with `budget=2`, single-tier review
+   - **substantial tier:** Full quality gate (test-gate + review-gate, both tiers,
+     full budget, cross-ecosystem)
 
-   Invoke `skill-conductor-review-gate` as a blocking call. Pass inputs per the
-   gate trigger mapping table below (different inputs for MR vs spec/plan gates).
+   Invoke `skill-conductor-quality` as a blocking call. Pass inputs per the
+   gate trigger mapping table below. The quality layer dispatches to test-gate
+   and review-gate internally, remaps all severities to blocking, and enforces
+   the ratchet.
+
    Proceed if gate returns `PASSED` or `OVERRIDDEN`. If `ESCALATED_BLOCKING`
    (user has not yet resolved or skipped), halt and present findings.
 
-   Example (spec): "Review gate requested. gate_id: post-spec. artifact_paths:
-   [docs/superpowers/specs/auth-system.md]. complexity_tier: substantial. overrides: none."
-   Example (MR): "Review gate requested. gate_id: mr. changeset_scope: [src/auth.ts, ...].
-   base_ref: main. head_ref: feature/auth. complexity_tier: substantial. overrides: none."
-5. If `SKIP_GATES` is set, log "Review gate skipped by user request" and proceed.
+   Example (post-execution): "Quality gate requested. gate_phase: post-execution.
+   changeset_scope: [src/auth.py, tests/test_auth.py]. complexity_tier: substantial.
+   work_type: feature. base_ref: main."
+   Example (spec): "Quality gate requested. gate_phase: post-spec.
+   changeset_scope: [docs/superpowers/specs/auth-system.md]. complexity_tier: substantial."
+5. If `SKIP_GATES` is set, log "Quality gate skipped by user request" and proceed.
 
 ### Gate trigger mapping
 
-| Transition | Gate | Inputs |
-|-----------|------|--------|
-| Spec/design doc produced | post-spec | `gate_id`, `artifact_paths`, `complexity_tier` |
-| Plan produced | post-plan | `gate_id`, `artifact_paths`, `complexity_tier` |
-| MR/PR opened | mr | `gate_id`, `changeset_scope`, `base_ref`, `head_ref`, `complexity_tier` |
+| Transition | `gate_phase` | Inputs |
+|-----------|-------------|--------|
+| Spec/design doc produced | `post-spec` | `changeset_scope` (artifact paths), `complexity_tier` |
+| Plan produced | `post-plan` | `changeset_scope` (artifact paths), `complexity_tier` |
+| Execution complete | `post-execution` | `changeset_scope`, `complexity_tier`, `work_type`, `base_ref` |
+| MR/PR opened | `mr` | `changeset_scope`, `complexity_tier`, `base_ref`, `head_ref` |
 
 ### Artifact detection
 
