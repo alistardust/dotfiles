@@ -41,20 +41,26 @@ def handle_order(args, db: Database) -> int:
 
     # Push reordered playlist to all linked platforms
     if not getattr(args, "no_sync", False):
-        _push_order_to_platforms(db, playlist)
+        had_failures = _push_order_to_platforms(db, playlist)
+        if had_failures:
+            return 1
 
     return 0
 
 
-def _push_order_to_platforms(db: Database, playlist) -> None:
-    """Push the current DB track order to all linked platforms."""
+def _push_order_to_platforms(db: Database, playlist) -> bool:
+    """Push the current DB track order to all linked platforms.
+
+    Returns True if any platform push failed.
+    """
     from tuneshift.commands.ingest_cmd import _load_client
 
     platforms = db.get_linked_platforms(playlist.id)
     if not platforms:
-        return
+        return False
 
     tracks = db.get_playlist_tracks(playlist.id)
+    failures = False
 
     for platform_name in platforms:
         client = _load_client(platform_name)
@@ -80,6 +86,9 @@ def _push_order_to_platforms(db: Database, playlist) -> None:
                 client.replace_playlist_tracks(platform_playlist_id, platform_ids)
                 print(f"  {platform_name}: synced ({len(platform_ids)} tracks)")
             except Exception as exc:
-                print(f"  {platform_name}: sync failed ({exc})")
+                print(f"  {platform_name}: sync failed ({exc})", file=sys.stderr)
+                failures = True
         else:
             print(f"  {platform_name}: no track mappings found (run tuneshift sync first)")
+
+    return failures

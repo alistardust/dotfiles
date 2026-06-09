@@ -34,19 +34,23 @@ def handle_add(args, db: Database) -> int:
     print(f"Added \"{args.title}\" by {args.artist} to \"{args.playlist}\" at position {position}")
 
     # Sync to linked platforms
-    _sync_add_to_platforms(db, playlist_id, track_id, args.title, args.artist)
-    return 0
+    had_failures = _sync_add_to_platforms(db, playlist_id, track_id, args.title, args.artist)
+    return 1 if had_failures else 0
 
 
-def _sync_add_to_platforms(db: Database, playlist_id: int, track_id: int, title: str, artist: str) -> None:
-    """Reconcile and add the track on all linked platforms."""
+def _sync_add_to_platforms(db: Database, playlist_id: int, track_id: int, title: str, artist: str) -> bool:
+    """Reconcile and add the track on all linked platforms.
+
+    Returns True if any platform operation failed.
+    """
     from tuneshift.commands.ingest_cmd import _load_client
     from tuneshift.reconcile import reconcile_track
 
     platforms = db.get_linked_platforms(playlist_id)
     if not platforms:
-        return
+        return False
 
+    failures = False
     for platform_name in platforms:
         client = _load_client(platform_name)
         if not client or not client.load_session():
@@ -65,6 +69,9 @@ def _sync_add_to_platforms(db: Database, playlist_id: int, track_id: int, title:
                 client.add_tracks(platform_playlist_id, [result.platform_track_id])
                 print(f"  {platform_name}: added")
             except Exception as exc:
-                print(f"  {platform_name}: failed ({exc})")
+                print(f"  {platform_name}: failed ({exc})", file=sys.stderr)
+                failures = True
         else:
             print(f"  {platform_name}: could not find \"{title}\" by {artist}")
+
+    return failures

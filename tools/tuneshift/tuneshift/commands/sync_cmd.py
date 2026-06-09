@@ -11,11 +11,14 @@ def handle_sync(args, db: Database) -> int:
     from tuneshift.commands.ingest_cmd import _load_client
 
     if args.all:
+        any_failures = False
         for pl in db.list_playlists():
             platforms = db.get_linked_platforms(pl.id)
             if platforms:
-                _sync_one(db, pl, platforms, args)
-        return 0
+                rc = _sync_one(db, pl, platforms, args)
+                if rc != 0:
+                    any_failures = True
+        return 1 if any_failures else 0
 
     if not args.playlist:
         print("Specify a playlist name or use --all.", file=sys.stderr)
@@ -45,6 +48,8 @@ def _sync_one(db, playlist, platforms, args) -> int:
     if not tracks:
         print(f"Playlist \"{playlist.name}\" is empty.")
         return 0
+
+    push_failed = False
 
     for platform_name in platforms:
         client = _load_client(platform_name)
@@ -144,8 +149,12 @@ def _sync_one(db, playlist, platforms, args) -> int:
                 db.link_platform_playlist(playlist.id, platform_name, platform_playlist_id)
 
         if canonical_platform_ids:
-            client.replace_playlist_tracks(platform_playlist_id, canonical_platform_ids)
-            print(f"  Pushed {len(canonical_platform_ids)} tracks to {platform_name}.")
+            try:
+                client.replace_playlist_tracks(platform_playlist_id, canonical_platform_ids)
+                print(f"  Pushed {len(canonical_platform_ids)} tracks to {platform_name}.")
+            except Exception as exc:
+                print(f"  Push to {platform_name} failed: {exc}", file=sys.stderr)
+                push_failed = True
         else:
             print(f"  No tracks to push to {platform_name}.")
 
@@ -181,6 +190,7 @@ def _sync_one(db, playlist, platforms, args) -> int:
                     client.replace_playlist_tracks(platform_playlist_id, platform_ids)
                     print(f"  {platform_name}: synced ({len(platform_ids)} tracks)")
                 except Exception as exc:
-                    print(f"  {platform_name}: reorder push failed ({exc})")
+                    print(f"  {platform_name}: reorder push failed ({exc})", file=sys.stderr)
+                    push_failed = True
 
-    return 0
+    return 1 if push_failed else 0

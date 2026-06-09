@@ -99,7 +99,8 @@ class YTMusicClient:
                 return False
             # Unauthenticated YTMusic instance for search only
             self._yt = YTMusic()
-        except Exception:
+        except (json.JSONDecodeError, KeyError, OSError) as exc:
+            print(f"  ytmusic: session load failed ({type(exc).__name__}: {exc})", file=__import__('sys').stderr)
             return False
         self._fix_token_perms()
         return True
@@ -208,6 +209,8 @@ class YTMusicClient:
 
     def add_tracks(self, playlist_id: str, track_ids: list[str]) -> int:
         """Add tracks (video IDs) to a YT Music playlist via Data API v3."""
+        import requests as req
+
         added = 0
         for video_id in track_ids:
             try:
@@ -218,9 +221,12 @@ class YTMusicClient:
                     },
                 })
                 added += 1
-            except Exception:
-                # 409 = duplicate, 404 = video unavailable; skip and continue
-                continue
+            except req.HTTPError as exc:
+                status = exc.response.status_code if exc.response is not None else 0
+                if status in (404, 409):
+                    # 409 = duplicate, 404 = video unavailable; skip
+                    continue
+                raise
         return added
 
     def remove_tracks_by_positions(self, playlist_id: str, positions: list[int]) -> int:
@@ -248,6 +254,8 @@ class YTMusicClient:
 
     def replace_playlist_tracks(self, playlist_id: str, track_ids: list[str]) -> None:
         """Clear the playlist and re-add tracks in order."""
+        import requests as req
+
         # Remove all existing items
         params: dict[str, Any] = {"part": "id", "playlistId": playlist_id, "maxResults": 50}
         try:
@@ -259,12 +267,18 @@ class YTMusicClient:
                 for item in items:
                     try:
                         self._data_api("delete", "playlistItems", params={"id": item["id"]})
-                    except Exception:
-                        continue
+                    except req.HTTPError as exc:
+                        status = exc.response.status_code if exc.response is not None else 0
+                        if status == 404:
+                            continue
+                        raise
                 if not data.get("nextPageToken"):
                     break
-        except Exception:
-            pass  # Playlist might be empty or newly created
+        except req.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else 0
+            if status != 404:
+                raise
+            # 404 = playlist empty or newly created; proceed to add
         # Add new tracks
         self.add_tracks(playlist_id, track_ids)
 

@@ -1,9 +1,10 @@
 """Command-line entry point for tuneshift."""
 
 import argparse
+import os
 import sys
 
-from tuneshift import __version__
+from tuneshift import TuneShiftError, __version__
 from tuneshift.db import Database
 
 
@@ -183,6 +184,19 @@ def main(argv: list[str] | None = None) -> int:
         else:
             parser.print_help()
             return 1
+    except KeyboardInterrupt:
+        print("\nInterrupted.", file=sys.stderr)
+        return 130
+    except TuneShiftError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"Unexpected error: {type(exc).__name__}: {exc}", file=sys.stderr)
+        print("Run with TUNESHIFT_DEBUG=1 for full traceback.", file=sys.stderr)
+        if os.environ.get("TUNESHIFT_DEBUG"):
+            import traceback
+            traceback.print_exc()
+        return 2
     finally:
         db.close()
 
