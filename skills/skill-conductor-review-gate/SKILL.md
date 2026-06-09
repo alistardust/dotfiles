@@ -449,6 +449,12 @@ select_fix_tier(findings):
 
 ### Safety controls
 
+**Trust boundary:** All reviewers in this system are internal skills running
+controlled prompts. Findings come from our own subagents, not external/untrusted
+sources. The fix agent trusts findings content as legitimate input. If external
+reviewer integrations are added in the future, add adversarial input scanning
+before passing findings to fix agents.
+
 **Scope limits:**
 - post-spec/post-plan: edits restricted to `artifact_paths` only
 - mr: edits restricted to `changeset_scope`; out-of-scope fixes become advisory

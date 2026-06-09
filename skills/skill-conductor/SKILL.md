@@ -21,9 +21,10 @@ These rules govern the entire skill-conductor system and all sub-skills:
    Simple routing does not need the autopilot skill. A spec review does not need the
    test gate. Only the quality layer invokes test-gate and review-gate.
 
-2. **Parallel over sequential.** When two operations are independent, run them in
-   parallel (e.g., test-gate coverage check and assertion analysis; cross-ecosystem
-   review dispatch). Never serialize what can be parallelized.
+2. **Parallel over sequential.** When two operations are independent and do not
+   mutate shared state, run them in parallel (e.g., cross-ecosystem review dispatch,
+   multiple reviewer agents within a tier). Exception: test-gate and review-gate run
+   sequentially (test first) because review-gate's fix agent may modify source files.
 
 3. **Incremental over full.** After a fix iteration, only re-review the changed
    chunks/files. Do not re-run the entire review on unchanged code. Cache results

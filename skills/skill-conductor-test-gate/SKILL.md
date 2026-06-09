@@ -133,6 +133,11 @@ For each public function/method in changed source files, check if test suite cov
 | Permission/auth | Unauthorized, expired token (if applicable) | substantial |
 
 **Evaluation method:**
+
+Note: this pseudocode describes INTENT, not literal implementation. AI agents should
+approximate using available tools (grep, code reading, test name analysis). Formal
+AST parsing is not required; heuristic evaluation is acceptable and expected.
+
 ```
 for each changed_source_file:
   functions = extract_public_functions(file)

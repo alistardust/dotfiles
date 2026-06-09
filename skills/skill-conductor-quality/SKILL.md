@@ -158,10 +158,10 @@ enforce_ratchet(current_metrics, baseline):
 The quality layer wraps the test-gate and review-gate, adding severity remapping,
 ratchet checks, and exemption management.
 
-**Efficiency: parallel gate dispatch.** Test-gate and review-gate are independent
-analyses. When both are needed (post-execution, mr), dispatch them in PARALLEL
-(background agents or parallel tool calls). Merge findings after both complete.
-Do not run them sequentially unless one depends on the other's output.
+**Execution order: test-gate first, then review-gate (sequential).** The review-gate's
+fix agent may modify source files. Running test-gate first establishes a clean baseline
+before any fixes are applied. This avoids race conditions where test-gate analyzes
+files that review-gate's fix agent is simultaneously modifying.
 
 ```
 quality_gate(config):
@@ -169,21 +169,20 @@ quality_gate(config):
 
   # --- Phase-appropriate gate dispatch ---
   if config.gate_phase == "post-execution":
-    # Run test gate and review gate IN PARALLEL (independent analyses)
-    test_result, review_result = run_parallel(
-      invoke_test_gate(config),
-      invoke_review_gate({
-        gate_id: "mr",
-        changeset_scope: config.changeset_scope,
-        complexity_tier: config.complexity_tier,
-        base_ref: config.base_ref,
-        head_ref: "HEAD"
-      })
-    )
+    # Run test gate FIRST (establishes baseline before review fixes)
+    test_result = invoke_test_gate(config)
+    # Then run review gate (may apply fixes to source files)
+    review_result = invoke_review_gate({
+      gate_id: "mr",
+      changeset_scope: config.changeset_scope,
+      complexity_tier: config.complexity_tier,
+      base_ref: config.base_ref,
+      head_ref: "HEAD"
+    })
     all_findings = collect_gate_findings(test_result, review_result)
 
   elif config.gate_phase in ("post-spec", "post-plan"):
-    # Specs/plans only need review gate (no test gate)
+    # Specs/plans only need review gate (no test gate, no file mutations)
     review_result = invoke_review_gate({
       gate_id: config.gate_phase,
       artifact_paths: config.changeset_scope,
@@ -192,17 +191,15 @@ quality_gate(config):
     all_findings = collect_gate_findings(review_result)
 
   elif config.gate_phase == "mr":
-    # Full MR gate: test + review IN PARALLEL
-    test_result, review_result = run_parallel(
-      invoke_test_gate(config),
-      invoke_review_gate({
-        gate_id: "mr",
-        changeset_scope: config.changeset_scope,
-        complexity_tier: config.complexity_tier,
-        base_ref: config.base_ref,
-        head_ref: config.head_ref
-      })
-    )
+    # Full MR gate: test first, then review (sequential for safety)
+    test_result = invoke_test_gate(config)
+    review_result = invoke_review_gate({
+      gate_id: "mr",
+      changeset_scope: config.changeset_scope,
+      complexity_tier: config.complexity_tier,
+      base_ref: config.base_ref,
+      head_ref: config.head_ref
+    })
     all_findings = collect_gate_findings(test_result, review_result)
 
 # --- Gate outcome merging ---
