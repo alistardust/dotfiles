@@ -8,7 +8,7 @@ from pathlib import Path
 
 from tuneshift.models import PlatformMapping, Playlist, Track
 
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS tracks (
@@ -58,6 +58,8 @@ CREATE TABLE IF NOT EXISTS playlists (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,
     description TEXT,
+    auto_reorder INTEGER NOT NULL DEFAULT 0,
+    reorder_arc TEXT NOT NULL DEFAULT 'wave',
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -181,7 +183,7 @@ class Database:
         self._migrate_schema()
 
     def _migrate_schema(self) -> None:
-        """Migrate database from v1 to v2 if needed."""
+        """Migrate database schema to latest version."""
         row = self.conn.execute(
             "SELECT value FROM schema_meta WHERE key = 'version'"
         ).fetchone()
@@ -192,38 +194,53 @@ class Database:
             return
 
         with self.conn:
-            cols = {r[1] for r in self.conn.execute("PRAGMA table_info(tracks)").fetchall()}
-            track_identity_columns = {
-                "mb_recording_id": "TEXT",
-                "mb_release_group_id": "TEXT",
-                "confidence_tier": "TEXT",
-                "confidence_score": "REAL",
-                "resolved_at": "TEXT",
-            }
-            for column_name, column_type in track_identity_columns.items():
-                if column_name not in cols:
+            if current_version < 2:
+                cols = {r[1] for r in self.conn.execute("PRAGMA table_info(tracks)").fetchall()}
+                track_identity_columns = {
+                    "mb_recording_id": "TEXT",
+                    "mb_release_group_id": "TEXT",
+                    "confidence_tier": "TEXT",
+                    "confidence_score": "REAL",
+                    "resolved_at": "TEXT",
+                }
+                for column_name, column_type in track_identity_columns.items():
+                    if column_name not in cols:
+                        self.conn.execute(
+                            f"ALTER TABLE tracks ADD COLUMN {column_name} {column_type}"
+                        )
+
+                self.conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS evidence (
+                        id INTEGER PRIMARY KEY,
+                        track_id INTEGER NOT NULL REFERENCES tracks(id),
+                        source TEXT NOT NULL,
+                        evidence_type TEXT NOT NULL,
+                        confidence REAL NOT NULL,
+                        raw_data TEXT,
+                        is_current INTEGER NOT NULL DEFAULT 1,
+                        superseded_by INTEGER REFERENCES evidence(id),
+                        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                    )
+                    """
+                )
+                self.conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_evidence_track ON evidence(track_id, is_current)"
+                )
+
+            if current_version < 3:
+                playlist_cols = {
+                    r[1] for r in self.conn.execute("PRAGMA table_info(playlists)").fetchall()
+                }
+                if "auto_reorder" not in playlist_cols:
                     self.conn.execute(
-                        f"ALTER TABLE tracks ADD COLUMN {column_name} {column_type}"
+                        "ALTER TABLE playlists ADD COLUMN auto_reorder INTEGER NOT NULL DEFAULT 0"
+                    )
+                if "reorder_arc" not in playlist_cols:
+                    self.conn.execute(
+                        "ALTER TABLE playlists ADD COLUMN reorder_arc TEXT NOT NULL DEFAULT 'wave'"
                     )
 
-            self.conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS evidence (
-                    id INTEGER PRIMARY KEY,
-                    track_id INTEGER NOT NULL REFERENCES tracks(id),
-                    source TEXT NOT NULL,
-                    evidence_type TEXT NOT NULL,
-                    confidence REAL NOT NULL,
-                    raw_data TEXT,
-                    is_current INTEGER NOT NULL DEFAULT 1,
-                    superseded_by INTEGER REFERENCES evidence(id),
-                    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-                )
-                """
-            )
-            self.conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_evidence_track ON evidence(track_id, is_current)"
-            )
             self.conn.execute(
                 "UPDATE schema_meta SET value = ? WHERE key = 'version'",
                 (str(_SCHEMA_VERSION),),
@@ -442,9 +459,23 @@ class Database:
         """List all playlists."""
         rows = self.conn.execute("SELECT * FROM playlists ORDER BY name").fetchall()
         return [
-            Playlist(id=row["id"], name=row["name"], description=row["description"])
+            Playlist(
+                id=row["id"],
+                name=row["name"],
+                description=row["description"],
+                auto_reorder=bool(row["auto_reorder"]),
+                reorder_arc=row["reorder_arc"],
+            )
             for row in rows
         ]
+
+    def set_auto_reorder(self, playlist_id: int, enabled: bool, arc: str = "wave") -> None:
+        """Enable or disable auto-reorder for a playlist."""
+        self.conn.execute(
+            "UPDATE playlists SET auto_reorder = ?, reorder_arc = ?, updated_at = datetime('now') WHERE id = ?",
+            (int(enabled), arc, playlist_id),
+        )
+        self.conn.commit()
 
     def set_playlist_tracks(self, playlist_id: int, track_ids: list[int]) -> None:
         """Set the track order for a playlist, replacing existing rows."""
@@ -676,4 +707,10 @@ class Database:
         ).fetchone()
         if row is None:
             return None
-        return Playlist(id=row["id"], name=row["name"], description=row["description"])
+        return Playlist(
+            id=row["id"],
+            name=row["name"],
+            description=row["description"],
+            auto_reorder=bool(row["auto_reorder"]),
+            reorder_arc=row["reorder_arc"],
+        )

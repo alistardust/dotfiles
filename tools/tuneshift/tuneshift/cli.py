@@ -71,6 +71,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_order.add_argument("playlist", help="Playlist name")
     p_order.add_argument("--arc", default="wave", help="Arc shape (default: wave)")
     p_order.add_argument("--no-sync", action="store_true", help="Skip pushing to platforms")
+    p_order.add_argument("--auto-on", action="store_true", help="Enable auto-reorder on sync")
+    p_order.add_argument("--auto-off", action="store_true", help="Disable auto-reorder on sync")
 
     # resolve
     p_resolve = sub.add_parser("resolve", help="Resolve track identity via MusicBrainz/Discogs")

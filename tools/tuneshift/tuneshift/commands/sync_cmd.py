@@ -149,4 +149,17 @@ def _sync_one(db, playlist, platforms, args) -> int:
         else:
             print(f"  No tracks to push to {platform_name}.")
 
+    # Auto-reorder if enabled for this playlist
+    if playlist.auto_reorder:
+        from tuneshift.sequencer import sequence_playlist
+
+        tracks = db.get_playlist_tracks(playlist.id)
+        track_ids = [t.id for t in tracks if t.id is not None]
+        reordered = sequence_playlist(db, track_ids, arc=playlist.reorder_arc)
+        db.set_playlist_tracks(playlist.id, reordered)
+        print(f'\n  Auto-reordered "{playlist.name}" (arc={playlist.reorder_arc})')
+
+        from tuneshift.commands.order_cmd import _push_order_to_platforms
+        _push_order_to_platforms(db, playlist)
+
     return 0

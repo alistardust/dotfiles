@@ -13,13 +13,26 @@ def handle_order(args, db: Database) -> int:
         print(f"Playlist not found: {args.playlist}", file=sys.stderr)
         return 1
 
+    arc = getattr(args, "arc", "wave")
+
+    # Handle auto-reorder toggle
+    if getattr(args, "auto_on", False):
+        db.set_auto_reorder(playlist.id, enabled=True, arc=arc)
+        print(f'Auto-reorder enabled for "{playlist.name}" (arc={arc})')
+    elif getattr(args, "auto_off", False):
+        db.set_auto_reorder(playlist.id, enabled=False)
+        print(f'Auto-reorder disabled for "{playlist.name}"')
+
+    # If only toggling the setting, skip the actual reorder
+    if getattr(args, "auto_on", False) or getattr(args, "auto_off", False):
+        return 0
+
     tracks = db.get_playlist_tracks(playlist.id)
     if not tracks:
         print(f'Playlist "{playlist.name}" is empty.')
         return 0
 
     track_ids = [track.id for track in tracks if track.id is not None]
-    arc = getattr(args, "arc", "wave")
 
     reordered = sequence_playlist(db, track_ids, arc=arc)
     db.set_playlist_tracks(playlist.id, reordered)

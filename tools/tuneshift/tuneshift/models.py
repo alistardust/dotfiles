@@ -46,6 +46,8 @@ class Playlist:
     id: int | None = None
     name: str = ""
     description: str | None = None
+    auto_reorder: bool = False
+    reorder_arc: str = "wave"
 
 
 @dataclass
