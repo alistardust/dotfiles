@@ -79,3 +79,14 @@ class PlaylistInfo:
     platform_id: str
     name: str
     num_tracks: int
+
+
+@dataclass
+class PlaylistPin:
+    """A pinned track position or adjacency constraint."""
+
+    playlist_id: int
+    track_id: int
+    pin_type: str  # "opener", "closer", "anchor"
+    group_id: str | None = None  # for adjacency groups
+    group_order: int | None = None  # position within group

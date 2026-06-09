@@ -159,7 +159,28 @@ def _sync_one(db, playlist, platforms, args) -> int:
         db.set_playlist_tracks(playlist.id, reordered)
         print(f'\n  Auto-reordered "{playlist.name}" (arc={playlist.reorder_arc})')
 
-        from tuneshift.commands.order_cmd import _push_order_to_platforms
-        _push_order_to_platforms(db, playlist)
+        # Push reordered tracks only to the platforms we just synced
+        reordered_tracks = db.get_playlist_tracks(playlist.id)
+        for platform_name in platforms:
+            client = _load_client(platform_name)
+            if not client or not client.load_session():
+                continue
+            platform_playlist_id = db.get_platform_playlist_id(playlist.id, platform_name)
+            if not platform_playlist_id:
+                continue
+            platform_ids = []
+            mappings = db.get_platform_mappings_for_tracks(
+                [t.id for t in reordered_tracks], platform_name
+            )
+            for t in reordered_tracks:
+                m = mappings.get(t.id)
+                if m and m.platform_track_id:
+                    platform_ids.append(m.platform_track_id)
+            if platform_ids:
+                try:
+                    client.replace_playlist_tracks(platform_playlist_id, platform_ids)
+                    print(f"  {platform_name}: synced ({len(platform_ids)} tracks)")
+                except Exception as exc:
+                    print(f"  {platform_name}: reorder push failed ({exc})")
 
     return 0

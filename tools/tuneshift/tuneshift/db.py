@@ -6,9 +6,9 @@ import re
 import sqlite3
 from pathlib import Path
 
-from tuneshift.models import PlatformMapping, Playlist, Track
+from tuneshift.models import PlatformMapping, Playlist, PlaylistPin, Track
 
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS tracks (
@@ -103,6 +103,16 @@ CREATE TABLE IF NOT EXISTS evidence (
     is_current INTEGER NOT NULL DEFAULT 1,
     superseded_by INTEGER REFERENCES evidence(id),
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS playlist_pins (
+    id INTEGER PRIMARY KEY,
+    playlist_id INTEGER NOT NULL REFERENCES playlists(id),
+    track_id INTEGER NOT NULL REFERENCES tracks(id),
+    pin_type TEXT NOT NULL,
+    group_id TEXT,
+    group_order INTEGER,
+    UNIQUE(playlist_id, track_id)
 );
 
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -240,6 +250,21 @@ class Database:
                     self.conn.execute(
                         "ALTER TABLE playlists ADD COLUMN reorder_arc TEXT NOT NULL DEFAULT 'wave'"
                     )
+
+            if current_version < 4:
+                self.conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS playlist_pins (
+                        id INTEGER PRIMARY KEY,
+                        playlist_id INTEGER NOT NULL REFERENCES playlists(id),
+                        track_id INTEGER NOT NULL REFERENCES tracks(id),
+                        pin_type TEXT NOT NULL,
+                        group_id TEXT,
+                        group_order INTEGER,
+                        UNIQUE(playlist_id, track_id)
+                    )
+                    """
+                )
 
             self.conn.execute(
                 "UPDATE schema_meta SET value = ? WHERE key = 'version'",
@@ -476,6 +501,49 @@ class Database:
             (int(enabled), arc, playlist_id),
         )
         self.conn.commit()
+
+    def set_pin(
+        self,
+        playlist_id: int,
+        track_id: int,
+        pin_type: str,
+        group_id: str | None = None,
+        group_order: int | None = None,
+    ) -> None:
+        """Pin a track in a playlist (opener, closer, or anchor group)."""
+        self.conn.execute(
+            """INSERT OR REPLACE INTO playlist_pins
+               (playlist_id, track_id, pin_type, group_id, group_order)
+               VALUES (?, ?, ?, ?, ?)""",
+            (playlist_id, track_id, pin_type, group_id, group_order),
+        )
+        self.conn.commit()
+
+    def remove_pin(self, playlist_id: int, track_id: int) -> None:
+        """Remove a pin from a playlist."""
+        self.conn.execute(
+            "DELETE FROM playlist_pins WHERE playlist_id = ? AND track_id = ?",
+            (playlist_id, track_id),
+        )
+        self.conn.commit()
+
+    def get_pins(self, playlist_id: int) -> list[PlaylistPin]:
+        """Get all pins for a playlist."""
+        rows = self.conn.execute(
+            "SELECT playlist_id, track_id, pin_type, group_id, group_order "
+            "FROM playlist_pins WHERE playlist_id = ? ORDER BY pin_type, group_id, group_order",
+            (playlist_id,),
+        ).fetchall()
+        return [
+            PlaylistPin(
+                playlist_id=row[0],
+                track_id=row[1],
+                pin_type=row[2],
+                group_id=row[3],
+                group_order=row[4],
+            )
+            for row in rows
+        ]
 
     def set_playlist_tracks(self, playlist_id: int, track_ids: list[int]) -> None:
         """Set the track order for a playlist, replacing existing rows."""
