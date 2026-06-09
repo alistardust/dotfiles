@@ -216,10 +216,34 @@ If invoked BY a sub-skill, do NOT re-invoke the caller. Route and stop.
 
 ### Model selection (cheapest correct)
 
-| Task type | Model |
-|-----------|-------|
-| Routing, search, checklists, mechanical fixes | `claude-haiku-4.5` / `gpt-5.4-mini` |
-| Security, architecture, judgment, plan writing | `claude-sonnet-4.5` / `gpt-5.2` |
-| Strategy, ambiguity, creativity | `claude-opus-4.6` / `gpt-5.4` |
+| Task type | Suggested tier |
+|-----------|---------------|
+| Routing, search, checklists, mechanical fixes | fast |
+| Security, architecture, judgment, plan writing | reasoning |
+| Strategy, ambiguity, creativity | frontier |
 
 Cross-ecosystem dispatch: substantial tier only, at blocking gates.
+
+## Feedback Loop
+
+On session start (after recovery check), analyze routing corrections to improve
+future confidence scores:
+
+```sql
+SELECT detected_layer, corrected_to, COUNT(*) as corrections
+FROM routing_log
+WHERE overridden = 1
+GROUP BY detected_layer, corrected_to
+ORDER BY corrections DESC
+LIMIT 10;
+```
+
+If corrections exist, apply routing bias adjustments:
+- Frequent override pattern (3+ corrections for same detected->corrected pair):
+  Reduce confidence for that detection pattern by 0.1
+- If user consistently overrides a Priority 2 detection to Priority 3:
+  Add that signal to the Execution layer's keyword set
+- Log adjustment: "Routing bias: [pattern] confidence reduced based on [N] corrections"
+
+This is advisory. The feedback loop does NOT auto-modify skill files; it adjusts
+in-session routing weights only. Persistent changes require explicit skill updates.
