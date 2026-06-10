@@ -1,4 +1,4 @@
-# Vulnerability Categories — Deep Reference
+# Vulnerability Categories : Deep Reference
 
 This file contains detailed detection guidance for every vulnerability category.
 Load this during Step 4 of the scan workflow.
@@ -33,7 +33,7 @@ User.findOne({ where: { id: userId } })  // ORM safe
 
 **Escalation checkers:**
 - Is the query result ever used in another query? (second-order)
-- Is the table/column name user-controlled? (cannot be parameterized — must allowlist)
+- Is the table/column name user-controlled? (cannot be parameterized : must allowlist)
 
 ---
 
@@ -135,7 +135,7 @@ app.get('/api/documents/:id', async (req, res) => {
 - `alg: "none"` accepted
 - Weak or hardcoded secrets: `secret`, `password`, `1234`
 - No expiry (`exp` claim) validation
-- Algorithm confusion (RS256 → HS256 downgrade)
+- Algorithm confusion (RS256 -> HS256 downgrade)
 - JWT stored in `localStorage` (XSS risk; prefer httpOnly cookie)
 
 **Detection:**

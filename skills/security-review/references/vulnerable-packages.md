@@ -57,8 +57,8 @@ Load this during Step 2 (Dependency Audit). Check versions in the project's lock
 
 | Package | Vulnerable Versions | Issue |
 |---------|-------------------|-------|
-| log4j-core | 2.0-2.14.1 | Log4Shell RCE (CVE-2021-44228) — CRITICAL |
-| log4j-core | 2.15.0 | Incomplete fix — still vulnerable |
+| log4j-core | 2.0-2.14.1 | Log4Shell RCE (CVE-2021-44228) : CRITICAL |
+| log4j-core | 2.15.0 | Incomplete fix : still vulnerable |
 | Spring Framework | < 5.3.28, < 6.0.13 | Various CVEs |
 | Spring Boot | < 3.1.4 | Various |
 | Jackson-databind | < 2.14.0 | Deserialization |
@@ -96,8 +96,8 @@ Reference: https://rustsec.org/advisories/
 Reference: https://pkg.go.dev/vuln/ and https://vuln.go.dev
 
 Common risky patterns:
-- `golang.org/x/crypto` — check if version is within 6 months of current
-- Any dependency using `syscall` package directly — review carefully
+- `golang.org/x/crypto` : check if version is within 6 months of current
+- Any dependency using `syscall` package directly : review carefully
 
 ---
 

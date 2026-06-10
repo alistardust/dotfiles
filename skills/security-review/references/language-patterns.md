@@ -66,7 +66,7 @@ User.objects.raw(f"SELECT * FROM users WHERE name = '{name}'")  # SQLi
 @csrf_exempt  # Only OK for APIs with token auth
 
 # Debug mode in production
-DEBUG = True  # in settings.py — exposes stack traces
+DEBUG = True  # in settings.py : exposes stack traces
 
 # SECRET_KEY
 SECRET_KEY = 'django-insecure-...'  # must be changed for production
@@ -121,7 +121,7 @@ DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
 ObjectInputStream ois = new ObjectInputStream(inputStream);
 Object obj = ois.readObject();  // only safe with allowlist
 
-// Spring Security — permitAll on sensitive endpoint
+// Spring Security : permitAll on sensitive endpoint
 .antMatchers("/admin/**").permitAll()
 
 // Actuator endpoints exposed
@@ -204,7 +204,7 @@ YAML.load(user_input)  # use YAML.safe_load instead
 ## Rust
 
 ```rust
-// Unsafe blocks — flag for manual review
+// Unsafe blocks : flag for manual review
 unsafe {
     // Reason for unsafety should be documented
 }
@@ -217,5 +217,5 @@ let value = option.unwrap();  // prefer ? or match
 
 // Deserializing arbitrary types
 serde_json::from_str::<serde_json::Value>(&user_input)  // generally safe
-// But: bincode::deserialize from untrusted input — can be exploited
+// But: bincode::deserialize from untrusted input : can be exploited
 ```

@@ -12,7 +12,7 @@ description: >-
 Follow these steps in order before creating any commit. Do not skip steps.
 A commit is not ready until all gates pass.
 
-## Step 1 -- Run pre-commit hooks (if repo has them configured)
+## Step 1: Run pre-commit hooks (if repo has them configured)
 
 If the repo has `.pre-commit-config.yaml`, run all hooks first. This is the
 fastest way to catch lint, format, and security issues in one pass.
@@ -25,7 +25,7 @@ If hooks are not installed yet: `pre-commit install` first.
 
 If the repo has no pre-commit config, skip to Step 2.
 
-## Step 2 -- Establish a baseline
+## Step 2: Establish a baseline
 
 Before making changes, run the test suite to confirm the baseline is clean.
 If the baseline is already broken, stop and surface that to Ali before proceeding.
@@ -34,7 +34,7 @@ If the baseline is already broken, stop and surface that to Ali before proceedin
 pytest tests/ -v
 ```
 
-## Step 3 -- Lint (ruff)
+## Step 3: Lint (ruff)
 
 Run ruff on the changed files (or whole project if scope is unclear).
 Use the `ruff-recursive-fix` skill for iterative fix workflow if needed.
@@ -47,7 +47,7 @@ ruff format --check
 All findings must be resolved before committing. No `# noqa` suppression without
 documented justification.
 
-## Step 4 -- Run tests
+## Step 4: Run tests
 
 Run the full test suite. All tests must pass.
 
@@ -62,7 +62,7 @@ pytest tests/ -v
 
 Use the `pytest-coverage` skill to find uncovered lines if needed.
 
-## Step 5 -- Verify documentation
+## Step 5: Verify documentation
 
 Before committing, verify that all affected documentation is current:
 
@@ -73,7 +73,7 @@ Before committing, verify that all affected documentation is current:
 
 A code change that affects behavior is **not complete** until docs reflect it.
 
-## Step 6 -- Review staged changes
+## Step 6: Review staged changes
 
 Before committing, do a final review of what is staged:
 
@@ -87,7 +87,7 @@ Check for:
 - Non-ASCII characters (em-dashes, curly quotes, smart apostrophes, etc.)
 - Files that shouldn't be committed (`.env`, temp files, `cov_annotate/`, etc.)
 
-## Step 7 -- Construct the commit message
+## Step 7: Construct the commit message
 
 Use the `conventional-commit` skill to build the commit message.
 
@@ -97,7 +97,7 @@ Types: `feat`, `fix`, `docs`, `refactor`, `test`, `chore`
 
 For ticket work, include the ticket ID:
 ```
-fix: OPS-1234 -- handle 404 on missing template
+fix: OPS-1234: handle 404 on missing template
 ```
 
 Rules:
@@ -108,7 +108,7 @@ Rules:
   Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
   ```
 
-## Step 8 -- Verify branch
+## Step 8: Verify branch
 
 Confirm the current branch is correct before committing:
 

@@ -8,7 +8,7 @@ description: Procedure for updating Copilot instruction files. Use this skill wh
 Before writing any new or modified instruction to any Copilot instructions file:
 
 1. Draft the proposed instruction text and display it for Ali to review.
-2. Write instructions using precise, actionable language -- interpret Ali's intent
+2. Write instructions using precise, actionable language: interpret Ali's intent
    and improve the phrasing rather than transcribing her words directly, unless
    Ali says otherwise.
 3. Wait for explicit approval before writing to the file. Only skip approval if
@@ -36,7 +36,7 @@ Use this heuristic:
 | Short (< ~5 lines) | Long or detailed (> ~10 lines) |
 
 If content fits a skill:
-1. Draft a `SKILL.md` for it with a precise `description:` field -- that
+1. Draft a `SKILL.md` for it with a precise `description:` field: that
    description is how the model decides when to load it, so make it explicit
    about the trigger conditions.
 2. If the content belongs to a specific repo (e.g., tachi command reference),
@@ -46,7 +46,7 @@ If content fits a skill:
 4. Show the draft `SKILL.md` and the proposed instructions diff to Ali for
    approval before writing either.
 
-Skills can reference each other in their bodies but not load each other -- each
+Skills can reference each other in their bodies but not load each other: each
 skill is an independent context injection.
 
 ## The tachi global skill
@@ -59,7 +59,7 @@ When updating instruction or skill content related to tachi:
 - Command capability changes go in `skills/tachi/SKILL.md`
 - Architecture/implementation details go in `.github/skills/tachi-architecture/SKILL.md`
 - Character/voice/content rules go in `.github/skills/tachi-thought/SKILL.md`
-- Do NOT reference the global `tachi` skill from repo instructions -- it is loaded
+- Do NOT reference the global `tachi` skill from repo instructions: it is loaded
   by the system and referencing it would be redundant
 
 ### How to maintain skills/tachi/SKILL.md
@@ -68,14 +68,14 @@ When updating instruction or skill content related to tachi:
 not implementation reference.
 
 **Level of detail:** modules and their subcommands. Do not document individual flags
-or options -- that belongs in `--help`. One or two words per subcommand is enough.
+or options: that belongs in `--help`. One or two words per subcommand is enough.
 
 **Format:** follow the existing pattern exactly:
 
 ```markdown
-### `tachi <module>` -- Short description
-- `subcommand` -- what it does
-- `subcommand` -- what it does
+### `tachi <module>`: Short description
+- `subcommand`: what it does
+- `subcommand`: what it does
 ```
 
 **When to add a module:** as soon as it has at least one working command. Do not
@@ -85,13 +85,13 @@ wait until complete.
 purpose changes significantly.
 
 **When to remove:** only when a module or subcommand is fully removed. Stub or
-partial modules stay listed -- they communicate intent.
+partial modules stay listed: they communicate intent.
 
 **What does NOT belong here:**
-- Implementation status or caveats -- that goes in `tachi-architecture`
-- Flag/option details -- that belongs in `--help`
-- Architecture decisions or internals -- that goes in `tachi-architecture`
-- Config file format or credential setup -- that goes in `tachi-architecture`
+- Implementation status or caveats: that goes in `tachi-architecture`
+- Flag/option details: that belongs in `--help`
+- Architecture decisions or internals: that goes in `tachi-architecture`
+- Config file format or credential setup: that goes in `tachi-architecture`
 
 ## Writing effective instructions
 

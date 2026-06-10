@@ -129,13 +129,13 @@ secrets.json
 config/secrets.yml
 ```
 
-Also check `.gitignore` — if a secret file pattern is NOT in .gitignore, flag it.
+Also check `.gitignore` : if a secret file pattern is NOT in .gitignore, flag it.
 
 ---
 
 ## CI/CD & IaC Secret Risks
 
-### GitHub Actions — flag these patterns:
+### GitHub Actions : flag these patterns:
 ```yaml
 # Hardcoded values in env: blocks (should use ${{ secrets.NAME }})
 env:
@@ -145,7 +145,7 @@ env:
 - run: echo ${{ secrets.MY_SECRET }}   # leaks to logs
 ```
 
-### Docker — flag these:
+### Docker : flag these:
 ```dockerfile
 # Secrets in ENV (persisted in image layers)
 ENV AWS_SECRET_KEY=actual-value
@@ -154,7 +154,7 @@ ENV AWS_SECRET_KEY=actual-value
 ARG API_KEY=actual-value
 ```
 
-### Terraform — flag these:
+### Terraform : flag these:
 ```hcl
 # Hardcoded sensitive values (should use var or data source)
 password = "hardcoded-password"
@@ -165,7 +165,7 @@ access_key = "AKIAIOSFODNN7EXAMPLE"
 
 ## Safe Patterns (Do NOT flag)
 
-These are intentional placeholders — recognize and skip:
+These are intentional placeholders : recognize and skip:
 ```
 "your-api-key-here"
 "<YOUR_API_KEY>"
