@@ -189,41 +189,33 @@ def distribute_artists(
 break_artist_runs = distribute_artists
 
 
-def optimize_sequence(
-    tracks: list[TrackMetadata],
-    weights: dict[str, float],
-    arc: str = "wave",
-    artist_min_separation: int = 4,
-    bold_jump_chance: float = 0.10,
-    narrative_mode: str = "river",
-    context_window: int = 5,
-    penalty_overrides: dict[str, float] | None = None,
-    pins: list | None = None,
-) -> list[TrackMetadata]:
-    """Produce an optimized track sequence respecting pinned positions."""
-    if len(tracks) <= 2:
-        return list(tracks)
+def _resolve_pins(
+    pins: list | None,
+    track_map: dict[int, TrackMetadata],
+) -> tuple[int | None, int | None, dict[str, list[int]]]:
+    """Parse pin list into opener_id, closer_id, and adjacency groups.
 
-    track_count = len(tracks)
-    track_map = {track.track_id: track for track in tracks}
-
-    # Parse pins into constraints
+    Returns (pinned_opener_id, pinned_closer_id, adjacency_groups) where
+    adjacency_groups maps group_id to ordered list of track_ids.
+    """
     pinned_opener_id: int | None = None
     pinned_closer_id: int | None = None
-    adjacency_groups: dict[str, list[int]] = {}  # group_id -> ordered track_ids
+    adjacency_groups: dict[str, list[int]] = {}
 
-    if pins:
-        for pin in pins:
-            if pin.track_id not in track_map:
-                continue
-            if pin.pin_type == "opener":
-                pinned_opener_id = pin.track_id
-            elif pin.pin_type == "closer":
-                pinned_closer_id = pin.track_id
-            elif pin.pin_type == "anchor" and pin.group_id:
-                if pin.group_id not in adjacency_groups:
-                    adjacency_groups[pin.group_id] = []
-                adjacency_groups[pin.group_id].append((pin.group_order or 0, pin.track_id))
+    if not pins:
+        return pinned_opener_id, pinned_closer_id, adjacency_groups
+
+    for pin in pins:
+        if pin.track_id not in track_map:
+            continue
+        if pin.pin_type == "opener":
+            pinned_opener_id = pin.track_id
+        elif pin.pin_type == "closer":
+            pinned_closer_id = pin.track_id
+        elif pin.pin_type == "anchor" and pin.group_id:
+            if pin.group_id not in adjacency_groups:
+                adjacency_groups[pin.group_id] = []
+            adjacency_groups[pin.group_id].append((pin.group_order or 0, pin.track_id))
 
     # Sort adjacency groups by group_order
     for group_id in adjacency_groups:
@@ -231,23 +223,44 @@ def optimize_sequence(
             tid for _, tid in sorted(adjacency_groups[group_id])
         ]
 
-    # Select opener (pinned or auto)
+    return pinned_opener_id, pinned_closer_id, adjacency_groups
+
+
+def _select_endpoints(
+    tracks: list[TrackMetadata],
+    track_map: dict[int, TrackMetadata],
+    pinned_opener_id: int | None,
+    pinned_closer_id: int | None,
+    arc: str,
+) -> tuple[TrackMetadata, TrackMetadata, list[TrackMetadata]]:
+    """Choose opener and closer, return (opener, closer, remaining)."""
     if pinned_opener_id and pinned_opener_id in track_map:
         opener = track_map[pinned_opener_id]
     else:
         opener = select_opener(tracks, arc)
 
-    remaining = [track for track in tracks if track.track_id != opener.track_id]
+    remaining = [t for t in tracks if t.track_id != opener.track_id]
 
-    # Select closer (pinned or auto)
     if pinned_closer_id and pinned_closer_id in track_map:
         closer = track_map[pinned_closer_id]
     else:
         closer = select_closer(remaining, arc)
 
-    remaining = [track for track in remaining if track.track_id != closer.track_id]
+    remaining = [t for t in remaining if t.track_id != closer.track_id]
+    return opener, closer, remaining
 
-    # Remove adjacency group members from the free pool (they'll be placed as blocks)
+
+def _prepare_free_pool(
+    remaining: list[TrackMetadata],
+    track_map: dict[int, TrackMetadata],
+    adjacency_groups: dict[str, list[int]],
+    opener: TrackMetadata,
+    closer: TrackMetadata,
+) -> tuple[list[TrackMetadata], list[list[TrackMetadata]]]:
+    """Separate free tracks from adjacency blocks.
+
+    Returns (free_tracks, anchor_blocks).
+    """
     anchored_ids: set[int] = set()
     for group_track_ids in adjacency_groups.values():
         for tid in group_track_ids:
@@ -256,6 +269,30 @@ def optimize_sequence(
 
     free_tracks = [t for t in remaining if t.track_id not in anchored_ids]
 
+    anchor_blocks: list[list[TrackMetadata]] = []
+    for group_track_ids in adjacency_groups.values():
+        block = [track_map[tid] for tid in group_track_ids if tid in track_map
+                 and tid != opener.track_id and tid != closer.track_id]
+        if block:
+            anchor_blocks.append(block)
+
+    return free_tracks, anchor_blocks
+
+
+def _greedy_build(
+    opener: TrackMetadata,
+    closer: TrackMetadata,
+    free_tracks: list[TrackMetadata],
+    anchor_blocks: list[list[TrackMetadata]],
+    track_count: int,
+    weights: dict[str, float],
+    arc: str,
+    bold_jump_chance: float,
+    narrative_mode: str,
+    context_window: int,
+    penalty_overrides: dict[str, float] | None,
+) -> list[TrackMetadata]:
+    """Build sequence using greedy nearest-neighbor with bold jumps and block insertion."""
     context = SequenceContext(
         position=0,
         total=track_count,
@@ -269,26 +306,16 @@ def optimize_sequence(
     available = {track.track_id for track in free_tracks}
     free_map = {track.track_id: track for track in free_tracks}
 
-    # Build adjacency blocks as single units to insert
-    anchor_blocks: list[list[TrackMetadata]] = []
-    for group_track_ids in adjacency_groups.values():
-        block = [track_map[tid] for tid in group_track_ids if tid in track_map
-                 and tid != opener.track_id and tid != closer.track_id]
-        if block:
-            anchor_blocks.append(block)
-
-    bold_jump_cooldown = 0
-    # Total positions to fill = free tracks + anchor blocks (each block = 1 placement)
-    placement_count = len(free_tracks) + len(anchor_blocks)
-
     # Mix anchor blocks into free selection by treating each block's lead track
     # as a candidate; when selected, the whole block is inserted
-    block_leads = {}  # lead_track_id -> block list
+    block_leads: dict[int, list[TrackMetadata]] = {}
     for block in anchor_blocks:
         lead = block[0]
         block_leads[lead.track_id] = block
         available.add(lead.track_id)
         free_map[lead.track_id] = lead
+
+    bold_jump_cooldown = 0
 
     for position in range(1, track_count - 1):
         if not available:
@@ -340,8 +367,44 @@ def optimize_sequence(
             available.remove(chosen.track_id)
 
     sequence.append(closer)
+    return sequence
 
-    # 2-opt and artist distribution, but protect pinned positions
+
+def optimize_sequence(
+    tracks: list[TrackMetadata],
+    weights: dict[str, float],
+    arc: str = "wave",
+    artist_min_separation: int = 4,
+    bold_jump_chance: float = 0.10,
+    narrative_mode: str = "river",
+    context_window: int = 5,
+    penalty_overrides: dict[str, float] | None = None,
+    pins: list | None = None,
+) -> list[TrackMetadata]:
+    """Produce an optimized track sequence respecting pinned positions."""
+    if len(tracks) <= 2:
+        return list(tracks)
+
+    track_count = len(tracks)
+    track_map = {track.track_id: track for track in tracks}
+
+    pinned_opener_id, pinned_closer_id, adjacency_groups = _resolve_pins(pins, track_map)
+
+    opener, closer, remaining = _select_endpoints(
+        tracks, track_map, pinned_opener_id, pinned_closer_id, arc,
+    )
+
+    free_tracks, anchor_blocks = _prepare_free_pool(
+        remaining, track_map, adjacency_groups, opener, closer,
+    )
+
+    sequence = _greedy_build(
+        opener, closer, free_tracks, anchor_blocks,
+        track_count, weights, arc, bold_jump_chance,
+        narrative_mode, context_window, penalty_overrides,
+    )
+
+    # Post-optimization: 2-opt and artist distribution, protecting pinned positions
     pinned_positions = _get_pinned_positions(sequence, pinned_opener_id, pinned_closer_id, adjacency_groups)
     sequence = _two_opt(sequence, weights, max_iterations=100, protected=pinned_positions)
     sequence = distribute_artists(sequence, min_separation=artist_min_separation, protected=pinned_positions)
