@@ -129,6 +129,29 @@ For each phase:
 3. On success: mark done, check for checkpoint, advance
 4. On failure: increment attempts, check stuck threshold
 
+### State Integrity Rules
+
+Phase transitions are forward-only. These invariants prevent state manipulation:
+
+1. **No phase rewind:** `current_phase` can only advance to the next phase in
+   `phases_json` order. Setting it to a previous phase requires explicit user
+   abort + restart (creates a new workflow_id).
+
+2. **QUALITY phase is non-removable:** User can modify phases via "Modify phases"
+   at initialization, but QUALITY cannot be removed from any template that includes
+   it. User can skip individual reviewers within quality (via --skip-reviews) but
+   not the phase itself.
+
+3. **phases_json is immutable after creation:** Once the workflow row is inserted,
+   `phases_json` cannot be updated. Phase modifications require aborting and
+   creating a new workflow.
+
+4. **Recovery validation:** On session recovery, before resuming, validate:
+   - `current_phase` exists in `phases_json`
+   - `status` is a valid enum value (running, paused, stuck)
+   - Phase log entries are consistent (no completed phases after current_phase)
+   If validation fails: present as corrupted, offer fresh restart only.
+
 ### Phase-to-Skill Mapping
 
 | Phase | Sub-skill invoked |

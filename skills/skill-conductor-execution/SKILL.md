@@ -38,12 +38,12 @@ What phase of execution are you in?
 
 ### writing-plans
 **When:** Requirements clear, need step-by-step implementation plan.
-**Model:** `claude-sonnet-4.5` (structured reasoning, dependency analysis)
+**Suggested tier:** reasoning (structured reasoning, dependency analysis)
 **Output:** plan.md with numbered steps
 
 ### executing-plans
 **When:** Plan exists, time to build step by step.
-**Model:** `claude-sonnet-4.5` (precision, follows plan faithfully)
+**Suggested tier:** reasoning (precision, follows plan faithfully)
 **Prerequisite:** A plan artifact must exist (`plan.md`, `docs/superpowers/plans/*`,
 or `.planning/*/PLAN.md`). For GSD plans (`.planning/`), prefer `gsd-execute-phase`
 via the Context layer instead.
@@ -51,41 +51,41 @@ via the Context layer instead.
 
 ### test-driven-development
 **When:** Building new behavior where tests should drive design.
-**Model:** `claude-sonnet-4.5` (TDD requires disciplined cycle adherence)
+**Suggested tier:** reasoning (TDD requires disciplined cycle adherence)
 **Best for:** Functions, services, APIs, business logic
 **Not for:** Config, docs, scaffolding
 
 ### dispatching-parallel-agents
 **When:** 2+ independent tasks that can run simultaneously.
-**Model:** `claude-haiku-4.5` per agent; `claude-sonnet-4.5` for orchestrator
+**Suggested tier:** fast per agent; reasoning for orchestrator
 **Best for:** Multiple file edits, independent modules, research
 
 ### subagent-driven-development
 **When:** Complex multi-step work requiring coordination.
-**Model:** `claude-sonnet-4.5` orchestrator; per-agent model depends on task complexity
+**Suggested tier:** reasoning for orchestrator; per-agent tier depends on task complexity
 **Best for:** Large features spanning many files/modules
 
 ### systematic-debugging
 **When:** Something broken, cause not obvious.
-**Model:** `claude-sonnet-4.5` (hypothesis generation, root cause analysis)
+**Suggested tier:** reasoning (hypothesis generation, root cause analysis)
 **Best for:** Intermittent bugs, mysterious failures, regressions
 
 ### requesting-code-review
 **When:** Code written, want feedback before merging.
-**Model:** `claude-haiku-4.5` (preparing review request is mechanical)
+**Suggested tier:** fast (preparing review request is mechanical)
 
 ### receiving-code-review
 **When:** Review feedback received, need to address it.
-**Model:** `claude-sonnet-4.5` (judgment needed for non-trivial feedback)
+**Suggested tier:** reasoning (judgment needed for non-trivial feedback)
 
 ### verification-before-completion
 **When:** Implementation seems done, need to confirm.
-**Model:** `claude-sonnet-4.5` (needs to reason about acceptance criteria)
+**Suggested tier:** reasoning (needs to reason about acceptance criteria)
 **Output:** Verification report
 
 ### finishing-a-development-branch
 **When:** Verified, ready to merge/ship.
-**Model:** `claude-haiku-4.5` (mechanical: PR creation, cleanup)
+**Suggested tier:** fast (mechanical: PR creation, cleanup)
 **Output:** Merged branch
 
 ## Choosing Between Similar Skills
@@ -126,8 +126,8 @@ finishing-a-development-branch
 
 ## After Choosing
 
-Invoke the chosen skill. The per-skill model recommendations above are authoritative
+Invoke the chosen skill. The per-skill tier suggestions above are starting points
 for the primary skill invocation. Pass `COMPLEXITY_TIER` from the conductor if
 available; skills that spawn nested subagents use it for THOSE agent selections
-(e.g., `claude-haiku-4.5` for trivial sub-tasks within a parallel dispatch).
+(e.g., fast tier for trivial sub-tasks within a parallel dispatch).
 Each Superpowers skill is self-contained with its own process and checkpoints.

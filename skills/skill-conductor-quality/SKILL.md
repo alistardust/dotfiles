@@ -284,6 +284,20 @@ An exemption (the ONLY path to proceed without fixing) requires ALL of:
 4. **Scope:** Exemption applies ONLY to the specific finding fingerprint.
    Same issue in a different file requires a separate exemption.
 
+5. **Re-validation:** On every gate run, re-validate ALL active exemptions:
+   ```
+   for exemption in baseline.exemptions:
+     if exemption.expired:
+       remove_exemption(exemption)
+       resurface_as_blocking(exemption.fingerprint)
+     elif not ticket_still_open(exemption.ticket_id):
+       log("Exemption invalidated: ticket " + exemption.ticket_id + " closed")
+       remove_exemption(exemption)
+       resurface_as_blocking(exemption.fingerprint)
+   ```
+   If `gh issue view` or equivalent fails (network error), treat as valid for
+   this run only (do not block on transient API failures). Log a warning.
+
 ### Dispute resolution
 
 If the user believes a finding is incorrect (false positive):
@@ -467,16 +481,39 @@ Quality gate [gate_phase]: [outcome] | tier: [complexity] | findings: [C/H/M/L] 
 In genuine emergencies (production incident, security patch), the full gate can
 be bypassed. This is NOT a normal workflow; it requires:
 
-1. User explicitly states emergency context
-2. `ask_user` confirmation: "Emergency override requested. This bypasses ALL quality
-   gates. Findings will be logged as debt against [ticket]. Confirm? (yes/no)"
-3. Ticket ID for the emergency (incident ticket)
-4. All findings from a dry-run are logged as exemptions with 7-day expiry
-5. Instrumentation: "EMERGENCY OVERRIDE: [gate_phase] bypassed. [N] findings
-   deferred to [ticket]. Expires: [date]."
+1. **Emergency criteria:** Override is valid ONLY for active production incidents
+   (P0/P1) or security vulnerabilities requiring immediate patching. Feature work,
+   "deadline pressure," or "tech debt cleanup" do not qualify.
+
+2. **Ticket validation:** Ticket ID must reference an actual incident or security
+   ticket. Validate via `gh issue view` or equivalent. Ticket must be currently
+   open and have severity/priority indicating production impact.
+
+3. **Confirmation:** `ask_user`: "Emergency override requested. This bypasses ALL
+   quality gates. Findings will be logged as debt against [ticket]. Confirm? (yes/no)"
+
+4. **Dry-run findings capture:** All findings from a dry-run are logged as
+   exemptions with 7-day expiry. These are immutable in the baseline file: they
+   cannot be edited, extended, or deleted. They can only be resolved by fixing
+   the underlying finding.
+
+5. **Audit trail:** Log to both instrumentation AND an append-only emergency log:
+   ```
+   EMERGENCY OVERRIDE: [gate_phase] bypassed
+   Ticket: [ticket_id]
+   User: [session user]
+   Findings deferred: [N] (severities: [breakdown])
+   Changeset hash: [git rev-parse HEAD]
+   Expires: [date, 7 days from now]
+   ```
+
+6. **Follow-up enforcement:** On the NEXT gate run in any workflow, if unresolved
+   emergency exemptions exist and the emergency ticket is now closed, surface them
+   as blocking immediately: "Emergency debt from [ticket] is due. [N] findings
+   must be resolved before proceeding."
 
 The 7-day window means the debt surfaces immediately after the incident is resolved.
-It cannot be forgotten.
+It cannot be forgotten, extended, or silently expired.
 
 ## Relationship to Review Gate Severity Mapping
 

@@ -75,6 +75,19 @@ If active workflow found: present resume options via `ask_user`. Otherwise proce
 | **moderate** | Few files, bounded scope, extends patterns | Route to layer. Autopilot optional. |
 | **substantial** | Many files, new architecture, cross-cutting | Route + activate autopilot. |
 
+### Tier escalation safeguards
+
+- **Security-sensitive files override:** If changeset touches auth, crypto, secrets,
+  or security-critical paths (patterns: `**/auth/**`, `**/crypto/**`, `**/security/**`,
+  `**/*secret*`, `**/*credential*`), minimum tier is `moderate` regardless of file
+  count. CSO reviewer is always required for these paths.
+- **User downgrade requires justification:** If user requests a lower tier than
+  detected ("treat this as trivial"), log the override with stated reason. If no
+  reason provided, ask for one.
+- **Auto-escalation trigger:** If a `trivial`-tier change produces 3+ findings
+  from any single reviewer (during inline check), auto-escalate to `moderate`
+  and re-run with proper gate budget.
+
 ## Routing: Confidence-Scored Intent Detection
 
 ### Signal extraction

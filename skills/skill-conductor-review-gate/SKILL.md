@@ -116,6 +116,18 @@ reviewer/model combinations.
 - `single-source`: standard processing
 - `disputed`: automatically classified as `judgment` (escalates to user)
 
+**Post-synthesis validation:** After synthesis completes, verify output integrity:
+- **Severity retention check:** Compare total severity score (CRITICAL=4, HIGH=3,
+  MEDIUM=2, LOW=1) of synthesized output vs raw input. If synthesized output retains
+  <70% of input severity score, reject synthesis and use raw deduplicated findings
+  instead. Log: "Synthesis rejected: severity retention [X]% below 70% threshold."
+- **Finding count check:** If synthesis reduces finding count by >50% (beyond what
+  root-cause consolidation explains), flag for review: "Synthesis consolidated [N]
+  findings to [M]. Verify no findings were dropped."
+- **Skip for aligned findings:** If cross-ecosystem dispatch produced findings and
+  both legs agree (same fingerprints, same severities), skip synthesis entirely.
+  Synthesis adds value for contradictions and root-cause analysis, not for agreement.
+
 **Skip condition:** If all findings come from a single reviewer instance (single
 ecosystem, only one reviewer produced output), skip synthesis (no value added).
 

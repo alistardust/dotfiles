@@ -306,13 +306,13 @@ findings:
 
 The test gate can auto-fix specific finding types:
 
-| Finding type | Auto-fix approach | Model |
-|--------------|-------------------|-------|
-| Missing boundary test | Generate test from function signature + detected gap | `claude-sonnet-4.5` |
-| No assertions in test | Add meaningful assertions based on function contract | `claude-sonnet-4.5` |
-| Tautological assertion | Replace with meaningful value assertion | `claude-haiku-4.5` |
-| Missing regression test | Generate failing-then-passing test from diff | `claude-sonnet-4.5` |
-| Low coverage (single branch) | Generate test targeting uncovered branch | `claude-sonnet-4.5` |
+| Finding type | Auto-fix approach | Suggested tier |
+|--------------|-------------------|----------------|
+| Missing boundary test | Generate test from function signature + detected gap | reasoning |
+| No assertions in test | Add meaningful assertions based on function contract | reasoning |
+| Tautological assertion | Replace with meaningful value assertion | fast |
+| Missing regression test | Generate failing-then-passing test from diff | reasoning |
+| Low coverage (single branch) | Generate test targeting uncovered branch | reasoning |
 
 **Cannot auto-fix (escalate immediately):**
 - Test architecture issues (shared mutable state)
@@ -328,6 +328,28 @@ The test gate can auto-fix specific finding types:
 - Generated tests are scoped to `changeset_scope` only (no new test files for unchanged code)
 - Fix agent prompt: "Write a focused test for [specific gap]. Follow existing test
   patterns in this file. Do not modify source code. Do not modify other tests."
+
+### Generated test quality validation
+
+After a test is generated and passes, validate it is MEANINGFUL before accepting:
+
+1. **Regression test check:** If the test targets a bug fix, verify it FAILS on
+   base_ref and PASSES on HEAD. If it passes on both: reject (does not detect the
+   bug). If it fails on both: reject (broken test).
+
+2. **Tautology check:** Scan generated assertions for:
+   - `assert True`, `assert 1 == 1`, `expect(true).toBe(true)`
+   - Assertions that only check the function does not throw (no value verification)
+   - Mocks that return the expected value (testing the mock, not the code)
+   If detected: reject and escalate as "cannot auto-fix meaningfully."
+
+3. **Intent verification:** Generated test must include a docstring or comment
+   stating what behavior it verifies. If the stated intent does not match the
+   original finding's gap description: reject.
+
+4. **Volume cap:** If test-gate auto-generates >5 tests in one iteration or >10
+   total per gate run, pause and escalate: "Systematic test gaps detected;
+   manual review recommended before continuing auto-generation."
 
 ## Gate Outcomes
 
