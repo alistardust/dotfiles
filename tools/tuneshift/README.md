@@ -66,3 +66,32 @@ tuneshift --print-completion fish >> ~/.config/fish/completions/tuneshift.fish
 The DB lives in the repo at `tools/tuneshift/tuneshift.db` and is committed
 to git for cross-machine sync. Auth tokens live separately in
 `~/.local/share/tuneshift/` (never committed).
+
+## Architecture
+
+TuneShift follows a **canonical-first, push-only** model:
+
+- **`tuneshift.db` is the product.** The SQLite database is the single source of
+  truth for all playlists, tracks, metadata, and platform mappings. It is
+  intentionally committed to git for versioning and cross-machine sync.
+- **Platforms are distribution targets.** Changes flow one direction: edit locally,
+  push to platforms. Platforms never overwrite local state.
+- **Credentials are never committed.** Auth tokens live in
+  `~/.local/share/tuneshift/` with 0700 permissions.
+- **Schema migrations are automatic.** The DB's `user_version` pragma drives
+  migrations in `db.py:_migrate_schema()`.
+
+### Module Layout
+
+```
+tuneshift/
+  cli.py              # Argument parsing, command dispatch
+  db.py               # SQLite schema, migrations, all persistence
+  models.py           # Shared dataclasses (Track, Playlist, etc.)
+  matching.py         # Fuzzy title/artist matching, version scoring
+  reconcile.py        # Find platform equivalents for canonical tracks
+  commands/           # One file per CLI subcommand
+  platforms/          # Platform API clients (tidal, spotify, ytmusic)
+  sequencer/          # Track ordering (energy arcs, pinning, 2-opt)
+  identity/           # Cross-platform track identity resolution
+```
