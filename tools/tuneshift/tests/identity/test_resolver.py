@@ -5,7 +5,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tuneshift.identity.confidence import compute_confidence
 from tuneshift.identity.models import (
     ConfidenceTier,
     Evidence,

@@ -2,13 +2,12 @@
 import sys
 
 from tuneshift.db import Database
-from tuneshift.reconcile import reconcile_track, ReconcileResult
+from tuneshift.reconcile import reconcile_track
 from tuneshift.models import PlatformMapping
 
 
 def handle_sync(args, db: Database) -> int:
     """Reconcile tracks and push to platform."""
-    from tuneshift.commands.ingest_cmd import _load_client
 
     if args.all:
         any_failures = False

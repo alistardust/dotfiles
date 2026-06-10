@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 from tuneshift.db import Database
 from tuneshift.models import Track, PlatformMapping, TrackResult
-from tuneshift.reconcile import reconcile_track, ReconcileResult
+from tuneshift.reconcile import reconcile_track
 
 
 def test_reconcile_uses_cache(tmp_db: Path) -> None:

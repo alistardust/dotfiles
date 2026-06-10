@@ -2,7 +2,6 @@
 import sys
 
 from tuneshift.db import Database
-from tuneshift.reconcile import reconcile_track
 
 
 def handle_diff(args, db: Database) -> int:

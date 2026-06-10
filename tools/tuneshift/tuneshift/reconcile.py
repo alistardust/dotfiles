@@ -2,7 +2,7 @@
 from dataclasses import dataclass, field
 
 from tuneshift.db import Database
-from tuneshift.matching import normalize_title, normalize_artist, score_match, score_match_with_version, classify_results, is_remaster
+from tuneshift.matching import normalize_title, score_match_with_version, classify_results, is_remaster
 from tuneshift.models import TrackResult, PlatformMapping
 
 

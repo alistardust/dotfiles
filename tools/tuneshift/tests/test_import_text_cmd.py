@@ -3,7 +3,6 @@
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
 
 from tuneshift.commands.import_text_cmd import _parse_playlist_file, handle_import_text
 from tuneshift.db import Database

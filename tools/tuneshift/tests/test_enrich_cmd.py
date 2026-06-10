@@ -4,7 +4,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from tuneshift.commands.enrich_cmd import handle_enrich
 from tuneshift.db import Database

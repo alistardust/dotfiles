@@ -1,6 +1,5 @@
 """Platform playlist ingestion: import playlists into canonical DB."""
 from tuneshift.db import Database
-from tuneshift.matching import normalize_title, normalize_artist
 
 
 def ingest_from_platform(

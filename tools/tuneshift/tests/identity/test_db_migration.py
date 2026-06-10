@@ -250,7 +250,7 @@ class TestEvidenceSupersession:
 
 class TestAutoReorder:
     def test_default_auto_reorder_off(self, db):
-        playlist_id = db.create_playlist("Test Playlist")
+        db.create_playlist("Test Playlist")
         playlist = db.find_playlist_by_name("Test Playlist")
         assert playlist.auto_reorder is False
         assert playlist.reorder_arc == "wave"

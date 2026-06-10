@@ -1,5 +1,4 @@
 """Tests for version preference scoring in matching."""
-import pytest
 from tuneshift.matching import version_penalty, score_match_with_version
 
 
