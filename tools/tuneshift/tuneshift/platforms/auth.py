@@ -48,7 +48,7 @@ def secure_write(path: Path, content: str) -> None:
         os.close(fd[0])
         fd = None
         os.replace(tmp_path, path)
-    except Exception:
+    except OSError:
         if fd is not None:
             os.close(fd[0])
         if tmp_path and tmp_path.exists():

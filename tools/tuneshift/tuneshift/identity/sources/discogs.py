@@ -63,6 +63,6 @@ class DiscogsSource:
         except FileNotFoundError:
             logger.warning("Discogs credentials not configured, skipping")
             return SourceResult(recordings=[])
-        except Exception:
-            logger.debug("Discogs search failed for %s - %s", artist, title)
+        except (OSError, RuntimeError, ValueError, KeyError) as exc:
+            logger.debug("Discogs search failed for %s - %s: %s", artist, title, exc)
             return SourceResult(recordings=[])

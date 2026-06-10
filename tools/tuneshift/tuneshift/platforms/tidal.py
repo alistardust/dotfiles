@@ -59,7 +59,7 @@ class TidalClient:
             raise RuntimeError("Call login() first")
         try:
             self._login_future.result(timeout=timeout)
-        except Exception:
+        except (TimeoutError, OSError, RuntimeError):
             return False
         self._save_token()
         return True

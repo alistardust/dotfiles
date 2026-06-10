@@ -35,7 +35,8 @@ class TestMusicBrainzLookupISRC:
 
     @patch("tuneshift.identity.sources.musicbrainz.musicbrainzngs")
     def test_isrc_not_found(self, mock_mb):
-        mock_mb.get_recordings_by_isrc.side_effect = Exception("Not found")
+        from musicbrainzngs import ResponseError
+        mock_mb.get_recordings_by_isrc.side_effect = ResponseError(cause=Exception("Not found"))
         source = MusicBrainzSource()
         result = source.lookup_isrc("INVALID000000")
         assert result is None

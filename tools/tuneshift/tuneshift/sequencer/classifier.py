@@ -87,6 +87,11 @@ class TrackClassifier:
     ) -> None:
         self._client = client if client is not None else build_default_client()
         self._model = model
+        try:
+            from anthropic import APIError
+            self._api_errors: tuple = (OSError, KeyError, IndexError, ValueError, APIError)
+        except ImportError:
+            self._api_errors = (OSError, KeyError, IndexError, ValueError)
 
     def classify(
         self,
@@ -113,11 +118,12 @@ class TrackClassifier:
                 results = parse_classification_response(text)
                 if results:
                     return results
-            except Exception:
+            except self._api_errors as exc:
                 logger.warning(
-                    "Classification attempt %s/%s failed",
+                    "Classification attempt %s/%s failed: %s",
                     attempt + 1,
                     max_retries,
+                    exc,
                     exc_info=True,
                 )
                 if attempt < max_retries - 1:

@@ -161,7 +161,7 @@ class YTMusicClient:
         """Return playlist metadata via Data API v3."""
         try:
             data = self._data_api("get", "playlists", params={"part": "snippet,contentDetails", "id": playlist_id})
-        except Exception:
+        except (OSError, RuntimeError, KeyError, ValueError):
             return None
         items = data.get("items", [])
         if not items:

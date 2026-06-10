@@ -6,6 +6,7 @@ import logging
 from typing import Any
 
 import musicbrainzngs
+from musicbrainzngs import MusicBrainzError
 
 from tuneshift.identity.matching import (
     duration_matches,
@@ -38,7 +39,7 @@ class MusicBrainzSource:
                 isrc,
                 includes=["artist-credits", "releases"],
             )
-        except Exception:
+        except (OSError, RuntimeError, MusicBrainzError):
             logger.debug("ISRC lookup failed for %s", isrc)
             return None
 
@@ -77,7 +78,7 @@ class MusicBrainzSource:
 
         try:
             response = musicbrainzngs.search_recordings(query=query, limit=10)
-        except Exception:
+        except (OSError, RuntimeError, MusicBrainzError):
             logger.debug("MB search failed for %s, %s", artist, title)
             return SourceResult(recordings=[])
 

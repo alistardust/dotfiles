@@ -95,7 +95,7 @@ def _enrich_tracks(db: Database, client: object, tracks: list[tuple[int, str]]) 
             if meta:
                 db.update_track_metadata(track_id, meta)
                 enriched += 1
-        except Exception:
+        except (OSError, RuntimeError, ValueError, KeyError, AttributeError):
             continue
 
     if enriched:

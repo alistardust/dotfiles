@@ -196,5 +196,5 @@ def _try_init_discogs():
         from tuneshift.identity.sources.discogs import DiscogsSource
 
         return DiscogsSource()
-    except Exception:
+    except (ImportError, OSError, ValueError):
         return None

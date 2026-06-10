@@ -54,7 +54,7 @@ def handle_enrich(args, db: Database) -> int:
                 enriched += 1
                 if enriched % 10 == 0:
                     print(f"  Enriched {enriched} tracks...", end="\r")
-        except Exception:
+        except (OSError, RuntimeError, ValueError, KeyError, AttributeError):
             continue
 
     print(f"Enriched \"{playlist.name}\": {enriched} tracks updated, {skipped} already had metadata")
