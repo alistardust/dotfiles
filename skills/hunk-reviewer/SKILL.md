@@ -73,6 +73,9 @@ Issues: 0 | No issues found.
 
 When dispatching this skill as a subagent, use:
 - **Agent type:** `explore` (read-only, no side effects)
-- **Model:** Haiku 4.5 or GPT-5.4-mini (whichever is available; prefer fastest)
+- **Model:** Use the fastest available model (capability tier: fast)
 - **Prompt:** Include the diff hunk, file content, and repo context as described
   in "Inputs Provided" above
+- **Invocation:** The main session dispatches this via the `task` tool with
+  `agent_type: "explore"`. This skill defines what the subagent should do,
+  not how it is loaded.
