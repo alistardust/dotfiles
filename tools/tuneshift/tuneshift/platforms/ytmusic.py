@@ -15,10 +15,6 @@ from tuneshift.platforms.rate_limiter import RateLimiter
 _TOKEN_DIR = Path.home() / ".local" / "share" / "tuneshift"
 _TOKEN_FILE = _TOKEN_DIR / "ytmusic.json"
 
-# Public YouTube TV client credentials (deprecated Nov 2024, kept as fallback reference)
-_YTM_DEFAULT_CLIENT_ID = "861556708454-d6dlm3lh05idd8npek18k6be8ba3oc68.apps.googleusercontent.com"
-_YTM_DEFAULT_CLIENT_SECRET = "SboVhoG9s0rNafixCSGGKXAT"
-
 # 1Password item for custom OAuth credentials
 _OP_ITEM_TITLE = "YouTube Data API - TuneShift"
 
@@ -26,7 +22,7 @@ _OP_ITEM_TITLE = "YouTube Data API - TuneShift"
 def _get_ytm_credentials() -> tuple[str, str]:
     """Retrieve YT Music OAuth client_id and client_secret.
 
-    Priority: env vars > 1Password > built-in defaults (deprecated).
+    Priority: env vars > 1Password. No hardcoded fallback.
     """
     import os
     import subprocess
@@ -49,7 +45,10 @@ def _get_ytm_credentials() -> tuple[str, str]:
     except (FileNotFoundError, subprocess.TimeoutExpired):
         pass
 
-    return _YTM_DEFAULT_CLIENT_ID, _YTM_DEFAULT_CLIENT_SECRET
+    raise RuntimeError(
+        "YouTube OAuth credentials not found. Set YTM_CLIENT_ID and "
+        "YTM_CLIENT_SECRET env vars, or configure 1Password CLI."
+    )
 
 
 def _get_oauth_credentials():
