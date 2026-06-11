@@ -1,6 +1,5 @@
 """Tests for tuneshift pin command."""
 
-import sys
 from argparse import Namespace
 from pathlib import Path
 

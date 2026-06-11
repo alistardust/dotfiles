@@ -5,7 +5,7 @@ from tuneshift.db import Database
 
 
 def handle_pin(args, db: Database) -> int:
-    """Manage track pins (opener, closer, adjacency groups)."""
+    """Manage track pins (opener, closer, position, adjacency groups)."""
     playlist = db.find_playlist_by_name(args.playlist)
     if not playlist:
         print(f"Playlist not found: {args.playlist}", file=sys.stderr)
@@ -23,10 +23,14 @@ def handle_pin(args, db: Database) -> int:
     if getattr(args, "closer", None):
         return _set_position_pin(db, playlist, args.closer, "closer")
 
+    if getattr(args, "position", None):
+        idx, title = args.position[0], args.position[1]
+        return _set_index_pin(db, playlist, title, int(idx))
+
     if getattr(args, "adjacent", None):
         return _set_adjacency(db, playlist, args.adjacent, getattr(args, "group", None))
 
-    print("Specify --opener, --closer, --adjacent, --remove, or --list.", file=sys.stderr)
+    print("Specify --opener, --closer, --position, --adjacent, --remove, or --list.", file=sys.stderr)
     return 1
 
 
@@ -63,6 +67,26 @@ def _set_position_pin(db: Database, playlist, title: str, pin_type: str) -> int:
 
     db.set_pin(playlist.id, track.id, pin_type)
     print(f'Pinned "{track.title}" as {pin_type} in "{playlist.name}"')
+    return 0
+
+
+def _set_index_pin(db: Database, playlist, title: str, position: int) -> int:
+    """Pin a track to a specific position index."""
+    track = _find_track_in_playlist(db, playlist, title)
+    if not track:
+        return 1
+
+    # Remove any existing pin for this track
+    db.remove_pin(playlist.id, track.id)
+
+    # Remove any existing position pin at this index
+    existing_pins = db.get_pins(playlist.id)
+    for pin in existing_pins:
+        if pin.pin_type == "position" and pin.group_order == position:
+            db.remove_pin(playlist.id, pin.track_id)
+
+    db.set_pin(playlist.id, track.id, "position", group_order=position)
+    print(f'Pinned "{track.title}" at position {position} in "{playlist.name}"')
     return 0
 
 
@@ -112,6 +136,8 @@ def _list_pins(db: Database, playlist) -> int:
         name = f"{track.title} - {track.artist}" if track else f"(track {pin.track_id})"
         if pin.pin_type in ("opener", "closer"):
             print(f"  {pin.pin_type}: {name}")
+        elif pin.pin_type == "position":
+            print(f"  position {pin.group_order}: {name}")
         elif pin.pin_type == "anchor":
             print(f"  anchor [{pin.group_id}#{pin.group_order}]: {name}")
 

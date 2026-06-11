@@ -192,18 +192,19 @@ break_artist_runs = distribute_artists
 def _resolve_pins(
     pins: list | None,
     track_map: dict[int, TrackMetadata],
-) -> tuple[int | None, int | None, dict[str, list[int]]]:
-    """Parse pin list into opener_id, closer_id, and adjacency groups.
+) -> tuple[int | None, int | None, dict[str, list[int]], dict[int, int]]:
+    """Parse pin list into opener_id, closer_id, adjacency groups, and position pins.
 
-    Returns (pinned_opener_id, pinned_closer_id, adjacency_groups) where
-    adjacency_groups maps group_id to ordered list of track_ids.
+    Returns (pinned_opener_id, pinned_closer_id, adjacency_groups, position_pins)
+    where position_pins maps target_index -> track_id.
     """
     pinned_opener_id: int | None = None
     pinned_closer_id: int | None = None
     adjacency_groups: dict[str, list[int]] = {}
+    position_pins: dict[int, int] = {}
 
     if not pins:
-        return pinned_opener_id, pinned_closer_id, adjacency_groups
+        return pinned_opener_id, pinned_closer_id, adjacency_groups, position_pins
 
     for pin in pins:
         if pin.track_id not in track_map:
@@ -216,6 +217,8 @@ def _resolve_pins(
             if pin.group_id not in adjacency_groups:
                 adjacency_groups[pin.group_id] = []
             adjacency_groups[pin.group_id].append((pin.group_order or 0, pin.track_id))
+        elif pin.pin_type == "position" and pin.group_order is not None:
+            position_pins[pin.group_order] = pin.track_id
 
     # Sort adjacency groups by group_order
     for group_id in adjacency_groups:
@@ -223,7 +226,7 @@ def _resolve_pins(
             tid for _, tid in sorted(adjacency_groups[group_id])
         ]
 
-    return pinned_opener_id, pinned_closer_id, adjacency_groups
+    return pinned_opener_id, pinned_closer_id, adjacency_groups, position_pins
 
 
 def _select_endpoints(
@@ -388,11 +391,21 @@ def optimize_sequence(
     track_count = len(tracks)
     track_map = {track.track_id: track for track in tracks}
 
-    pinned_opener_id, pinned_closer_id, adjacency_groups = _resolve_pins(pins, track_map)
+    pinned_opener_id, pinned_closer_id, adjacency_groups, position_pins = _resolve_pins(pins, track_map)
+
+    # Position pins at index 0 override opener; at last index override closer
+    if 0 in position_pins:
+        pinned_opener_id = position_pins.pop(0)
+    if (track_count - 1) in position_pins:
+        pinned_closer_id = position_pins.pop(track_count - 1)
 
     opener, closer, remaining = _select_endpoints(
         tracks, track_map, pinned_opener_id, pinned_closer_id, arc,
     )
+
+    # Remove position-pinned tracks from the free pool (they'll be inserted after)
+    position_pinned_ids = set(position_pins.values())
+    remaining = [t for t in remaining if t.track_id not in position_pinned_ids]
 
     free_tracks, anchor_blocks = _prepare_free_pool(
         remaining, track_map, adjacency_groups, opener, closer,
@@ -400,12 +413,23 @@ def optimize_sequence(
 
     sequence = _greedy_build(
         opener, closer, free_tracks, anchor_blocks,
-        track_count, weights, arc, bold_jump_chance,
+        track_count - len(position_pins), weights, arc, bold_jump_chance,
         narrative_mode, context_window, penalty_overrides,
     )
 
+    # Insert position-pinned tracks at their target indices
+    for target_idx in sorted(position_pins.keys()):
+        tid = position_pins[target_idx]
+        if tid in track_map:
+            idx = min(target_idx, len(sequence))
+            sequence.insert(idx, track_map[tid])
+
     # Post-optimization: 2-opt and artist distribution, protecting pinned positions
     pinned_positions = _get_pinned_positions(sequence, pinned_opener_id, pinned_closer_id, adjacency_groups)
+    # Also protect position-pinned indices
+    for target_idx in position_pins:
+        if target_idx < len(sequence):
+            pinned_positions.add(target_idx)
     sequence = _two_opt(sequence, weights, max_iterations=100, protected=pinned_positions)
     sequence = distribute_artists(sequence, min_separation=artist_min_separation, protected=pinned_positions)
     return sequence

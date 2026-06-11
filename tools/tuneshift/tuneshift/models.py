@@ -87,6 +87,6 @@ class PlaylistPin:
 
     playlist_id: int
     track_id: int
-    pin_type: str  # "opener", "closer", "anchor"
+    pin_type: str  # "opener", "closer", "anchor", "position"
     group_id: str | None = None  # for adjacency groups
-    group_order: int | None = None  # position within group
+    group_order: int | None = None  # position within group, or target index for "position" pins

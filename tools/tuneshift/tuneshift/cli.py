@@ -80,6 +80,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_pin.add_argument("playlist", help="Playlist name")
     p_pin.add_argument("--opener", metavar="TITLE", help="Pin track as opener")
     p_pin.add_argument("--closer", metavar="TITLE", help="Pin track as closer")
+    p_pin.add_argument("--position", nargs=2, metavar=("INDEX", "TITLE"), help="Pin track to specific position (0-based)")
     p_pin.add_argument("--adjacent", nargs="+", metavar="TITLE", help="Pin tracks as adjacent group (in order)")
     p_pin.add_argument("--group", metavar="NAME", help="Name for adjacency group (default: auto)")
     p_pin.add_argument("--remove", metavar="TITLE", help="Remove pin from track")

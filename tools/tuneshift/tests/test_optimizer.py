@@ -38,14 +38,14 @@ def _make_pin(track_id: int, pin_type: str, group_id: str | None = None, group_o
 class TestResolvePins:
     def test_none_pins_returns_empty(self):
         track_map = {1: _make_track(1)}
-        opener, closer, groups = _resolve_pins(None, track_map)
+        opener, closer, groups, pos_pins = _resolve_pins(None, track_map)
         assert opener is None
         assert closer is None
         assert groups == {}
 
     def test_empty_list_returns_empty(self):
         track_map = {1: _make_track(1)}
-        opener, closer, groups = _resolve_pins([], track_map)
+        opener, closer, groups, pos_pins = _resolve_pins([], track_map)
         assert opener is None
         assert closer is None
         assert groups == {}
@@ -53,7 +53,7 @@ class TestResolvePins:
     def test_opener_pin(self):
         track_map = {1: _make_track(1), 2: _make_track(2)}
         pins = [_make_pin(1, "opener")]
-        opener, closer, groups = _resolve_pins(pins, track_map)
+        opener, closer, groups, pos_pins = _resolve_pins(pins, track_map)
         assert opener == 1
         assert closer is None
         assert groups == {}
@@ -61,7 +61,7 @@ class TestResolvePins:
     def test_closer_pin(self):
         track_map = {1: _make_track(1), 2: _make_track(2)}
         pins = [_make_pin(2, "closer")]
-        opener, closer, groups = _resolve_pins(pins, track_map)
+        opener, closer, groups, pos_pins = _resolve_pins(pins, track_map)
         assert opener is None
         assert closer == 2
         assert groups == {}
@@ -73,13 +73,13 @@ class TestResolvePins:
             _make_pin(2, "anchor", group_id="drop", group_order=0),
             _make_pin(4, "anchor", group_id="drop", group_order=2),
         ]
-        _, _, groups = _resolve_pins(pins, track_map)
+        _, _, groups, _ = _resolve_pins(pins, track_map)
         assert groups == {"drop": [2, 3, 4]}
 
     def test_pin_for_missing_track_is_ignored(self):
         track_map = {1: _make_track(1)}
         pins = [_make_pin(99, "opener")]
-        opener, closer, groups = _resolve_pins(pins, track_map)
+        opener, closer, groups, pos_pins = _resolve_pins(pins, track_map)
         assert opener is None
 
     def test_multiple_groups(self):
@@ -90,7 +90,7 @@ class TestResolvePins:
             _make_pin(5, "anchor", group_id="climax", group_order=0),
             _make_pin(6, "anchor", group_id="climax", group_order=1),
         ]
-        _, _, groups = _resolve_pins(pins, track_map)
+        _, _, groups, _ = _resolve_pins(pins, track_map)
         assert groups == {"intro": [1, 2], "climax": [5, 6]}
 
 

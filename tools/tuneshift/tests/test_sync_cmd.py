@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 from tuneshift.commands.sync_cmd import handle_sync
 from tuneshift.db import Database
-from tuneshift.models import Track, PlatformMapping, PlaylistInfo
+from tuneshift.models import Track, PlaylistInfo
 from tuneshift.reconcile import ReconcileResult
 
 
