@@ -123,7 +123,10 @@ _LIVE_RE = re.compile(
     re.IGNORECASE,
 )
 _REMIX_RE = re.compile(
-    r"\b(remix|remixed|mix(?:ed)?)\b", re.IGNORECASE
+    r"\b(remix|remixed|mix(?:ed)?|performance mix|extended mix|"
+    r"extended version|instrumental|dub mix|club mix|12[\"'] mix|"
+    r"12 inch|maxi)\b",
+    re.IGNORECASE,
 )
 _REMASTER_RE = re.compile(
     r"\b(remaster(?:ed)?)\b", re.IGNORECASE
@@ -181,6 +184,40 @@ def version_penalty(title: str, album: str) -> int:
     return min(30, penalty)
 
 
+def duration_penalty(
+    candidate_duration: int | None,
+    reference_duration: int | None = None,
+    all_durations: list[int] | None = None,
+) -> int:
+    """Penalize tracks significantly longer than expected.
+
+    Uses the shortest available version as reference if no explicit reference
+    is given. Returns 0-20 penalty.
+
+    Heuristic: if a track is >60% longer than the reference, it's likely an
+    extended/performance mix even if not labelled as such.
+    """
+    if candidate_duration is None:
+        return 0
+
+    if reference_duration is None and all_durations:
+        valid = [d for d in all_durations if d and d > 60]
+        if valid:
+            reference_duration = min(valid)
+
+    if reference_duration is None or reference_duration < 60:
+        return 0
+
+    ratio = candidate_duration / reference_duration
+    if ratio > 2.0:
+        return 20
+    if ratio > 1.6:
+        return 15
+    if ratio > 1.4:
+        return 10
+    return 0
+
+
 def score_match_with_version(
     source_title: str,
     source_artist: str,
@@ -188,18 +225,23 @@ def score_match_with_version(
     result_title: str,
     result_artist: str,
     result_album: str,
+    result_duration: int | None = None,
+    reference_duration: int | None = None,
+    all_durations: list[int] | None = None,
 ) -> int:
     """Score a search result with version preference applied.
 
     Combines similarity scoring from score_match with a penalty for
-    undesirable versions (live, remix, compilation, etc.).
+    undesirable versions (live, remix, compilation, etc.) and a duration
+    penalty for extended mixes.
     """
     base = score_match(
         source_title, source_artist, source_album,
         result_title, result_artist, result_album,
     )
     penalty = version_penalty(result_title, result_album)
-    return max(0, base - penalty)
+    dur_pen = duration_penalty(result_duration, reference_duration, all_durations)
+    return max(0, base - penalty - dur_pen)
 
 
 def classify_results(scores: list[int]) -> str:

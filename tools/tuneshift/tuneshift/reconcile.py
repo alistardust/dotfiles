@@ -73,8 +73,19 @@ def reconcile_track(
     if track.isrc:
         isrc_result = client.search_isrc(track.isrc)  # type: ignore[attr-defined]
         if isrc_result:
+            # Duration sanity check: flag if matched track is suspiciously long
             is_div = _check_divergence(track.album, isrc_result.album)
             div_note = f"ISRC match but album differs: {isrc_result.album}" if is_div else None
+            if (
+                track.duration_seconds
+                and isrc_result.duration_seconds
+                and isrc_result.duration_seconds > track.duration_seconds * 1.6
+            ):
+                is_div = True
+                div_note = (
+                    f"ISRC match but duration suspicious: "
+                    f"{isrc_result.duration_seconds}s vs expected ~{track.duration_seconds}s"
+                )
             return ReconcileResult(
                 platform_track_id=isrc_result.platform_id,
                 platform_title=isrc_result.title,
@@ -93,12 +104,16 @@ def reconcile_track(
     if not results:
         return ReconcileResult(confidence="not_found")
 
-    # Score each result with version preference
+    # Score each result with version preference (duration-aware)
+    all_durations = [r.duration_seconds for r in results if r.duration_seconds]
     scored: list[tuple[int, TrackResult]] = []
     for r in results:
         s = score_match_with_version(
             track.title, track.artist, track.album,
             r.title, r.artist, r.album,
+            result_duration=r.duration_seconds,
+            reference_duration=track.duration_seconds,
+            all_durations=all_durations,
         )
         scored.append((s, r))
 
