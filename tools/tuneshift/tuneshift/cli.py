@@ -180,6 +180,11 @@ def build_parser() -> argparse.ArgumentParser:
         default="plain", help="Output format (default: plain)",
     )
 
+    # link
+    p_link = sub.add_parser("link", help="Auto-discover and link platform playlist IDs by name")
+    p_link.add_argument("platform", choices=["tidal", "spotify", "ytmusic"])
+    p_link.add_argument("--quiet", "-q", action="store_true", help="Suppress 'not found' messages")
+
     # Shell completions via shtab
     try:
         import shtab
@@ -271,6 +276,9 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "share":
             from tuneshift.commands.share_cmd import handle_share
             return handle_share(args, db)
+        elif args.command == "link":
+            from tuneshift.commands.link_cmd import handle_link
+            return handle_link(args, db)
         else:
             parser.print_help()
             return 1
