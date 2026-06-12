@@ -157,6 +157,89 @@ class YTMusicClient:
         """YT Music does not support direct ISRC lookup."""
         return None
 
+    def search_album(self, query: str, limit: int = 5) -> list["AlbumResult"]:
+        """Search for albums on YouTube Music."""
+        from tuneshift.models import AlbumResult
+        ytmusic = self._ensure_session()
+        items = self._call_api(lambda: ytmusic.search(query, filter="albums", limit=limit))
+        results: list[AlbumResult] = []
+        for item in items:
+            browse_id = item.get("browseId", "")
+            if not browse_id:
+                continue
+            artists = item.get("artists", [])
+            artist_name = artists[0]["name"] if artists else ""
+            results.append(AlbumResult(
+                platform_id=browse_id,
+                title=item.get("title", ""),
+                artist=artist_name,
+                track_count=0,
+                release_year=_parse_year(item.get("year")),
+            ))
+        return results
+
+    def get_album_tracks(self, album_id: str) -> list[TrackResult]:
+        """Get all tracks from a YouTube Music album."""
+        ytmusic = self._ensure_session()
+        album = self._call_api(lambda: ytmusic.get_album(album_id))
+        tracks = album.get("tracks", [])
+        return [self._to_result(t) for t in tracks if t.get("videoId")]
+
+    def search_artist(self, query: str, limit: int = 3) -> list["ArtistResult"]:
+        """Search for artists on YouTube Music."""
+        from tuneshift.models import ArtistResult
+        ytmusic = self._ensure_session()
+        items = self._call_api(lambda: ytmusic.search(query, filter="artists", limit=limit))
+        results: list[ArtistResult] = []
+        for item in items:
+            browse_id = item.get("browseId", "")
+            if not browse_id:
+                continue
+            results.append(ArtistResult(
+                platform_id=browse_id,
+                name=item.get("artist", item.get("title", "")),
+            ))
+        return results
+
+    def get_artist_albums(self, artist_id: str, limit: int = 20) -> list["AlbumResult"]:
+        """Get albums for a YouTube Music artist."""
+        from tuneshift.models import AlbumResult
+        ytmusic = self._ensure_session()
+        artist_data = self._call_api(lambda: ytmusic.get_artist(artist_id))
+        albums_section = artist_data.get("albums", {})
+        albums = albums_section.get("results", [])[:limit]
+        results: list[AlbumResult] = []
+        for album in albums:
+            browse_id = album.get("browseId", "")
+            if not browse_id:
+                continue
+            results.append(AlbumResult(
+                platform_id=browse_id,
+                title=album.get("title", ""),
+                artist=artist_data.get("name", ""),
+                track_count=0,
+                release_year=_parse_year(album.get("year")),
+            ))
+        return results
+
+    def get_track(self, track_id: str) -> TrackResult | None:
+        """Fetch a single track by video ID. Returns None if not found."""
+        ytmusic = self._ensure_session()
+        try:
+            song = self._call_api(lambda: ytmusic.get_song(track_id))
+        except Exception:
+            return None
+        details = song.get("videoDetails", {})
+        if not details:
+            return None
+        return TrackResult(
+            platform_id=track_id,
+            title=details.get("title", ""),
+            artist=details.get("author", ""),
+            album="",
+            duration_seconds=int(details.get("lengthSeconds", 0)) or None,
+        )
+
     def get_playlist(self, playlist_id: str) -> PlaylistInfo | None:
         """Return playlist metadata via Data API v3."""
         try:
@@ -393,3 +476,12 @@ def _parse_duration_seconds(item: dict[str, Any]) -> int | None:
     for part in parts:
         total = (total * 60) + int(part)
     return total
+
+
+def _parse_year(value: str | None) -> int | None:
+    if not value:
+        return None
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        return None
