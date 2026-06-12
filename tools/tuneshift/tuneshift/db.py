@@ -590,6 +590,27 @@ class Database:
         )
         self.conn.commit()
 
+    def remove_track_from_playlist(self, playlist_id: int, track_id: int) -> None:
+        """Remove track from playlist with cascade cleanup of pins and positions."""
+        with self.conn:
+            self.conn.execute(
+                "DELETE FROM playlist_tracks WHERE playlist_id = ? AND track_id = ?",
+                (playlist_id, track_id),
+            )
+            self.conn.execute(
+                "DELETE FROM playlist_pins WHERE playlist_id = ? AND track_id = ?",
+                (playlist_id, track_id),
+            )
+            rows = self.conn.execute(
+                "SELECT rowid FROM playlist_tracks WHERE playlist_id = ? ORDER BY position",
+                (playlist_id,),
+            ).fetchall()
+            for idx, (rowid,) in enumerate(rows):
+                self.conn.execute(
+                    "UPDATE playlist_tracks SET position = ? WHERE rowid = ?",
+                    (idx, rowid),
+                )
+
     def upsert_platform_mapping(self, mapping: PlatformMapping) -> None:
         """Insert or update a platform mapping."""
         self.conn.execute(

@@ -61,7 +61,7 @@ def _remove_and_sync(db: Database, playlist, track, position: int) -> bool:
     """
     from tuneshift.commands.ingest_cmd import _load_client
 
-    db.remove_playlist_track_by_position(playlist.id, position)
+    db.remove_track_from_playlist(playlist.id, track.id)
     print(f"Removed \"{track.title} - {track.artist}\" (position {position}) from \"{playlist.name}\"")
 
     # Sync removal to linked platforms
