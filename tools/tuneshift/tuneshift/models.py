@@ -82,6 +82,25 @@ class PlaylistInfo:
 
 
 @dataclass
+class AlbumResult:
+    """An album search result from any platform."""
+
+    platform_id: str
+    title: str
+    artist: str
+    track_count: int = 0
+    release_year: int | None = None
+
+
+@dataclass
+class ArtistResult:
+    """An artist search result from any platform."""
+
+    platform_id: str
+    name: str
+
+
+@dataclass
 class PlaylistPin:
     """A pinned track position or adjacency constraint."""
 
