@@ -284,9 +284,10 @@ class TestAutoReorder:
 
 class TestSchemaV7Migration:
     def test_v7_playlist_columns_exist(self, db):
-        """Schema v7 adds goal, playlist_type, weights, mood_profile, curation_constraints, preferences."""
+        """Schema v7 adds collection, goal, playlist_type, weights, mood_profile, curation_constraints, preferences."""
         cursor = db.conn.execute("PRAGMA table_info(playlists)")
         columns = {row[1] for row in cursor.fetchall()}
+        assert "collection" in columns
         assert "goal" in columns
         assert "playlist_type" in columns
         assert "weights" in columns

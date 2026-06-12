@@ -72,3 +72,22 @@ class TestMoodProfile:
     def test_get_mood_profile_returns_none_when_unset(self, db: Database) -> None:
         pid = db.create_playlist("Empty")
         assert db.get_mood_profile(pid) is None
+
+
+class TestCollection:
+    def test_set_and_get_collection(self, db: Database) -> None:
+        pid = db.create_playlist("Trans Wrath")
+        db.set_collection(pid, "Pride")
+        assert db.get_collection(pid) == "Pride"
+
+    def test_list_collections(self, db: Database) -> None:
+        p1 = db.create_playlist("Trans Wrath")
+        p2 = db.create_playlist("Sapphic Softness")
+        p3 = db.create_playlist("Desert Rock")
+        db.set_collection(p1, "Pride")
+        db.set_collection(p2, "Pride")
+        db.set_collection(p3, "Laurel Canyon")
+        collections = db.list_collections()
+        assert "Pride" in collections
+        assert "Laurel Canyon" in collections
+        assert len(collections) == 2

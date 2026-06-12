@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS playlists (
     name TEXT NOT NULL UNIQUE,
     description TEXT,
     narrative TEXT,
+    collection TEXT,
     goal TEXT,
     playlist_type TEXT,
     weights TEXT,
@@ -297,6 +298,8 @@ class Database:
                 playlist_cols = {
                     r[1] for r in self.conn.execute("PRAGMA table_info(playlists)").fetchall()
                 }
+                if "collection" not in playlist_cols:
+                    self.conn.execute("ALTER TABLE playlists ADD COLUMN collection TEXT")
                 if "goal" not in playlist_cols:
                     self.conn.execute("ALTER TABLE playlists ADD COLUMN goal TEXT")
                 if "playlist_type" not in playlist_cols:
@@ -942,6 +945,27 @@ class Database:
         """Get the goal for a playlist."""
         row = self.conn.execute("SELECT goal FROM playlists WHERE id = ?", (playlist_id,)).fetchone()
         return row[0] if row else None
+
+    def set_collection(self, playlist_id: int, collection: str | None) -> None:
+        """Set the collection a playlist belongs to (e.g., Pride, Laurel Canyon)."""
+        self.conn.execute("UPDATE playlists SET collection = ? WHERE id = ?", (collection, playlist_id))
+        self.conn.commit()
+
+    def get_collection(self, playlist_id: int) -> str | None:
+        """Get the collection a playlist belongs to."""
+        row = self.conn.execute("SELECT collection FROM playlists WHERE id = ?", (playlist_id,)).fetchone()
+        return row[0] if row else None
+
+    def list_collections(self) -> list[str]:
+        """List all distinct collections."""
+        rows = self.conn.execute(
+            "SELECT DISTINCT collection FROM playlists WHERE collection IS NOT NULL ORDER BY collection"
+        ).fetchall()
+        return [r[0] for r in rows]
+
+    def get_playlists_in_collection(self, collection: str) -> list:
+        """Get all playlists belonging to a collection."""
+        return [p for p in self.list_playlists() if self.get_collection(p.id) == collection]
 
     def set_weights(self, playlist_id: int, weights: dict | None) -> None:
         """Set the weights for a playlist."""
