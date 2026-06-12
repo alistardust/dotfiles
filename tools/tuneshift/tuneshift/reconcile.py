@@ -1,9 +1,16 @@
 """Track reconciliation: match canonical tracks to platform-specific IDs."""
 from dataclasses import dataclass, field
+from difflib import SequenceMatcher
 
 from tuneshift.db import Database
-from tuneshift.matching import normalize_title, score_match_with_version, classify_results, is_remaster
-from tuneshift.models import TrackResult, PlatformMapping
+from tuneshift.matching import (
+    classify_results,
+    duration_proximity_bonus,
+    is_remaster,
+    normalize_title,
+    score_match_with_version,
+)
+from tuneshift.models import AlbumResult, ArtistResult, PlatformMapping, TrackResult
 
 
 @dataclass
@@ -22,6 +29,91 @@ class ReconcileResult:
     from_cache: bool = False
 
 
+# --- Strategy functions ---
+
+
+def _strategy_album_lookup(track, client) -> list[TrackResult]:
+    """Search for the album, get its tracklist."""
+    if not track.album:
+        return []
+    try:
+        query = f"{track.album} {track.artist}"
+        albums: list[AlbumResult] = client.search_album(query, limit=5)
+        albums = sorted(albums, key=lambda a: _edition_score(a.title))
+        results: list[TrackResult] = []
+        for album in albums[:3]:
+            tracklist = client.get_album_tracks(album.platform_id)
+            results.extend(tracklist)
+        return results
+    except Exception:
+        return []
+
+
+def _strategy_isrc(track, client) -> list[TrackResult]:
+    """Direct ISRC lookup."""
+    if not track.isrc:
+        return []
+    try:
+        result = client.search_isrc(track.isrc)
+        return [result] if result else []
+    except Exception:
+        return []
+
+
+def _strategy_title_artist(track, client) -> list[TrackResult]:
+    """Standard title + artist text search."""
+    try:
+        return client.search_track(f"{track.title} {track.artist}", limit=10)
+    except Exception:
+        return []
+
+
+def _strategy_title_only(track, client) -> list[TrackResult]:
+    """Broader title-only search."""
+    try:
+        return client.search_track(track.title, limit=10)
+    except Exception:
+        return []
+
+
+def _strategy_album_in_query(track, client) -> list[TrackResult]:
+    """Search with title + album name."""
+    if not track.album:
+        return []
+    try:
+        return client.search_track(f"{track.title} {track.album}", limit=10)
+    except Exception:
+        return []
+
+
+def _strategy_artist_browse(track, client) -> list[TrackResult]:
+    """Browse artist discography for the right album."""
+    if not track.album:
+        return []
+    try:
+        artists: list[ArtistResult] = client.search_artist(track.artist, limit=3)
+        if not artists:
+            return []
+        albums: list[AlbumResult] = client.get_artist_albums(artists[0].platform_id, limit=20)
+        for album in albums:
+            if _album_name_matches(album.title, track.album):
+                return client.get_album_tracks(album.platform_id)
+        return []
+    except Exception:
+        return []
+
+
+# Strategy execution order with short-circuit thresholds
+_STRATEGIES = [
+    (_strategy_album_lookup, 90),
+    (_strategy_isrc, 100),
+    (_strategy_title_artist, 90),
+    (_strategy_title_only, None),
+    (_strategy_album_in_query, None),
+    (_strategy_artist_browse, None),
+]
+
+
 def reconcile_track(
     db: Database,
     track_id: int,
@@ -29,20 +121,16 @@ def reconcile_track(
     force: bool = False,
     cached_mapping: PlatformMapping | None = None,
 ) -> ReconcileResult:
-    """Reconcile a canonical track to a platform ID.
-
-    Checks cache first, then searches by ISRC, then by title+artist.
-    """
+    """Reconcile a canonical track to a platform ID using multi-strategy cascade."""
     track = db.get_track(track_id)
     if track is None:
         return ReconcileResult(confidence="not_found")
 
-    platform_name = client.platform_name  # type: ignore[attr-defined]
+    platform_name = client.platform_name
 
+    # Cache/mapping checks
     if not force:
         mapping = cached_mapping or db.get_platform_mapping(track_id, platform_name)
-
-        # Identity resolution shortcut: resolved tracks can reuse an existing mapping.
         tier, _, _ = db.get_resolution_state(track_id)
         if tier is not None and mapping is not None:
             if mapping.status == "unavailable":
@@ -55,8 +143,6 @@ def reconcile_track(
                 divergence_note=mapping.divergence_note,
                 from_cache=True,
             )
-
-        # Check cached mapping
         if mapping and mapping.user_approved:
             if mapping.status == "unavailable":
                 return ReconcileResult(confidence="not_found", from_cache=True)
@@ -69,45 +155,30 @@ def reconcile_track(
                 from_cache=True,
             )
 
-    # Search by ISRC first (highest confidence)
-    if track.isrc:
-        isrc_result = client.search_isrc(track.isrc)  # type: ignore[attr-defined]
-        if isrc_result:
-            # Duration sanity check: flag if matched track is suspiciously long
-            is_div = _check_divergence(track.album, isrc_result.album)
-            div_note = f"ISRC match but album differs: {isrc_result.album}" if is_div else None
-            if (
-                track.duration_seconds
-                and isrc_result.duration_seconds
-                and isrc_result.duration_seconds > track.duration_seconds * 1.6
-            ):
-                is_div = True
-                div_note = (
-                    f"ISRC match but duration suspicious: "
-                    f"{isrc_result.duration_seconds}s vs expected ~{track.duration_seconds}s"
-                )
-            return ReconcileResult(
-                platform_track_id=isrc_result.platform_id,
-                platform_title=isrc_result.title,
-                platform_artist=isrc_result.artist,
-                platform_album=isrc_result.album,
-                score=100,
-                confidence="high",
-                is_divergent=is_div,
-                divergence_note=div_note,
-            )
+    # Multi-strategy candidate collection
+    all_candidates: list[TrackResult] = []
+    seen_ids: set[str] = set()
 
-    # Search by title + artist
-    query = f"{track.title} {track.artist}"
-    results: list[TrackResult] = client.search_track(query, limit=10)  # type: ignore[attr-defined]
+    for strategy_fn, threshold in _STRATEGIES:
+        new_candidates = strategy_fn(track, client)
+        for c in new_candidates:
+            if c.platform_id not in seen_ids:
+                seen_ids.add(c.platform_id)
+                all_candidates.append(c)
 
-    if not results:
+        # Short-circuit check
+        if threshold is not None and all_candidates:
+            top_score = _quick_top_score(track, all_candidates)
+            if top_score >= threshold:
+                break
+
+    if not all_candidates:
         return ReconcileResult(confidence="not_found")
 
-    # Score each result with version preference (duration-aware)
-    all_durations = [r.duration_seconds for r in results if r.duration_seconds]
+    # Score all candidates uniformly
+    all_durations = [r.duration_seconds for r in all_candidates if r.duration_seconds]
     scored: list[tuple[int, TrackResult]] = []
-    for r in results:
+    for r in all_candidates:
         s = score_match_with_version(
             track.title, track.artist, track.album,
             r.title, r.artist, r.album,
@@ -115,6 +186,7 @@ def reconcile_track(
             reference_duration=track.duration_seconds,
             all_durations=all_durations,
         )
+        s = min(100, s + duration_proximity_bonus(r.duration_seconds, track.duration_seconds))
         scored.append((s, r))
 
     scored.sort(key=lambda x: x[0], reverse=True)
@@ -127,6 +199,18 @@ def reconcile_track(
     best_score, best_result = scored[0]
     is_div = _check_divergence(track.album, best_result.album)
     div_note = f"Version differs: {best_result.album}" if is_div else None
+
+    # Duration sanity check
+    if (
+        track.duration_seconds
+        and best_result.duration_seconds
+        and best_result.duration_seconds > track.duration_seconds * 1.6
+    ):
+        is_div = True
+        div_note = (
+            f"Duration suspicious: "
+            f"{best_result.duration_seconds}s vs expected ~{track.duration_seconds}s"
+        )
 
     return ReconcileResult(
         platform_track_id=best_result.platform_id,
@@ -141,6 +225,50 @@ def reconcile_track(
     )
 
 
+def _quick_top_score(track, candidates: list[TrackResult]) -> int:
+    """Quick score check for short-circuit decision."""
+    best = 0
+    for c in candidates:
+        s = score_match_with_version(
+            track.title, track.artist, track.album,
+            c.title, c.artist, c.album,
+            result_duration=c.duration_seconds,
+            reference_duration=track.duration_seconds,
+        )
+        s = min(100, s + duration_proximity_bonus(c.duration_seconds, track.duration_seconds))
+        if s > best:
+            best = s
+    return best
+
+
+def _edition_score(album_name: str) -> int:
+    """Lower score = preferred. Standard editions score 0."""
+    name_lower = album_name.lower()
+    score = 0
+    if "deluxe" in name_lower:
+        score += 10
+    if "expanded" in name_lower:
+        score += 10
+    if "anniversary" in name_lower:
+        score += 5
+    if "special edition" in name_lower:
+        score += 5
+    if "remaster" in name_lower:
+        score += 2
+    return score
+
+
+def _album_name_matches(platform_album: str, canonical_album: str) -> bool:
+    """Check if a platform album name matches the canonical album."""
+    norm_platform = normalize_title(platform_album)
+    norm_canonical = normalize_title(canonical_album)
+    if not norm_platform or not norm_canonical:
+        return False
+    if norm_platform == norm_canonical:
+        return True
+    return SequenceMatcher(None, norm_platform, norm_canonical).ratio() >= 0.75
+
+
 def _check_divergence(source_album: str | None, result_album: str) -> bool:
     """Check if the result is a different version/remaster."""
     if not source_album:
@@ -149,10 +277,7 @@ def _check_divergence(source_album: str | None, result_album: str) -> bool:
     norm_res = normalize_title(result_album)
     if norm_src == norm_res:
         return False
-    # If one is a remaster and the other isn't, it's divergent
     if is_remaster(result_album) != is_remaster(source_album or ""):
         return True
-    # If normalized titles are very different, it's divergent
-    from difflib import SequenceMatcher
     ratio = SequenceMatcher(None, norm_src, norm_res).ratio()
     return ratio < 0.7

@@ -2,9 +2,39 @@
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 from tuneshift.db import Database
 from tuneshift.models import Track, PlatformMapping, TrackResult
 from tuneshift.reconcile import reconcile_track
+
+
+@pytest.fixture
+def mock_client():
+    """Create a mock platform client with all required methods."""
+    client = MagicMock()
+    client.platform_name = "test_platform"
+    client.search_track.return_value = []
+    client.search_isrc.return_value = None
+    client.search_album.return_value = []
+    client.get_album_tracks.return_value = []
+    client.search_artist.return_value = []
+    client.get_artist_albums.return_value = []
+    return client
+
+
+@pytest.fixture
+def db_with_track(tmp_path):
+    """Create a database with a test track for reconciliation."""
+    db = Database(tmp_path / "test.db")
+    track = Track(
+        title="Louder",
+        artist="Big Freedia",
+        album="3rd Ward Bounce",
+        duration_seconds=195
+    )
+    track_id = db.add_track(track)
+    return db, track_id
 
 
 def test_reconcile_uses_cache(tmp_db: Path) -> None:
@@ -149,3 +179,47 @@ class TestReconcileWithIdentity:
         mock_client.search_track.assert_not_called()
         assert result.platform_track_id == "999"
         assert result.from_cache is True
+
+
+def test_reconcile_finds_track_via_album_lookup(mock_client, db_with_track):
+    """When title+artist search fails, album lookup finds the track."""
+    db, track_id = db_with_track
+    mock_client.search_track.return_value = []
+    from tuneshift.models import AlbumResult, TrackResult
+    mock_album = AlbumResult(platform_id="alb1", title="3rd Ward Bounce", artist="Big Freedia", track_count=12)
+    mock_client.search_album.return_value = [mock_album]
+    mock_client.get_album_tracks.return_value = [
+        TrackResult(platform_id="t1", title="Louder", artist="Big Freedia", album="3rd Ward Bounce", duration_seconds=195),
+    ]
+
+    result = reconcile_track(db, track_id, mock_client, force=True)
+    assert result.confidence == "high"
+    assert result.platform_track_id == "t1"
+
+
+def test_reconcile_deduplicates_across_strategies(mock_client, db_with_track):
+    """Same platform_id from multiple strategies is only scored once."""
+    db, track_id = db_with_track
+    from tuneshift.models import TrackResult
+    same_track = TrackResult(platform_id="t1", title="Louder", artist="Big Freedia", album="3rd Ward Bounce", duration_seconds=195)
+    mock_client.search_track.return_value = [same_track]
+    mock_client.search_album.return_value = []
+    mock_client.search_artist.return_value = []
+
+    result = reconcile_track(db, track_id, mock_client, force=True)
+    assert result.platform_track_id == "t1"
+
+
+def test_reconcile_short_circuits_on_high_confidence(mock_client, db_with_track):
+    """Album lookup score >= 90 skips later strategies."""
+    db, track_id = db_with_track
+    from tuneshift.models import AlbumResult, TrackResult
+    mock_album = AlbumResult(platform_id="alb1", title="3rd Ward Bounce", artist="Big Freedia", track_count=12)
+    mock_client.search_album.return_value = [mock_album]
+    mock_client.get_album_tracks.return_value = [
+        TrackResult(platform_id="t1", title="Louder", artist="Big Freedia", album="3rd Ward Bounce", duration_seconds=195),
+    ]
+    mock_client.search_track.side_effect = AssertionError("Should not be called")
+
+    result = reconcile_track(db, track_id, mock_client, force=True)
+    assert result.platform_track_id == "t1"
