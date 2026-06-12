@@ -512,11 +512,14 @@ def sequence_playlist(
     playlist_id: int,
     arc: str = "wave",
     profile: str = "default",
+    weights: dict[str, float] | None = None,
 ) -> list[int]:
     """Sequence playlist tracks using the database as authoritative source.
 
     Loads the track list from DB. Tracks without energy/valence metadata
     are appended at the end (never dropped).
+    
+    If weights is provided, it overrides the profile's default weights.
     """
     track_ids = db.get_playlist_track_ids(playlist_id)
     if len(track_ids) <= 1:
@@ -540,9 +543,12 @@ def sequence_playlist(
     # Load playlist narrative for narrative arc sequencing
     narrative = db.get_narrative(playlist_id) if resolved_arc == "narrative" else None
 
+    # Use provided weights or fall back to profile's weights
+    resolved_weights = weights if weights is not None else profile_config.weights
+
     ordered_tracks = optimize_sequence(
         metadata_tracks,
-        profile_config.weights,
+        resolved_weights,
         arc=resolved_arc,
         artist_min_separation=profile_config.artist_min_separation,
         bold_jump_chance=profile_config.bold_jump_chance,

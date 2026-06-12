@@ -1,7 +1,9 @@
 """Order command: sequence a playlist by energy arc."""
+import json
 import sys
 
 from tuneshift.db import Database
+from tuneshift.sequencer.weights import PRESETS
 
 
 def handle_order(args, db: Database) -> int:
@@ -32,7 +34,24 @@ def handle_order(args, db: Database) -> int:
         print(f'Playlist "{playlist.name}" is empty.')
         return 0
 
-    reordered = sequence_playlist(db, playlist.id, arc=arc)
+    # Resolve weights from CLI argument
+    weights_arg = getattr(args, "weights", None)
+    if weights_arg:
+        if weights_arg.startswith("{"):
+            try:
+                explicit_weights = json.loads(weights_arg)
+            except json.JSONDecodeError as e:
+                print(f"Invalid JSON in --weights: {e}", file=sys.stderr)
+                return 1
+        elif weights_arg in PRESETS:
+            explicit_weights = PRESETS[weights_arg]
+        else:
+            print(f'Unknown preset: "{weights_arg}"', file=sys.stderr)
+            return 1
+    else:
+        explicit_weights = None
+
+    reordered = sequence_playlist(db, playlist.id, arc=arc, weights=explicit_weights)
 
     if getattr(args, "dry_run", False):
         _print_dry_run(db, reordered, playlist.name, arc)

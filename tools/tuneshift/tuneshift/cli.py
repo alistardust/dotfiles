@@ -72,6 +72,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_order = sub.add_parser("order", help="Reorder playlist by energy arc")
     p_order.add_argument("playlist", help="Playlist name")
     p_order.add_argument("--arc", default="wave", help="Arc shape (default: wave)")
+    p_order.add_argument("--weights", help="Weight preset name or JSON dict")
     p_order.add_argument("--dry-run", action="store_true", help="Show proposed order without applying")
     p_order.add_argument("--no-sync", action="store_true", help="Skip pushing to platforms")
     p_order.add_argument("--auto-on", action="store_true", help="Enable auto-reorder on sync")
