@@ -413,6 +413,7 @@ def optimize_sequence(
     context_window: int = 5,
     penalty_overrides: dict[str, float] | None = None,
     pins: list | None = None,
+    narrative: str | None = None,
 ) -> list[TrackMetadata]:
     """Produce an optimized track sequence respecting pinned positions."""
     if len(tracks) <= 2:
@@ -425,7 +426,7 @@ def optimize_sequence(
 
     # Infer intent early for narrative arc
     from tuneshift.sequencer.intent import infer_intent
-    intent = infer_intent(tracks) if arc == "narrative" else None
+    intent = infer_intent(tracks, narrative=narrative) if arc == "narrative" else None
 
     # Collect moment track IDs and determine their target positions
     moment_track_ids = [p.track_id for p in (pins or []) if p.pin_type == "moment"]
@@ -536,6 +537,9 @@ def sequence_playlist(
     from tuneshift.models import PlaylistPin
     pins: list[PlaylistPin] = db.get_pins(playlist_id)
 
+    # Load playlist narrative for narrative arc sequencing
+    narrative = db.get_narrative(playlist_id) if resolved_arc == "narrative" else None
+
     ordered_tracks = optimize_sequence(
         metadata_tracks,
         profile_config.weights,
@@ -546,6 +550,7 @@ def sequence_playlist(
         context_window=profile_config.context_window,
         penalty_overrides=profile_config.penalty_overrides,
         pins=pins,
+        narrative=narrative,
     )
 
     result = [track.track_id for track in ordered_tracks] + missing_ids

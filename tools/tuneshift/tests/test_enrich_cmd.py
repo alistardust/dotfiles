@@ -67,13 +67,15 @@ class TestHandleEnrich:
 
     def test_not_logged_in(self, tmp_path: Path) -> None:
         db = Database(tmp_path / "test.db")
-        db.create_playlist("Test")
-        # need at least a playlist to get past the not-found check
-        # hack: rename via direct SQL
+        playlist_id = db.create_playlist("Test")
+        from tuneshift.models import Track
+        track_id = db.add_track(Track(title="Song", artist="Artist"))
+        db.add_track_to_playlist(playlist_id, track_id, position=0)
+
         mock_client = MagicMock()
         mock_client.load_session.return_value = False
 
-        args = SimpleNamespace(playlist="Test", platform="tidal")
+        args = SimpleNamespace(playlist="Test", platform="tidal", classify=False, model=None)
         with patch("tuneshift.commands.ingest_cmd._load_client", return_value=mock_client):
             result = handle_enrich(args, db)
         assert result == 1

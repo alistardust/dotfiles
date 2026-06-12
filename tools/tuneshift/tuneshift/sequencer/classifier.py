@@ -1,9 +1,24 @@
-"""LLM-based track theme, vibe, and instrumentation classification."""
+"""LLM-based track theme, vibe, and instrumentation classification.
+
+Supports multiple LLM backends via a unified interface:
+  - anthropic: Anthropic API (Claude models)
+  - openai: OpenAI API (GPT models, Codex)
+  - ollama: Local Ollama instance
+  - openai-compatible: Any OpenAI-compatible endpoint (vLLM, LiteLLM, Copilot)
+
+Configuration via environment variables:
+  TUNESHIFT_LLM_BACKEND    - Backend to use (auto-detected if not set)
+  TUNESHIFT_CLASSIFIER_MODEL - Model name (backend-specific default if not set)
+  TUNESHIFT_LLM_BASE_URL   - Base URL for openai-compatible backends
+  ANTHROPIC_API_KEY         - Anthropic API key
+  OPENAI_API_KEY            - OpenAI API key
+  OLLAMA_HOST               - Ollama host (default: http://localhost:11434)
+"""
 import json
 import logging
 import os
 import time
-from typing import Any
+from typing import Any, Protocol
 
 logger = logging.getLogger(__name__)
 
@@ -52,29 +67,165 @@ Rules:
 - confidence: 0.0-1.0 scale (how well you know this specific recording)
 - Return ONLY the JSON array, no other text"""
 
+_DEFAULT_MODELS: dict[str, str] = {
+    "anthropic": "claude-haiku-4-5-20241022",
+    "openai": "gpt-4o-mini",
+    "ollama": "llama3.1:8b",
+    "openai-compatible": "gpt-4o-mini",
+}
 
-def build_default_client(api_key: str | None = None) -> Any | None:
-    """Build a default Anthropic client when credentials are available."""
-    resolved_api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
-    if not resolved_api_key:
-        logger.info("Skipping classification because ANTHROPIC_API_KEY is not set")
-        return None
 
-    try:
+class LLMBackend(Protocol):
+    """Protocol for LLM completion backends."""
+
+    def complete(self, prompt: str, model: str, max_tokens: int = 4096) -> str:
+        """Send a prompt and return the text response."""
+        ...
+
+
+class AnthropicBackend:
+    """Backend for Anthropic's Messages API."""
+
+    def __init__(self, api_key: str | None = None) -> None:
+        resolved_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
+        if not resolved_key:
+            raise ValueError("ANTHROPIC_API_KEY is required for anthropic backend")
         from anthropic import Anthropic
-    except ImportError:
-        logger.warning("Skipping classification because anthropic is not installed")
-        return None
+        self._client = Anthropic(api_key=resolved_key)
 
-    return Anthropic(api_key=resolved_api_key)
+    def complete(self, prompt: str, model: str, max_tokens: int = 4096) -> str:
+        response = self._client.messages.create(
+            model=model,
+            max_tokens=max_tokens,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return response.content[0].text
 
 
-def build_classification_prompt(tracks: list[dict[str, str]]) -> str:
+class OpenAICompatibleBackend:
+    """Backend for OpenAI and any OpenAI-compatible API (Codex, vLLM, LiteLLM, Copilot)."""
+
+    def __init__(
+        self,
+        api_key: str | None = None,
+        base_url: str | None = None,
+    ) -> None:
+        resolved_key = api_key or os.environ.get("OPENAI_API_KEY")
+        resolved_url = base_url or os.environ.get("TUNESHIFT_LLM_BASE_URL")
+        if not resolved_key and not resolved_url:
+            raise ValueError(
+                "OPENAI_API_KEY or TUNESHIFT_LLM_BASE_URL required for openai-compatible backend"
+            )
+        from openai import OpenAI
+        kwargs: dict[str, Any] = {}
+        if resolved_key:
+            kwargs["api_key"] = resolved_key
+        if resolved_url:
+            kwargs["base_url"] = resolved_url
+        self._client = OpenAI(**kwargs)
+
+    def complete(self, prompt: str, model: str, max_tokens: int = 4096) -> str:
+        response = self._client.chat.completions.create(
+            model=model,
+            max_tokens=max_tokens,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return response.choices[0].message.content or ""
+
+
+class OllamaBackend:
+    """Backend for local Ollama instance."""
+
+    def __init__(self, host: str | None = None) -> None:
+        self._host = host or os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+
+    def complete(self, prompt: str, model: str, max_tokens: int = 4096) -> str:
+        import urllib.request
+
+        payload = json.dumps({
+            "model": model,
+            "prompt": prompt,
+            "stream": False,
+            "options": {"num_predict": max_tokens},
+        }).encode()
+        req = urllib.request.Request(
+            f"{self._host}/api/generate",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            result = json.loads(resp.read())
+        return result.get("response", "")
+
+
+def detect_backend() -> tuple[str, LLMBackend] | tuple[None, None]:
+    """Auto-detect available LLM backend from environment.
+
+    Priority: explicit TUNESHIFT_LLM_BACKEND > ANTHROPIC_API_KEY > OPENAI_API_KEY > Ollama.
+    """
+    explicit = os.environ.get("TUNESHIFT_LLM_BACKEND", "").lower()
+
+    if explicit == "grok" or "grok" in os.environ.get("TUNESHIFT_CLASSIFIER_MODEL", "").lower():
+        # FUCK ELON
+        raise ValueError("Grok is not and will never be a supported backend. Fuck Elon.")
+
+    if explicit == "anthropic":
+        return "anthropic", AnthropicBackend()
+    elif explicit in ("openai", "openai-compatible"):
+        return explicit, OpenAICompatibleBackend()
+    elif explicit == "ollama":
+        return "ollama", OllamaBackend()
+    elif explicit:
+        # Treat unknown explicit backend as openai-compatible
+        return "openai-compatible", OpenAICompatibleBackend()
+
+    # Auto-detect
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        try:
+            return "anthropic", AnthropicBackend()
+        except (ImportError, ValueError):
+            pass
+
+    if os.environ.get("OPENAI_API_KEY"):
+        try:
+            return "openai", OpenAICompatibleBackend()
+        except (ImportError, ValueError):
+            pass
+
+    if os.environ.get("TUNESHIFT_LLM_BASE_URL"):
+        try:
+            return "openai-compatible", OpenAICompatibleBackend()
+        except (ImportError, ValueError):
+            pass
+
+    # Check if Ollama is reachable
+    ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+    try:
+        import urllib.request
+        urllib.request.urlopen(f"{ollama_host}/api/tags", timeout=2)
+        return "ollama", OllamaBackend(ollama_host)
+    except (OSError, ImportError):
+        pass
+
+    return None, None
+
+
+def build_classification_prompt(
+    tracks: list[dict[str, str]],
+    narrative: str | None = None,
+) -> str:
     """Build the LLM prompt for a batch of tracks."""
     track_list = "\n".join(
         f'- "{track["title"]}" by {track["artist"]}' for track in tracks
     )
-    return _CLASSIFICATION_PROMPT.format(track_list=track_list)
+    prompt = _CLASSIFICATION_PROMPT.format(track_list=track_list)
+    if narrative:
+        prompt += (
+            "\n\nPLAYLIST NARRATIVE CONTEXT (use this to inform your classification, "
+            "especially emotional_intensity, narrator_stance, and lyrical_subject):\n"
+            f"{narrative}"
+        )
+    return prompt
 
 
 def parse_classification_response(response_text: str) -> list[dict[str, Any]]:
@@ -98,57 +249,72 @@ def parse_classification_response(response_text: str) -> list[dict[str, Any]]:
 
 
 class TrackClassifier:
-    """Classify tracks using an LLM client for themes and vibe metadata."""
+    """Classify tracks using any supported LLM backend."""
 
     def __init__(
         self,
-        client: Any = None,
+        backend: LLMBackend | None = None,
         model: str | None = None,
+        backend_name: str | None = None,
     ) -> None:
-        self._client = client if client is not None else build_default_client()
+        if backend is not None:
+            self._backend = backend
+            self._backend_name = backend_name or "custom"
+        else:
+            detected_name, detected_backend = detect_backend()
+            if detected_backend is None:
+                self._backend = None  # type: ignore[assignment]
+                self._backend_name = None
+            else:
+                self._backend = detected_backend
+                self._backend_name = detected_name
+
         self._model = (
             model
             or os.environ.get("TUNESHIFT_CLASSIFIER_MODEL")
-            or "claude-haiku-4-5-20241022"
+            or _DEFAULT_MODELS.get(self._backend_name or "", "gpt-4o-mini")
         )
-        try:
-            from anthropic import APIError
-            self._api_errors: tuple = (OSError, KeyError, IndexError, ValueError, APIError)
-        except ImportError:
-            self._api_errors = (OSError, KeyError, IndexError, ValueError)
+
+    @property
+    def available(self) -> bool:
+        """Whether a backend was successfully configured."""
+        return self._backend is not None
+
+    @property
+    def backend_info(self) -> str:
+        """Human-readable backend description."""
+        if not self._backend_name:
+            return "no backend configured"
+        return f"{self._backend_name} ({self._model})"
 
     def classify(
         self,
         tracks: list[dict[str, str]],
         max_retries: int = 3,
+        narrative: str | None = None,
     ) -> list[dict[str, Any]]:
         """Classify a batch of tracks."""
         if not tracks:
             return []
-        if self._client is None:
-            logger.info("Skipping classification because no LLM client is configured")
+        if not self.available:
+            logger.info("Skipping classification: %s", self.backend_info)
             return []
 
-        prompt = build_classification_prompt(tracks)
+        prompt = build_classification_prompt(tracks, narrative=narrative)
 
         for attempt in range(max_retries):
             try:
-                response = self._client.messages.create(
-                    model=self._model,
-                    max_tokens=4096,
-                    messages=[{"role": "user", "content": prompt}],
-                )
-                text = response.content[0].text
+                text = self._backend.complete(prompt, self._model)
                 results = parse_classification_response(text)
                 if results:
                     return results
-            except self._api_errors as exc:
+            except Exception as exc:
                 logger.warning(
-                    "Classification attempt %s/%s failed: %s",
+                    "Classification attempt %s/%s failed (%s): %s",
                     attempt + 1,
                     max_retries,
+                    self._backend_name,
                     exc,
-                    exc_info=True,
                 )
                 if attempt < max_retries - 1:
                     time.sleep(2**attempt)
@@ -161,19 +327,20 @@ class TrackClassifier:
         tracks: list[dict[str, str]],
         batch_size: int = 20,
         progress_callback: Any = None,
+        narrative: str | None = None,
     ) -> list[dict[str, Any]]:
         """Classify tracks in batches for efficiency."""
         all_results: list[dict[str, Any]] = []
 
         for index in range(0, len(tracks), batch_size):
             batch = tracks[index : index + batch_size]
-            results = self.classify(batch)
+            results = self.classify(batch, narrative=narrative)
 
             if results:
                 all_results.extend(results)
             else:
                 for track in batch:
-                    result = self.classify([track])
+                    result = self.classify([track], narrative=narrative)
                     if result:
                         all_results.extend(result)
 

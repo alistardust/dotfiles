@@ -8,7 +8,7 @@ from pathlib import Path
 
 from tuneshift.models import PlatformMapping, Playlist, PlaylistPin, Track
 
-_SCHEMA_VERSION = 5
+_SCHEMA_VERSION = 6
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS tracks (
@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS playlists (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,
     description TEXT,
+    narrative TEXT,
     auto_reorder INTEGER NOT NULL DEFAULT 0,
     reorder_arc TEXT NOT NULL DEFAULT 'wave',
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -275,6 +276,15 @@ class Database:
                         AND playlist_tracks.track_id = playlist_pins.track_id
                     )
                 """)
+
+            if current_version < 6:
+                playlist_cols = {
+                    r[1] for r in self.conn.execute("PRAGMA table_info(playlists)").fetchall()
+                }
+                if "narrative" not in playlist_cols:
+                    self.conn.execute(
+                        "ALTER TABLE playlists ADD COLUMN narrative TEXT"
+                    )
 
             self.conn.execute(
                 "UPDATE schema_meta SET value = ? WHERE key = 'version'",
@@ -511,6 +521,21 @@ class Database:
             (int(enabled), arc, playlist_id),
         )
         self.conn.commit()
+
+    def set_narrative(self, playlist_id: int, narrative: str | None) -> None:
+        """Set the intended narrative arc description for a playlist."""
+        self.conn.execute(
+            "UPDATE playlists SET narrative = ?, updated_at = datetime('now') WHERE id = ?",
+            (narrative, playlist_id),
+        )
+        self.conn.commit()
+
+    def get_narrative(self, playlist_id: int) -> str | None:
+        """Get the intended narrative arc description for a playlist."""
+        row = self.conn.execute(
+            "SELECT narrative FROM playlists WHERE id = ?", (playlist_id,)
+        ).fetchone()
+        return row[0] if row else None
 
     def set_pin(
         self,
@@ -795,10 +820,17 @@ class Database:
             updates.append("isrc = ?")
             params.append(meta["isrc"])
         # Store extra fields in metadata JSON
+        _METADATA_KEYS = (
+            "key_scale", "energy", "valence",
+            "themes", "vibes", "instruments", "density", "era_mood",
+            "emotional_intensity", "lyrical_subject", "narrator_stance",
+            "sonic_texture", "space", "groove_feel", "opens_with",
+            "closes_with", "energy_arc_within", "confidence",
+        )
         track = self.get_track(track_id)
         if track:
             existing_meta = track.metadata or {}
-            for k in ("key_scale", "energy", "valence"):
+            for k in _METADATA_KEYS:
                 if k in meta:
                     existing_meta[k] = meta[k]
             if existing_meta != (track.metadata or {}):

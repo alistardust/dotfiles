@@ -106,10 +106,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_import_text.add_argument("--force", action="store_true", help="Overwrite existing playlist")
 
     # enrich
-    p_enrich = sub.add_parser("enrich", help="Fetch audio metadata (BPM, key) from platform")
+    p_enrich = sub.add_parser("enrich", help="Fetch audio metadata and/or classify tracks")
     p_enrich.add_argument("playlist", help="Playlist name")
-    p_enrich.add_argument("--platform", default="tidal", help="Source platform (default: tidal)")
-    p_enrich.add_argument("--model", help="LLM model for classification (default: claude-haiku-4-5-20241022)")
+    p_enrich.add_argument("--platform", default=None, help="Source platform for audio metadata (BPM, key)")
+    p_enrich.add_argument("--classify", action="store_true", help="Run LLM classification for narrative fields")
+    p_enrich.add_argument("--model", help="Override LLM model for classification")
+
+    # narrative
+    p_narrative = sub.add_parser("narrative", help="Set or show the intended narrative arc for a playlist")
+    p_narrative.add_argument("playlist", help="Playlist name")
+    p_narrative.add_argument("text", nargs="?", help="Narrative description (omit to show current)")
+    p_narrative.add_argument("-f", "--file", help="Read narrative from file")
+    p_narrative.add_argument("--clear", action="store_true", help="Remove narrative")
 
     # export
     p_export = sub.add_parser("export", help="Export playlist to file")
@@ -198,6 +206,9 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "enrich":
             from tuneshift.commands.enrich_cmd import handle_enrich
             return handle_enrich(args, db)
+        elif args.command == "narrative":
+            from tuneshift.commands.narrative_cmd import handle_narrative
+            return handle_narrative(args, db)
         elif args.command == "export":
             from tuneshift.commands.export_cmd import handle_export
             return handle_export(args, db)

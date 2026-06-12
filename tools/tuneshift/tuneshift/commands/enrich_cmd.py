@@ -1,7 +1,10 @@
 """Enrich command: fetch audio metadata from platform for existing tracks."""
+import logging
 import sys
 
 from tuneshift.db import Database
+
+logger = logging.getLogger(__name__)
 
 
 def handle_enrich(args, db: Database) -> int:
@@ -13,20 +16,7 @@ def handle_enrich(args, db: Database) -> int:
         print(f"Playlist not found: {args.playlist}", file=sys.stderr)
         return 1
 
-    platform_name = args.platform
-    client = _load_client(platform_name)
-    if not client:
-        print(f"Unknown platform: {platform_name}", file=sys.stderr)
-        return 1
-
-    if not client.load_session():
-        print(f"Not logged in to {platform_name}. Run: tuneshift login {platform_name}", file=sys.stderr)
-        return 1
-
-    if not hasattr(client, "get_track_metadata"):
-        print(f"{platform_name} does not support metadata enrichment.", file=sys.stderr)
-        return 1
-
+    platform_name = getattr(args, "platform", None)
     tracks = db.get_playlist_tracks(playlist.id)
     if not tracks:
         print(f"Playlist \"{playlist.name}\" is empty.")
@@ -35,32 +25,115 @@ def handle_enrich(args, db: Database) -> int:
     enriched = 0
     skipped = 0
 
-    for i, track in enumerate(tracks, 1):
-        # Skip tracks that already have tempo/key
-        if track.tempo and track.key:
-            skipped += 1
-            continue
+    # Platform audio metadata (BPM, key, energy, valence)
+    if platform_name:
+        client = _load_client(platform_name)
+        if not client:
+            print(f"Unknown platform: {platform_name}", file=sys.stderr)
+            return 1
 
-        # Get platform mapping to find platform track ID
-        mappings = db.get_platform_mappings_for_tracks([track.id], platform_name)
-        mapping = mappings.get(track.id)
-        if not mapping or not mapping.platform_track_id:
-            continue
+        if not client.load_session():
+            print(f"Not logged in to {platform_name}. Run: tuneshift login {platform_name}", file=sys.stderr)
+            return 1
 
-        try:
-            meta = client.get_track_metadata(mapping.platform_track_id)
-            if meta:
-                db.update_track_metadata(track.id, meta)
-                enriched += 1
-                if enriched % 10 == 0:
-                    print(f"  Enriched {enriched} tracks...", end="\r")
-        except (OSError, RuntimeError, ValueError, KeyError, AttributeError):
-            continue
+        if not hasattr(client, "get_track_metadata"):
+            print(f"{platform_name} does not support metadata enrichment.", file=sys.stderr)
+        else:
+            for track in tracks:
+                if track.tempo and track.key:
+                    skipped += 1
+                    continue
 
-    # Future: integrate TrackClassifier here
-    # from tuneshift.sequencer.classifier import TrackClassifier
-    # classifier = TrackClassifier(model=getattr(args, 'model', None))
-    # Classify tracks and update metadata with narrative fields
+                mappings = db.get_platform_mappings_for_tracks([track.id], platform_name)
+                mapping = mappings.get(track.id)
+                if not mapping or not mapping.platform_track_id:
+                    continue
 
-    print(f"Enriched \"{playlist.name}\": {enriched} tracks updated, {skipped} already had metadata")
+                try:
+                    meta = client.get_track_metadata(mapping.platform_track_id)
+                    if meta:
+                        db.update_track_metadata(track.id, meta)
+                        enriched += 1
+                        if enriched % 10 == 0:
+                            print(f"  Enriched {enriched} tracks...", end="\r")
+                except (OSError, RuntimeError, ValueError, KeyError, AttributeError):
+                    continue
+
+            print(f"Enriched \"{playlist.name}\": {enriched} tracks updated, {skipped} already had metadata")
+
+    # LLM classification for narrative fields
+    if getattr(args, "classify", False) or not platform_name:
+        model = getattr(args, "model", None)
+        classified = _run_classification(db, tracks, playlist.name, model=model, playlist_id=playlist.id)
+        if classified < 0:
+            return 1
+
     return 0
+
+
+def _run_classification(db: Database, tracks: list, playlist_name: str, model: str | None = None, playlist_id: int | None = None) -> int:
+    """Run LLM classification on tracks missing narrative metadata.
+
+    Returns number of tracks classified, or -1 on backend error.
+    """
+    from tuneshift.sequencer.classifier import TrackClassifier
+
+    classifier = TrackClassifier(model=model)
+    if not classifier.available:
+        print(
+            f"No LLM backend available for classification. Set one of:\n"
+            f"  ANTHROPIC_API_KEY, OPENAI_API_KEY, TUNESHIFT_LLM_BASE_URL, or OLLAMA_HOST\n"
+            f"  (or TUNESHIFT_LLM_BACKEND to select explicitly)",
+            file=sys.stderr,
+        )
+        return -1
+
+    print(f"Classifying with {classifier.backend_info}...")
+
+    # Load playlist narrative for context
+    narrative = db.get_narrative(playlist_id) if playlist_id else None
+    if narrative:
+        print(f"  Using playlist narrative as classification context")
+
+    # Only classify tracks missing narrative fields
+    to_classify = []
+    for track in tracks:
+        meta = track.metadata or {}
+        if meta.get("narrator_stance") is None or meta.get("emotional_intensity") is None:
+            to_classify.append({"title": track.title, "artist": track.artist, "id": track.id})
+
+    if not to_classify:
+        print(f"  All tracks already classified.")
+        return 0
+
+    def progress(done: int, total: int) -> None:
+        print(f"  Classified {done}/{total}...", end="\r")
+
+    results = classifier.classify_batched(
+        [{"title": t["title"], "artist": t["artist"]} for t in to_classify],
+        batch_size=20,
+        progress_callback=progress,
+        narrative=narrative,
+    )
+
+    classified = 0
+    for track_info, result in zip(to_classify, results):
+        # Match by title/artist to guard against LLM dropping entries
+        result_title = result.get("title", "").lower().strip()
+        result_artist = result.get("artist", "").lower().strip()
+        expected_title = track_info["title"].lower().strip()
+        expected_artist = track_info["artist"].lower().strip()
+        if result_title and (
+            result_title != expected_title and result_artist != expected_artist
+        ):
+            logger.warning(
+                "Skipping mismatched result: expected '%s - %s' got '%s - %s'",
+                track_info["artist"], track_info["title"],
+                result.get("artist"), result.get("title"),
+            )
+            continue
+        db.update_track_metadata(track_info["id"], result)
+        classified += 1
+
+    print(f'  Classified {classified}/{len(to_classify)} tracks for "{playlist_name}"')
+    return classified
