@@ -1,14 +1,8 @@
-# Pride Playlist Drop - Discord Post
-
-Copy everything below the line into Discord:
-
----
-
 HAPPY PRIDE! :rainbow_flag::transgender_flag: :mirror_ball::nail_care::sparkles:
 
 I've been putting together some playlists and wanted to share them with y'all! They're a mix of queer anthems, protest music, glam, synth, drag, and just general good vibes. :notes:
 
-I personally use Tidal (hi-fi gay), so those links are the most complete and properly ordered. I'm working on getting everything mirrored to YouTube Music and Spotify as well, but those are still a work in progress. :hammer:
+I personally use Tidal (hi-fi gay), so those links are the most complete and properly ordered. Everything is now mirrored to Spotify and YouTube Music too! :hammer:
 
 ---
 
@@ -26,13 +20,7 @@ I personally use Tidal (hi-fi gay), so those links are the most complete and pro
 - [Atmos: Fruit Salad](https://tidal.com/playlist/53adc78b-9bb6-4c36-9edb-96206e133e47)
 - [Atmos: Lavender Menace](https://tidal.com/playlist/357c6bee-63cb-4b96-86ed-e19683d4ea1c)
 
-:mirror_ball: **YouTube Music** (work in progress, track order may be wonky):
-- [Trans Wrath](https://music.youtube.com/playlist?list=PLNa3xyjqmTaXeHP3BxL9fyf5CF-N3GHWJ)
-- [Diamond Dogs](https://music.youtube.com/playlist?list=PLNa3xyjqmTaXvGSbfxD2CBE2Q3mqbQoZV)
-- [Fruit Salad](https://music.youtube.com/playlist?list=PLNa3xyjqmTaWQXa3IGrQpEi58XB6_3eJh)
-- [LIBERATION](https://music.youtube.com/playlist?list=PLNa3xyjqmTaVVlb95mZvbyJLYaC484bUd)
-
-:sparkles: **Spotify** :sparkles:
+:green_heart: **Spotify**
 - [Trans Wrath](https://open.spotify.com/playlist/46PBz1NMeFsHVcGbFFuuLT) :fire:
 - [Diamond Dogs](https://open.spotify.com/playlist/1fypK6zXOf4zlpgDeobouK) :nail_care:
 - [Lavender Menace](https://open.spotify.com/playlist/3M9vLOXTJL0v2C4tUh6Jmy) :purple_heart:
@@ -40,6 +28,15 @@ I personally use Tidal (hi-fi gay), so those links are the most complete and pro
 - [Synths & Eyeliner](https://open.spotify.com/playlist/5CTf81QpLZLUdSu0ORQraR) :black_heart:
 - [LIBERATION](https://open.spotify.com/playlist/6JvzBMDgqOidQ2OjC4Ydyv) :fire:
 - [Mother](https://open.spotify.com/playlist/0TtwWebPPbETqQo3SljYDN) :purple_heart:
+
+:red_circle: **YouTube Music**
+- [Trans Wrath](https://music.youtube.com/playlist?list=PLNa3xyjqmTaXoxH8-pnEGhbkdaXJG_Z3a) :fire:
+- [Diamond Dogs](https://music.youtube.com/playlist?list=PLNa3xyjqmTaXvGSbfxD2CBE2Q3mqbQoZV) :nail_care:
+- [Lavender Menace](https://music.youtube.com/playlist?list=PLNa3xyjqmTaX9irNG9INzoZgKsJdDPdC0) :purple_heart:
+- [Fruit Salad](https://music.youtube.com/playlist?list=PLNa3xyjqmTaWQXa3IGrQpEi58XB6_3eJh) :watermelon:
+- [Synths & Eyeliner](https://music.youtube.com/playlist?list=PLNa3xyjqmTaXv8KBG5hAvMuqL2ze-udeX) :black_heart:
+- [LIBERATION](https://music.youtube.com/playlist?list=PLNa3xyjqmTaVVlb95mZvbyJLYaC484bUd) :fire:
+- [Mother](https://music.youtube.com/playlist?list=PLNa3xyjqmTaUMIM_8h0afufj6_FnOKeFe) :purple_heart:
 
 ---
 
