@@ -138,6 +138,105 @@ def duration_score(
     return max(0.0, 1.0 - delta / tolerance)
 
 
+_SONIC_BRIDGE_PAIRS = {
+    ("fade to silence", "silence to vocal"),
+    ("sustained chord", "pad"),
+    ("sustained chord", "synth pad"),
+    ("fade to silence", "ambient"),
+    ("hard cut", "drum fill"),
+    ("hard cut", "explosion"),
+    ("piano", "piano"),
+    ("guitar strum", "guitar"),
+}
+
+_COMPLEMENTARY_TEXTURES = {
+    ("warm", "lush"), ("raw", "gritty"), ("polished", "crystalline"),
+    ("lo-fi", "warm"), ("cold", "crystalline"),
+}
+
+_SMOOTH_SPACE_TRANSITIONS = {
+    ("intimate", "intimate"), ("intimate", "room"), ("room", "hall"),
+    ("hall", "vast"), ("vast", "vast"), ("room", "room"),
+}
+
+
+def transition_score(a: TrackMetadata, b: TrackMetadata) -> float:
+    """Score how well track A flows into track B sonically."""
+    score = 0.5
+
+    if a.closes_with and b.opens_with:
+        a_close = a.closes_with.lower()
+        b_open = b.opens_with.lower()
+        for close_kw, open_kw in _SONIC_BRIDGE_PAIRS:
+            if close_kw in a_close and open_kw in b_open:
+                score += 0.3
+                break
+        else:
+            if ("silence" in a_close and "explosion" in b_open) or \
+               ("silence" in a_close and "drum" in b_open):
+                score += 0.15
+
+    if a.sonic_texture and b.sonic_texture:
+        if a.sonic_texture == b.sonic_texture:
+            score += 0.1
+        elif (a.sonic_texture, b.sonic_texture) in _COMPLEMENTARY_TEXTURES or \
+             (b.sonic_texture, a.sonic_texture) in _COMPLEMENTARY_TEXTURES:
+            score += 0.05
+
+    if a.space and b.space:
+        if (a.space, b.space) in _SMOOTH_SPACE_TRANSITIONS or \
+           (b.space, a.space) in _SMOOTH_SPACE_TRANSITIONS:
+            score += 0.1
+
+    return min(1.0, score)
+
+
+_STANCE_PROGRESSION = {
+    ("vulnerable", "defiant"): 0.2,
+    ("defiant", "triumphant"): 0.2,
+    ("introspective", "celebratory"): 0.15,
+    ("introspective", "defiant"): 0.15,
+    ("bitter", "resigned"): 0.1,
+    ("joyful", "vulnerable"): 0.1,
+    ("vulnerable", "introspective"): 0.1,
+    ("resigned", "joyful"): 0.15,
+    ("triumphant", "bitter"): -0.1,
+    ("celebratory", "resigned"): -0.1,
+    ("joyful", "bitter"): -0.1,
+}
+
+
+def narrative_connection_score(a: TrackMetadata, b: TrackMetadata) -> float:
+    """Score thematic/lyrical connection between adjacent tracks."""
+    score = 0.5
+
+    if a.narrator_stance and b.narrator_stance:
+        pair = (a.narrator_stance, b.narrator_stance)
+        progression = _STANCE_PROGRESSION.get(pair, 0.0)
+        score += progression
+
+    if a.lyrical_subject and b.lyrical_subject:
+        a_words = set(a.lyrical_subject.lower().split())
+        b_words = set(b.lyrical_subject.lower().split())
+        overlap = len(a_words & b_words)
+        if overlap > 0:
+            score += min(0.15, overlap * 0.05)
+
+    return max(0.0, min(1.0, score))
+
+
+def emotional_arc_score(a: TrackMetadata, b: TrackMetadata) -> float:
+    """Score emotional intensity continuity (avoid jarring jumps)."""
+    if a.emotional_intensity is None or b.emotional_intensity is None:
+        return 0.5
+    delta = abs(a.emotional_intensity - b.emotional_intensity)
+    if delta < 0.2:
+        return 0.9
+    if delta < 0.4:
+        return 0.6
+    return 0.3
+
+
 def _has_dimension_data(track: TrackMetadata, dimension: str) -> bool:
     """Check if a track has data for a scoring dimension."""
     if dimension == "themes":
@@ -152,6 +251,12 @@ def _has_dimension_data(track: TrackMetadata, dimension: str) -> bool:
         return track.mode is not None
     if dimension == "key":
         return track.camelot_code is not None
+    if dimension == "transition":
+        return track.opens_with is not None or track.closes_with is not None
+    if dimension == "narrative":
+        return track.narrator_stance is not None
+    if dimension == "emotional_arc":
+        return track.emotional_intensity is not None
     return False
 
 
@@ -186,5 +291,11 @@ def score_pair(
             score += weight * mode_score(a.mode, b.mode, a.valence, b.valence)
         elif dimension == "key":
             score += weight * key_score(a.camelot_code, b.camelot_code)
+        elif dimension == "transition":
+            score += weight * transition_score(a, b)
+        elif dimension == "narrative":
+            score += weight * narrative_connection_score(a, b)
+        elif dimension == "emotional_arc":
+            score += weight * emotional_arc_score(a, b)
 
     return score
