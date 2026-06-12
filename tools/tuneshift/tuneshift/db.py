@@ -8,7 +8,7 @@ from pathlib import Path
 
 from tuneshift.models import PlatformMapping, Playlist, PlaylistPin, Track
 
-_SCHEMA_VERSION = 4
+_SCHEMA_VERSION = 5
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS tracks (
@@ -265,6 +265,16 @@ class Database:
                     )
                     """
                 )
+
+            if current_version < 5:
+                self.conn.execute("""
+                    DELETE FROM playlist_pins
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM playlist_tracks
+                        WHERE playlist_tracks.playlist_id = playlist_pins.playlist_id
+                        AND playlist_tracks.track_id = playlist_pins.track_id
+                    )
+                """)
 
             self.conn.execute(
                 "UPDATE schema_meta SET value = ? WHERE key = 'version'",
