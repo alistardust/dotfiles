@@ -20,7 +20,17 @@ Response format (JSON array):
     "vibes": ["vibe1", "vibe2", "vibe3"],
     "instruments": ["instrument1", "instrument2"],
     "density": "sparse",
-    "era_mood": ["era tag 1"]
+    "era_mood": ["era tag 1"],
+    "emotional_intensity": 0.8,
+    "lyrical_subject": "brief subject summary",
+    "narrator_stance": "defiant",
+    "sonic_texture": "polished",
+    "space": "vast",
+    "groove_feel": "driving",
+    "opens_with": "synth pad swell",
+    "closes_with": "hard cut",
+    "energy_arc_within": "builds to peak",
+    "confidence": 0.9
   }}
 ]
 
@@ -30,6 +40,16 @@ Rules:
 - instruments: primary instruments heard in the recording
 - density: one of "sparse", "mid", "dense"
 - era_mood: 1-2 tags capturing production era and cultural moment
+- emotional_intensity: 0.0-1.0 scale (how intense the emotional expression is)
+- lyrical_subject: 1-5 word summary of what the song is about
+- narrator_stance: one of "defiant", "vulnerable", "observational", "celebratory", "resigned", "nostalgic", "bitter", "triumphant", "playful", "inviting", "peaceful"
+- sonic_texture: one of "raw", "polished", "warm", "cold", "lush", "sparse", "gritty", "ethereal"
+- space: one of "intimate", "vast", "claustrophobic", "open"
+- groove_feel: one of "driving", "floating", "stomping", "swaying", "pulsing", "static"
+- opens_with: brief description of first 5 seconds
+- closes_with: brief description of last 5 seconds (e.g., "fade", "hard cut", "resolves to silence")
+- energy_arc_within: one of "steady", "builds to peak", "opens hot and fades", "roller coaster", "slow burn"
+- confidence: 0.0-1.0 scale (how well you know this specific recording)
 - Return ONLY the JSON array, no other text"""
 
 
@@ -83,10 +103,14 @@ class TrackClassifier:
     def __init__(
         self,
         client: Any = None,
-        model: str = "claude-haiku-4-5-20241022",
+        model: str | None = None,
     ) -> None:
         self._client = client if client is not None else build_default_client()
-        self._model = model
+        self._model = (
+            model
+            or os.environ.get("TUNESHIFT_CLASSIFIER_MODEL")
+            or "claude-haiku-4-5-20241022"
+        )
         try:
             from anthropic import APIError
             self._api_errors: tuple = (OSError, KeyError, IndexError, ValueError, APIError)

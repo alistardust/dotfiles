@@ -107,6 +107,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_enrich = sub.add_parser("enrich", help="Fetch audio metadata (BPM, key) from platform")
     p_enrich.add_argument("playlist", help="Playlist name")
     p_enrich.add_argument("--platform", default="tidal", help="Source platform (default: tidal)")
+    p_enrich.add_argument("--model", help="LLM model for classification (default: claude-haiku-4-5-20241022)")
 
     # export
     p_export = sub.add_parser("export", help="Export playlist to file")

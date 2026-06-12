@@ -57,5 +57,10 @@ def handle_enrich(args, db: Database) -> int:
         except (OSError, RuntimeError, ValueError, KeyError, AttributeError):
             continue
 
+    # Future: integrate TrackClassifier here
+    # from tuneshift.sequencer.classifier import TrackClassifier
+    # classifier = TrackClassifier(model=getattr(args, 'model', None))
+    # Classify tracks and update metadata with narrative fields
+
     print(f"Enriched \"{playlist.name}\": {enriched} tracks updated, {skipped} already had metadata")
     return 0
