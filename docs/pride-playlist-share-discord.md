@@ -16,7 +16,7 @@ I personally use Tidal (hi-fi gay), so those links are the most complete and pro
 - [LIBERATION](https://tidal.com/playlist/65527008-6032-4e5d-809e-8d840f087246) :fire: loud, defiant, unapologetic
 - [Mother](https://tidal.com/playlist/4cf63701-455a-48a8-adb0-24a1cf4c80e4) :purple_heart: drag anthems, RPDR in particular
 
-:headphones: If you have Tidal HiFi, the Dolby Atmos mixes are *chef's kiss*:
+:headphones: If you have Tidal HiFi, I'm also working on Dolby Atmos curated versions (WIP):
 - [Atmos: Fruit Salad](https://tidal.com/playlist/53adc78b-9bb6-4c36-9edb-96206e133e47)
 - [Atmos: Lavender Menace](https://tidal.com/playlist/357c6bee-63cb-4b96-86ed-e19683d4ea1c)
 
