@@ -12,13 +12,16 @@ from tuneshift.sequencer.scoring import score_pair
 def test_sequence_playlist_handles_missing_energy_and_valence(tmp_db: Path) -> None:
     """Sequencing works when tracks have not been classified yet."""
     db = Database(tmp_db)
+    playlist_id = db.create_playlist("Test")
     track_ids = [
         db.insert_track(Track(title="Long", artist="A", duration_seconds=400)),
         db.insert_track(Track(title="Near", artist="B", duration_seconds=205)),
         db.insert_track(Track(title="Short", artist="C", duration_seconds=200)),
     ]
+    for i, tid in enumerate(track_ids):
+        db.add_track_to_playlist(playlist_id, tid, position=i)
 
-    ordered = sequence_playlist(db, track_ids, arc="wave")
+    ordered = sequence_playlist(db, playlist_id, arc="wave")
 
     assert set(ordered) == set(track_ids)
     assert len(ordered) == len(track_ids)

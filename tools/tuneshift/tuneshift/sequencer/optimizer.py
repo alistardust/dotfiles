@@ -460,11 +460,16 @@ def _get_pinned_positions(
 
 def sequence_playlist(
     db: Database,
-    track_ids: list[int],
+    playlist_id: int,
     arc: str = "wave",
     profile: str = "default",
 ) -> list[int]:
-    """Sequence playlist tracks using tuneshift's database as metadata source."""
+    """Sequence playlist tracks using the database as authoritative source.
+
+    Loads the track list from DB. Tracks without energy/valence metadata
+    are appended at the end (never dropped).
+    """
+    track_ids = db.get_playlist_track_ids(playlist_id)
     if len(track_ids) <= 1:
         return list(track_ids)
 
@@ -474,18 +479,14 @@ def sequence_playlist(
     metadata_tracks = [metadata_map[track_id] for track_id in track_ids if track_id in metadata_map]
     missing_ids = [track_id for track_id in track_ids if track_id not in metadata_map]
 
-    if len(metadata_tracks) <= 1:
-        return [track.track_id for track in metadata_tracks] + missing_ids
+    if not metadata_tracks:
+        return list(track_ids)
 
-    # Load pins for the playlist (find playlist_id from first track)
+    if len(metadata_tracks) == 1:
+        return [metadata_tracks[0].track_id] + missing_ids
+
     from tuneshift.models import PlaylistPin
-    pins: list[PlaylistPin] = []
-    playlist_row = db.conn.execute(
-        "SELECT playlist_id FROM playlist_tracks WHERE track_id = ? LIMIT 1",
-        (track_ids[0],),
-    ).fetchone()
-    if playlist_row:
-        pins = db.get_pins(playlist_row[0])
+    pins: list[PlaylistPin] = db.get_pins(playlist_id)
 
     ordered_tracks = optimize_sequence(
         metadata_tracks,
@@ -498,7 +499,17 @@ def sequence_playlist(
         penalty_overrides=profile_config.penalty_overrides,
         pins=pins,
     )
-    return [track.track_id for track in ordered_tracks] + missing_ids
+
+    result = [track.track_id for track in ordered_tracks] + missing_ids
+
+    if missing_ids:
+        import sys
+        print(
+            f"  Warning: {len(missing_ids)} track(s) without sequencer metadata appended at end",
+            file=sys.stderr,
+        )
+
+    return result
 
 
 def _two_opt(

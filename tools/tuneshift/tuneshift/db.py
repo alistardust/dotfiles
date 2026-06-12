@@ -566,6 +566,14 @@ class Database:
         )
         self.conn.commit()
 
+    def get_playlist_track_ids(self, playlist_id: int) -> list[int]:
+        """Return ordered track IDs for a playlist."""
+        rows = self.conn.execute(
+            "SELECT track_id FROM playlist_tracks WHERE playlist_id = ? ORDER BY position",
+            (playlist_id,),
+        ).fetchall()
+        return [row[0] for row in rows]
+
     def get_playlist_tracks(self, playlist_id: int) -> list[Track]:
         """Get ordered tracks for a playlist."""
         rows = self.conn.execute(

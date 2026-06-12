@@ -32,9 +32,7 @@ def handle_order(args, db: Database) -> int:
         print(f'Playlist "{playlist.name}" is empty.')
         return 0
 
-    track_ids = [track.id for track in tracks if track.id is not None]
-
-    reordered = sequence_playlist(db, track_ids, arc=arc)
+    reordered = sequence_playlist(db, playlist.id, arc=arc)
     db.set_playlist_tracks(playlist.id, reordered)
 
     print(f'Reordered "{playlist.name}" ({len(reordered)} tracks, arc={arc})')
