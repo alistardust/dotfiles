@@ -366,25 +366,47 @@ _LEGACY_DIMENSION_MAP = {
 
 
 def _has_dimension_data(track: TrackMetadata, dimension: str) -> bool:
-    """Check if a track has data for a scoring dimension."""
-    if dimension == "themes":
+    """Check if a track has data for a scoring dimension.
+
+    Accepts both legacy names (themes, energy, etc.) and new-style names
+    (narrative_arc, energy_flow, etc.) by resolving through _LEGACY_DIMENSION_MAP
+    in reverse.
+    """
+    # Resolve new-style names to the legacy checks they depend on
+    _NEW_TO_CHECK = {
+        "narrative_arc": "narrative",
+        "energy_flow": "energy",
+        "mood_continuity": "themes",
+        "sonic_texture": "instrumentation",
+        "lyrical_thread": "themes",
+        "emotional_arc": "emotional_arc",
+        "groove_coherence": "bpm",
+        "era_mood": "themes",
+        "variety": "instrumentation",
+        "artist_separation": "artist_separation",
+    }
+    check_name = _NEW_TO_CHECK.get(dimension, dimension)
+
+    if check_name == "themes":
         return len(track.themes) > 0 or len(track.vibes) > 0
-    if dimension == "energy":
+    if check_name == "energy":
         return track.energy is not None
-    if dimension == "instrumentation":
+    if check_name == "instrumentation":
         return len(track.instruments) > 0 or track.acousticness is not None
-    if dimension == "bpm":
+    if check_name == "bpm":
         return track.bpm is not None
-    if dimension == "mode":
+    if check_name == "mode":
         return track.mode is not None
-    if dimension == "key":
+    if check_name == "key":
         return track.camelot_code is not None
-    if dimension == "transition":
+    if check_name == "transition":
         return track.opens_with is not None or track.closes_with is not None
-    if dimension == "narrative":
+    if check_name == "narrative":
         return track.narrator_stance is not None
-    if dimension == "emotional_arc":
+    if check_name == "emotional_arc":
         return track.emotional_intensity is not None
+    if check_name == "artist_separation":
+        return True  # Always applicable (uses track.artist)
     return False
 
 

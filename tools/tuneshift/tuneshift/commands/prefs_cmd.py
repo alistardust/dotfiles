@@ -1,4 +1,5 @@
 """Preferences command: manage global version preferences."""
+import copy
 import json
 from pathlib import Path
 
@@ -22,11 +23,11 @@ def load_global_preferences(config_path: Path | None = None) -> dict:
     """Load global preferences from TOML config file."""
     path = config_path or DEFAULT_CONFIG_PATH
     if not path.exists():
-        return dict(DEFAULT_PREFS)
+        return copy.deepcopy(DEFAULT_PREFS)
     with open(path, "rb") as f:
         data = tomllib.load(f)
-    # Merge with defaults
-    result = dict(DEFAULT_PREFS)
+    # Merge with defaults (deep copy to avoid mutating module-level constant)
+    result = copy.deepcopy(DEFAULT_PREFS)
     if "version_preferences" in data:
         result["version_preferences"].update(data["version_preferences"])
     return result

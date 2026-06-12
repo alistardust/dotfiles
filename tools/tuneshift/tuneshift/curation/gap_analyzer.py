@@ -52,16 +52,23 @@ def analyze_gaps(
         curr_section = sections[i]
         next_section = sections[i + 1]
 
-        # Get intensities from tracks in/near current section end
+        # Filter tracks by section position ranges (sections use 1-based positions)
+        curr_start = curr_section["start"] - 1  # Convert to 0-based index
+        curr_end = curr_section["end"] - 1
+        next_start = next_section["start"] - 1
+        next_end = next_section["end"] - 1
+
         curr_intensities = [
             t.emotional_intensity
-            for t in tracks
+            for idx, t in enumerate(tracks)
             if t.emotional_intensity is not None
+            and curr_start <= idx <= curr_end
         ]
         next_intensities = [
             t.emotional_intensity
-            for t in tracks
+            for idx, t in enumerate(tracks)
             if t.emotional_intensity is not None
+            and next_start <= idx <= next_end
         ]
 
         if curr_intensities and next_intensities:
