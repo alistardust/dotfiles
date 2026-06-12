@@ -156,12 +156,29 @@ def build_parser() -> argparse.ArgumentParser:
     p_weights.add_argument("--preset", help="Named preset to apply")
     p_weights.add_argument("values", nargs="*", help="dimension=value pairs")
 
+    # curate
+    p_curate = sub.add_parser("curate", help="Curate playlist (trim/analyze/fill)")
+    p_curate.add_argument("playlist", help="Playlist name")
+    p_curate.add_argument("mode", choices=["trim", "analyze", "fill"], help="Curation mode")
+    p_curate.add_argument("--dry-run", action="store_true", help="Preview without applying")
+    p_curate.add_argument("--strategy", default="quick", choices=["quick", "hybrid", "deep"], help="Curation strategy")
+    p_curate.add_argument("--target-tracks", type=int, help="Target track count for trim")
+    p_curate.add_argument("--hard-limit", type=int, help="Hard limit track count")
+
     # prefs
     p_prefs = sub.add_parser("prefs", help="Manage global version preferences")
     p_prefs.add_argument("action", choices=["show", "set"], help="Show or set preferences")
     p_prefs.add_argument("key", nargs="?", help="Preference key (section.name)")
     p_prefs.add_argument("value", nargs="?", help="Value to set")
     p_prefs.add_argument("--config-path", help="Path to preferences file")
+
+    # share
+    p_share = sub.add_parser("share", help="Generate shareable links for a playlist")
+    p_share.add_argument("name", help="Playlist name")
+    p_share.add_argument(
+        "--format", choices=["plain", "markdown", "slack", "discord", "urls"],
+        default="plain", help="Output format (default: plain)",
+    )
 
     # Shell completions via shtab
     try:
@@ -245,9 +262,15 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "weights":
             from tuneshift.commands.weights_cmd import handle_weights
             return handle_weights(args, db)
+        elif args.command == "curate":
+            from tuneshift.commands.curate_cmd import handle_curate
+            return handle_curate(args, db)
         elif args.command == "prefs":
             from tuneshift.commands.prefs_cmd import handle_prefs
             return handle_prefs(args)
+        elif args.command == "share":
+            from tuneshift.commands.share_cmd import handle_share
+            return handle_share(args, db)
         else:
             parser.print_help()
             return 1
