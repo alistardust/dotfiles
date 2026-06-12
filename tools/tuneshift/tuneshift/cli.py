@@ -181,8 +181,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     # link
-    p_link = sub.add_parser("link", help="Auto-discover and link platform playlist IDs by name")
+    p_link = sub.add_parser("link", help="Link platform playlist IDs (auto-discover or manual)")
     p_link.add_argument("platform", choices=["tidal", "spotify", "ytmusic"])
+    p_link.add_argument("name", nargs="?", help="Playlist name (for manual link)")
+    p_link.add_argument("url", nargs="?", help="Platform URL or playlist ID (for manual link)")
     p_link.add_argument("--quiet", "-q", action="store_true", help="Suppress 'not found' messages")
 
     # Shell completions via shtab

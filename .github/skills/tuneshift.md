@@ -166,8 +166,12 @@ Resolution cascade: explicit CLI weights > DB-stored playlist weights > preset d
 
 ## Platform Credentials
 
-- Tidal: OAuth session at `~/.local/share/tuneshift/tidal_session.json`
-- YouTube Music: OAuth at `~/.local/share/tuneshift/oauth.json` (ytmusicapi)
+- Tidal: OAuth session at `~/.local/share/tuneshift/tidal.json`
+- YouTube Music: OAuth at `~/.local/share/tuneshift/ytmusic.json` (ytmusicapi)
+  - Client ID/secret: 1Password item "YouTube Data API - TuneShift"
+- Spotify: PKCE OAuth at `~/.local/share/tuneshift/spotify.json` (spotipy)
+  - Client ID: 1Password item "Spotify API - TuneShift" (credential field)
+  - Fallback: `SPOTIPY_CLIENT_ID` env var
 
 ## Important Patterns
 

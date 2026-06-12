@@ -22,13 +22,44 @@ _SCOPES = [
     "playlist-modify-public",
 ]
 
+# 1Password item for Spotify API credentials
+_OP_ITEM_TITLE = "Spotify API - TuneShift"
+
+
+def _get_spotify_client_id() -> str:
+    """Retrieve Spotify client_id.
+
+    Priority: env var > 1Password. No hardcoded fallback.
+    """
+    import subprocess
+
+    client_id = os.environ.get("SPOTIPY_CLIENT_ID")
+    if client_id:
+        return client_id
+
+    # Try 1Password CLI
+    try:
+        result = subprocess.run(
+            ["op", "item", "get", _OP_ITEM_TITLE, "--fields", "credential", "--reveal"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    raise RuntimeError(
+        f"No Spotify client_id found. Set SPOTIPY_CLIENT_ID env var, "
+        f"or configure 1Password CLI with item '{_OP_ITEM_TITLE}'."
+    )
+
 
 class SpotifyClient:
     """Spotify streaming platform client."""
 
     def __init__(self, token_path: Path | None = None, client_id: str | None = None) -> None:
         self._token_path = token_path or _TOKEN_FILE
-        self._client_id = client_id
+        self._client_id = client_id or _get_spotify_client_id()
         self._sp: spotipy.Spotify | None = None
         self._rate_limiter = RateLimiter(max_per_second=5.0)
 
@@ -39,9 +70,8 @@ class SpotifyClient:
     def login(self) -> bool:
         """Authenticate with Spotify using the PKCE browser flow."""
         self._prepare_token_path()
-        port = self._find_free_port()
         auth = self._build_auth(
-            redirect_uri=f"http://127.0.0.1:{port}/callback",
+            redirect_uri="http://127.0.0.1:8888/callback",
             open_browser=True,
         )
         token_info = self._call_api(lambda: auth.get_access_token(check_cache=False))
