@@ -17,6 +17,11 @@ For those of you on Spotify, here are the playlists that are mirrored so far:
 - [LIBERATION](https://open.spotify.com/playlist/6JvzBMDgqOidQ2OjC4Ydyv) :fire: loud, defiant, unapologetic
 - [Mother](https://open.spotify.com/playlist/0TtwWebPPbETqQo3SljYDN) :purple_heart: drag anthems, RPDR in particular
 
+Also adding one to the Tidal list that wasn't in the original drop:
+
+:headphones: **Tidal**
+- [Trans Wrath](https://tidal.com/playlist/02aab7ce-472c-492e-b615-59d831de23b9) :fire: rage anthems
+
 Track order might still be a little off compared to the Tidal versions (still working on that tooling), but the vibes are all there. :hammer:
 
 Happy Pride! :rainbow_flag::transgender_flag: :mirror_ball::nail_care::sparkles:
