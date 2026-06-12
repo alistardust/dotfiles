@@ -156,6 +156,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_weights.add_argument("--preset", help="Named preset to apply")
     p_weights.add_argument("values", nargs="*", help="dimension=value pairs")
 
+    # prefs
+    p_prefs = sub.add_parser("prefs", help="Manage global version preferences")
+    p_prefs.add_argument("action", choices=["show", "set"], help="Show or set preferences")
+    p_prefs.add_argument("key", nargs="?", help="Preference key (section.name)")
+    p_prefs.add_argument("value", nargs="?", help="Value to set")
+    p_prefs.add_argument("--config-path", help="Path to preferences file")
+
     # Shell completions via shtab
     try:
         import shtab
@@ -238,6 +245,9 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "weights":
             from tuneshift.commands.weights_cmd import handle_weights
             return handle_weights(args, db)
+        elif args.command == "prefs":
+            from tuneshift.commands.prefs_cmd import handle_prefs
+            return handle_prefs(args)
         else:
             parser.print_help()
             return 1
