@@ -425,6 +425,42 @@ def optimize_sequence(
 
     pinned_opener_id, pinned_closer_id, adjacency_groups, position_pins = _resolve_pins(pins, track_map)
 
+    # Narrative section-based sequencing: hard-place tracks into declared sections
+    if arc == "narrative" and narrative:
+        from tuneshift.sequencer.narrative_parser import parse_narrative
+        sections = parse_narrative(narrative)
+        if sections:
+            total_capacity = sum(s.capacity for s in sections)
+            # If sections cover all positions, use positional assignment
+            # (the narrative describes the intended order by position)
+            if total_capacity >= len(tracks):
+                ordered: list[TrackMetadata] = []
+                idx = 0
+                for section in sections:
+                    section_tracks = tracks[idx:idx + section.capacity]
+                    if len(section_tracks) > 1:
+                        section_ordered = _optimize_within_section(section_tracks, weights, arc)
+                        ordered.extend(section_ordered)
+                    else:
+                        ordered.extend(section_tracks)
+                    idx += section.capacity
+                # Any remaining tracks (if sections didn't cover all)
+                ordered.extend(tracks[idx:])
+                return ordered
+            else:
+                # Partial coverage: use fitness-based assignment
+                assignments = assign_tracks_to_sections(tracks, sections, goal=arc)
+                ordered = []
+                for section in sections:
+                    section_tracks = assignments.get(section.name, [])
+                    if len(section_tracks) > 1:
+                        section_ordered = _optimize_within_section(section_tracks, weights, arc)
+                        ordered.extend(section_ordered)
+                    else:
+                        ordered.extend(section_tracks)
+                ordered.extend(assignments.get("_flex", []))
+                return ordered
+
     # Infer intent early for narrative arc
     from tuneshift.sequencer.intent import infer_intent
     intent = infer_intent(tracks, narrative=narrative) if arc == "narrative" else None
@@ -632,6 +668,34 @@ def _two_opt(
             if no_improvement_count >= 10:
                 break
 
+    return result
+
+
+def _optimize_within_section(
+    tracks: list[TrackMetadata],
+    weights: dict | None,
+    arc: str,
+) -> list[TrackMetadata]:
+    """Optimize track order within a single narrative section using sonic scoring."""
+    if len(tracks) <= 2:
+        return tracks
+
+    from tuneshift.sequencer.scoring import score_pair, resolve_weights
+    resolved_weights = resolve_weights(weights, None, None)
+
+    # Greedy nearest-neighbor within section
+    remaining = list(tracks)
+    result = [remaining.pop(0)]
+    while remaining:
+        last = result[-1]
+        best_idx = 0
+        best_score = -1.0
+        for i, candidate in enumerate(remaining):
+            s = score_pair(last, candidate, resolved_weights)
+            if s > best_score:
+                best_score = s
+                best_idx = i
+        result.append(remaining.pop(best_idx))
     return result
 
 

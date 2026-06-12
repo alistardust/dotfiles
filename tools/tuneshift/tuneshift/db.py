@@ -865,7 +865,7 @@ class Database:
         )
         track = self.get_track(track_id)
         if track:
-            existing_meta = track.metadata or {}
+            existing_meta = dict(track.metadata) if track.metadata else {}
             for k in _METADATA_KEYS:
                 if k in meta:
                     existing_meta[k] = meta[k]
