@@ -27,6 +27,7 @@ class ReconcileResult:
     divergence_note: str | None = None
     alternatives: list[TrackResult] = field(default_factory=list)
     from_cache: bool = False
+    match_type: str = ""
 
 
 # --- Strategy functions ---
@@ -47,6 +48,29 @@ def _strategy_album_lookup(track, client) -> list[TrackResult]:
         return results
     except Exception:
         return []
+
+
+def _strategy_album_tracklist(track, client) -> list[TrackResult]:
+    """Search for album, then fetch its tracklist for title matching."""
+    if not track.album:
+        return []
+    try:
+        # Search for the album on platform
+        albums: list[AlbumResult] = client.search_album(track.album, limit=5)
+        if not albums:
+            return []
+
+        # Sort by edition preference (prefer standard editions)
+        albums = sorted(albums, key=lambda a: _edition_score(a.title))
+
+        # Get tracklist from the best album
+        best_album = albums[0]
+        tracklist = client.get_album_tracks(best_album.platform_id)
+
+        return tracklist
+    except Exception:
+        return []
+
 
 
 def _strategy_isrc(track, client) -> list[TrackResult]:
@@ -105,9 +129,10 @@ def _strategy_artist_browse(track, client) -> list[TrackResult]:
 
 # Strategy execution order with short-circuit thresholds
 _STRATEGIES = [
-    (_strategy_album_lookup, 90),
     (_strategy_isrc, 100),
     (_strategy_title_artist, 90),
+    (_strategy_album_tracklist, None),
+    (_strategy_album_lookup, 90),
     (_strategy_title_only, None),
     (_strategy_album_in_query, None),
     (_strategy_artist_browse, None),
@@ -155,16 +180,19 @@ def reconcile_track(
                 from_cache=True,
             )
 
-    # Multi-strategy candidate collection
+    # Multi-strategy candidate collection with strategy tracking
     all_candidates: list[TrackResult] = []
+    candidate_strategies: dict[str, str] = {}  # platform_id -> strategy_name
     seen_ids: set[str] = set()
 
     for strategy_fn, threshold in _STRATEGIES:
         new_candidates = strategy_fn(track, client)
+        strategy_name = strategy_fn.__name__.replace("_strategy_", "")
         for c in new_candidates:
             if c.platform_id not in seen_ids:
                 seen_ids.add(c.platform_id)
                 all_candidates.append(c)
+                candidate_strategies[c.platform_id] = strategy_name
 
         # Short-circuit check
         if threshold is not None and all_candidates:
@@ -212,6 +240,8 @@ def reconcile_track(
             f"{best_result.duration_seconds}s vs expected ~{track.duration_seconds}s"
         )
 
+    match_type = candidate_strategies.get(best_result.platform_id, "")
+
     return ReconcileResult(
         platform_track_id=best_result.platform_id,
         platform_title=best_result.title,
@@ -222,6 +252,7 @@ def reconcile_track(
         is_divergent=is_div,
         divergence_note=div_note,
         alternatives=[r for _, r in scored[1:4]],
+        match_type=match_type,
     )
 
 
