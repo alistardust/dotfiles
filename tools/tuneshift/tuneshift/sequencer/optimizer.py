@@ -5,6 +5,7 @@ import random
 from tuneshift.db import Database
 from tuneshift.sequencer.metadata import TrackMetadata, get_track_metadata_map
 from tuneshift.sequencer.modifiers import SequenceContext, score_candidate
+from tuneshift.sequencer.narrative_parser import NarrativeSection
 from tuneshift.sequencer.profiles import get_profile
 from tuneshift.sequencer.scoring import score_pair
 
@@ -632,3 +633,79 @@ def _two_opt(
                 break
 
     return result
+
+
+def _score_track_section_fitness(
+    track: TrackMetadata,
+    section: NarrativeSection,
+) -> float:
+    """Score how well a track fits a narrative section."""
+    score = 0.0
+
+    # Intensity match
+    track_intensity = track.emotional_intensity if track.emotional_intensity is not None else 0.5
+    intensity_match = 1.0 - abs(track_intensity - section.implied_intensity)
+    score += 0.5 * intensity_match
+
+    # Stance match
+    if section.implied_stance and track.narrator_stance:
+        if track.narrator_stance == section.implied_stance:
+            score += 0.3
+        elif track.narrator_stance in ("angry", "defiant", "fierce") and section.implied_stance == "defiant":
+            score += 0.2
+
+    # Lyrical/theme relevance to section description
+    if track.themes and section.description:
+        desc_words = set(section.description.lower().split())
+        track_themes = set(t.lower() for t in track.themes)
+        if desc_words & track_themes:
+            score += 0.2
+
+    return min(1.0, score)
+
+
+def assign_tracks_to_sections(
+    tracks: list[TrackMetadata],
+    sections: list[NarrativeSection],
+    goal: str,
+) -> dict[str, list[TrackMetadata]]:
+    """Assign tracks to narrative sections using greedy best-fit algorithm.
+
+    Returns dict mapping section name -> list of tracks assigned.
+    Unassigned tracks go to "_flex" key.
+    """
+    if not sections:
+        return {"_flex": list(tracks)}
+
+    # Score all (track, section) pairs
+    scores: list[tuple[float, TrackMetadata, NarrativeSection]] = []
+    for track in tracks:
+        for section in sections:
+            fitness = _score_track_section_fitness(track, section)
+            scores.append((fitness, track, section))
+
+    # Sort by fitness descending (best fits first)
+    scores.sort(key=lambda x: x[0], reverse=True)
+
+    # Greedy assignment
+    assignments: dict[str, list[TrackMetadata]] = {s.name: [] for s in sections}
+    assignments["_flex"] = []
+    assigned_tracks: set[int] = set()
+    section_counts: dict[str, int] = {s.name: 0 for s in sections}
+    section_caps: dict[str, int] = {s.name: s.capacity for s in sections}
+
+    for fitness, track, section in scores:
+        if track.track_id in assigned_tracks:
+            continue
+        if section_counts[section.name] >= section_caps[section.name]:
+            continue
+        assignments[section.name].append(track)
+        section_counts[section.name] += 1
+        assigned_tracks.add(track.track_id)
+
+    # Unassigned tracks go to flex pool
+    for track in tracks:
+        if track.track_id not in assigned_tracks:
+            assignments["_flex"].append(track)
+
+    return assignments
