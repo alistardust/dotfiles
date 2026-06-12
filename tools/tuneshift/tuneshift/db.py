@@ -805,6 +805,9 @@ class Database:
 
     def update_track_metadata(self, track_id: int, meta: dict) -> None:
         """Update a track's audio metadata fields from enrichment data."""
+        # Remap LLM field name to internal field name
+        if "confidence" in meta and "classification_confidence" not in meta:
+            meta["classification_confidence"] = meta.pop("confidence")
         updates = []
         params = []
         if "tempo" in meta:
@@ -825,7 +828,7 @@ class Database:
             "themes", "vibes", "instruments", "density", "era_mood",
             "emotional_intensity", "lyrical_subject", "narrator_stance",
             "sonic_texture", "space", "groove_feel", "opens_with",
-            "closes_with", "energy_arc_within", "confidence",
+            "closes_with", "energy_arc_within", "classification_confidence",
         )
         track = self.get_track(track_id)
         if track:

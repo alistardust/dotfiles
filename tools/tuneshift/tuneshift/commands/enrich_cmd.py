@@ -117,22 +117,36 @@ def _run_classification(db: Database, tracks: list, playlist_name: str, model: s
     )
 
     classified = 0
-    for track_info, result in zip(to_classify, results):
-        # Match by title/artist to guard against LLM dropping entries
+    # Build lookup map to match results by title/artist (guards against LLM reordering/dropping)
+    track_lookup: dict[tuple[str, str], dict] = {}
+    for t in to_classify:
+        key = (t["title"].lower().strip(), t["artist"].lower().strip())
+        track_lookup[key] = t
+
+    for result in results:
         result_title = result.get("title", "").lower().strip()
         result_artist = result.get("artist", "").lower().strip()
-        expected_title = track_info["title"].lower().strip()
-        expected_artist = track_info["artist"].lower().strip()
-        if result_title and (
-            result_title != expected_title and result_artist != expected_artist
-        ):
+        matched_track = None
+
+        if result_title or result_artist:
+            # Try exact match first
+            matched_track = track_lookup.get((result_title, result_artist))
+            # Fallback: match by title only (handles artist name variants)
+            if not matched_track and result_title:
+                for key, t in track_lookup.items():
+                    if key[0] == result_title:
+                        matched_track = t
+                        break
+
+        if not matched_track:
+            # If LLM omitted identifying fields, skip (no silent miswrite)
             logger.warning(
-                "Skipping mismatched result: expected '%s - %s' got '%s - %s'",
-                track_info["artist"], track_info["title"],
-                result.get("artist"), result.get("title"),
+                "Skipping unmatched LLM result: title='%s' artist='%s'",
+                result.get("title"), result.get("artist"),
             )
             continue
-        db.update_track_metadata(track_info["id"], result)
+
+        db.update_track_metadata(matched_track["id"], result)
         classified += 1
 
     print(f'  Classified {classified}/{len(to_classify)} tracks for "{playlist_name}"')

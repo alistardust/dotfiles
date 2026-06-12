@@ -170,14 +170,25 @@ def detect_backend() -> tuple[str, LLMBackend] | tuple[None, None]:
         raise ValueError("Grok is not and will never be a supported backend. Fuck Elon.")
 
     if explicit == "anthropic":
-        return "anthropic", AnthropicBackend()
+        try:
+            return "anthropic", AnthropicBackend()
+        except (ImportError, ValueError):
+            return None, None
     elif explicit in ("openai", "openai-compatible"):
-        return explicit, OpenAICompatibleBackend()
+        try:
+            return explicit, OpenAICompatibleBackend()
+        except (ImportError, ValueError, Exception):
+            return None, None
     elif explicit == "ollama":
-        return "ollama", OllamaBackend()
+        try:
+            return "ollama", OllamaBackend()
+        except (ImportError, ValueError, OSError):
+            return None, None
     elif explicit:
-        # Treat unknown explicit backend as openai-compatible
-        return "openai-compatible", OpenAICompatibleBackend()
+        try:
+            return "openai-compatible", OpenAICompatibleBackend()
+        except (ImportError, ValueError, Exception):
+            return None, None
 
     # Auto-detect
     if os.environ.get("ANTHROPIC_API_KEY"):
@@ -195,7 +206,7 @@ def detect_backend() -> tuple[str, LLMBackend] | tuple[None, None]:
     if os.environ.get("TUNESHIFT_LLM_BASE_URL"):
         try:
             return "openai-compatible", OpenAICompatibleBackend()
-        except (ImportError, ValueError):
+        except (ImportError, ValueError, Exception):
             pass
 
     # Check if Ollama is reachable
