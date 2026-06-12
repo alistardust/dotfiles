@@ -1,6 +1,9 @@
 """Pairwise transition scoring with weighted dimensions."""
 
+from collections.abc import Callable
+
 from tuneshift.sequencer.metadata import TrackMetadata
+from tuneshift.sequencer.weights import PRESETS
 
 
 def jaccard(set_a: list[str], set_b: list[str]) -> float:
@@ -321,6 +324,36 @@ DIMENSION_SCORERS: dict[str, Callable[[TrackMetadata, TrackMetadata], float]] = 
     "variety": score_variety,
     "artist_separation": score_artist_separation_transition,
 }
+
+# Default equal-weight blend when nothing specified
+DEFAULT_WEIGHTS: dict[str, float] = {dim: 0.5 for dim in DIMENSION_SCORERS}
+
+
+def resolve_weights(
+    cli_weights: dict[str, float] | None,
+    db_weights: dict[str, float] | None,
+    preset_name: str | None,
+) -> dict[str, float]:
+    """Resolve weight vector from cascade: CLI > DB > preset > default.
+
+    Priority: CLI-provided values override DB, which overrides preset.
+    Unspecified dimensions fall through to the next level.
+    """
+    # Start with base
+    if preset_name and preset_name in PRESETS:
+        base = dict(PRESETS[preset_name])
+    else:
+        base = dict(DEFAULT_WEIGHTS)
+
+    # DB overrides base
+    if db_weights:
+        base.update(db_weights)
+
+    # CLI overrides everything
+    if cli_weights:
+        base.update(cli_weights)
+
+    return base
 
 _LEGACY_DIMENSION_MAP = {
     "themes": "mood_continuity",
