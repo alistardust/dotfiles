@@ -237,6 +237,101 @@ def emotional_arc_score(a: TrackMetadata, b: TrackMetadata) -> float:
     return 0.3
 
 
+def score_mood_continuity(a: TrackMetadata, b: TrackMetadata) -> float:
+    """Score mood/emotional continuity between adjacent tracks."""
+    if a.emotional_intensity is None and b.emotional_intensity is None:
+        if not a.vibes and not b.vibes:
+            return 0.5
+    intensity_sim = 1.0 - abs(
+        (a.emotional_intensity or 0.5) - (b.emotional_intensity or 0.5)
+    )
+    vibes_sim = jaccard(a.vibes, b.vibes)
+    era_sim = jaccard(a.era_mood, b.era_mood) if a.era_mood or b.era_mood else 0.5
+    return 0.5 * intensity_sim + 0.3 * vibes_sim + 0.2 * era_sim
+
+
+def score_sonic_texture(a: TrackMetadata, b: TrackMetadata) -> float:
+    """Score sonic texture/space/density transition quality."""
+    if not a.sonic_texture and not b.sonic_texture:
+        return 0.5
+    texture_match = 1.0 if a.sonic_texture == b.sonic_texture else 0.3
+    space_match = 1.0 if a.space == b.space else 0.4
+    density_map = {"sparse": 0, "mid": 1, "dense": 2}
+    da = density_map.get(a.density or "mid", 1)
+    db_val = density_map.get(b.density or "mid", 1)
+    density_sim = 1.0 - abs(da - db_val) / 2.0
+    return 0.4 * texture_match + 0.3 * space_match + 0.3 * density_sim
+
+
+def score_lyrical_thread(a: TrackMetadata, b: TrackMetadata) -> float:
+    """Score lyrical subject and narrator stance continuity."""
+    if not a.lyrical_subject and not b.lyrical_subject:
+        return 0.5
+    subject_match = 1.0 if a.lyrical_subject == b.lyrical_subject else 0.3
+    stance_match = 1.0 if a.narrator_stance == b.narrator_stance else 0.4
+    return 0.6 * subject_match + 0.4 * stance_match
+
+
+def score_groove_coherence(a: TrackMetadata, b: TrackMetadata) -> float:
+    """Score rhythmic/groove coherence."""
+    groove_match = 1.0 if a.groove_feel == b.groove_feel else 0.4
+    bpm_sim = bpm_score(a.bpm, b.bpm) if a.bpm and b.bpm else 0.5
+    density_map = {"sparse": 0, "mid": 1, "dense": 2}
+    da = density_map.get(a.density or "mid", 1)
+    db_val = density_map.get(b.density or "mid", 1)
+    density_sim = 1.0 - abs(da - db_val) / 2.0
+    return 0.4 * groove_match + 0.35 * bpm_sim + 0.25 * density_sim
+
+
+def score_era_mood_transition(a: TrackMetadata, b: TrackMetadata) -> float:
+    """Score era/aesthetic coherence."""
+    return jaccard(a.era_mood, b.era_mood) if a.era_mood or b.era_mood else 0.5
+
+
+def score_variety(a: TrackMetadata, b: TrackMetadata) -> float:
+    """Score variety/contrast (inverse of similarity)."""
+    theme_sim = jaccard(a.themes, b.themes)
+    vibe_sim = jaccard(a.vibes, b.vibes)
+    instrument_sim = jaccard(a.instruments, b.instruments)
+    similarity = 0.4 * theme_sim + 0.3 * vibe_sim + 0.3 * instrument_sim
+    return 1.0 - similarity
+
+
+def score_artist_separation_transition(a: TrackMetadata, b: TrackMetadata) -> float:
+    """Score artist separation (1.0 if different artist, 0.0 if same)."""
+    if a.artist.lower().strip() == b.artist.lower().strip():
+        return 0.0
+    return 1.0
+
+
+def score_narrative_arc_transition(a: TrackMetadata, b: TrackMetadata) -> float:
+    """Narrative arc is enforced by chapter hard-breaks, not pairwise scoring."""
+    return 0.5
+
+
+DIMENSION_SCORERS: dict[str, Callable[[TrackMetadata, TrackMetadata], float]] = {
+    "narrative_arc": score_narrative_arc_transition,
+    "energy_flow": energy_score,
+    "mood_continuity": score_mood_continuity,
+    "sonic_texture": score_sonic_texture,
+    "lyrical_thread": score_lyrical_thread,
+    "emotional_arc": emotional_arc_score,
+    "groove_coherence": score_groove_coherence,
+    "era_mood": score_era_mood_transition,
+    "variety": score_variety,
+    "artist_separation": score_artist_separation_transition,
+}
+
+_LEGACY_DIMENSION_MAP = {
+    "themes": "mood_continuity",
+    "energy": "energy_flow",
+    "instrumentation": "sonic_texture",
+    "bpm": "groove_coherence",
+    "narrative": "narrative_arc",
+    "emotional_arc": "emotional_arc",
+}
+
+
 def _has_dimension_data(track: TrackMetadata, dimension: str) -> bool:
     """Check if a track has data for a scoring dimension."""
     if dimension == "themes":
@@ -267,35 +362,26 @@ def score_pair(
 ) -> float:
     """Compute a weighted transition score between two tracks."""
     applicable: dict[str, float] = {}
+    
     for dimension, weight in weights.items():
+        if weight <= 0:
+            continue
+        resolved = _LEGACY_DIMENSION_MAP.get(dimension, dimension)
+        if resolved not in DIMENSION_SCORERS:
+            continue
         if _has_dimension_data(a, dimension) and _has_dimension_data(b, dimension):
             applicable[dimension] = weight
-
+    
     if not applicable:
         return duration_score(a.duration_ms, b.duration_ms)
-
+    
     total = sum(applicable.values())
-    normalized = {key: value / total for key, value in applicable.items()}
-
+    normalized = {dim: w / total for dim, w in applicable.items()}
+    
     score = 0.0
     for dimension, weight in normalized.items():
-        if dimension == "themes":
-            score += weight * theme_score(a, b)
-        elif dimension == "energy":
-            score += weight * energy_score(a, b)
-        elif dimension == "instrumentation":
-            score += weight * instrumentation_score(a, b)
-        elif dimension == "bpm":
-            score += weight * bpm_score(a.bpm, b.bpm)
-        elif dimension == "mode":
-            score += weight * mode_score(a.mode, b.mode, a.valence, b.valence)
-        elif dimension == "key":
-            score += weight * key_score(a.camelot_code, b.camelot_code)
-        elif dimension == "transition":
-            score += weight * transition_score(a, b)
-        elif dimension == "narrative":
-            score += weight * narrative_connection_score(a, b)
-        elif dimension == "emotional_arc":
-            score += weight * emotional_arc_score(a, b)
-
+        resolved = _LEGACY_DIMENSION_MAP.get(dimension, dimension)
+        scorer = DIMENSION_SCORERS[resolved]
+        score += weight * scorer(a, b)
+    
     return score
