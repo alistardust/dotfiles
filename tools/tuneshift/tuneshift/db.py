@@ -715,6 +715,43 @@ class Database:
             )
         return result
 
+    def set_platform_mapping(
+        self,
+        track_id: int,
+        platform: str,
+        platform_track_id: str,
+        user_approved: bool = False,
+        platform_title: str | None = None,
+        platform_artist: str | None = None,
+        platform_album: str | None = None,
+        match_score: int | None = None,
+    ) -> None:
+        """Set or update a platform mapping for a track."""
+        with self.conn:
+            self.conn.execute(
+                """INSERT INTO platform_tracks
+                   (track_id, platform, platform_track_id, platform_title, platform_artist,
+                    platform_album, match_score, user_approved)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(track_id, platform) DO UPDATE SET
+                   platform_track_id = excluded.platform_track_id,
+                   platform_title = excluded.platform_title,
+                   platform_artist = excluded.platform_artist,
+                   platform_album = excluded.platform_album,
+                   match_score = excluded.match_score,
+                   user_approved = excluded.user_approved""",
+                (track_id, platform, platform_track_id, platform_title, platform_artist,
+                 platform_album, match_score, int(user_approved)),
+            )
+
+    def delete_platform_mapping(self, track_id: int, platform: str) -> None:
+        """Remove a platform mapping for a track."""
+        with self.conn:
+            self.conn.execute(
+                "DELETE FROM platform_tracks WHERE track_id = ? AND platform = ?",
+                (track_id, platform),
+            )
+
     def _row_to_track(self, row: sqlite3.Row) -> Track:
         """Convert a DB row to a Track model."""
         return Track(

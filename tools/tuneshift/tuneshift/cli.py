@@ -115,6 +115,21 @@ def build_parser() -> argparse.ArgumentParser:
                           help="Output format (default: text)")
     p_export.add_argument("-o", "--output", default="-", help="Output file (default: stdout)")
 
+    # map
+    p_map = sub.add_parser("map", help="Manually map a track to a platform ID")
+    p_map.add_argument("playlist", help="Playlist name")
+    p_map.add_argument("title", help="Track title (substring match)")
+    p_map.add_argument("--tidal", help="Tidal track ID")
+    p_map.add_argument("--ytmusic", help="YouTube Music video ID")
+    p_map.add_argument("--verify", action="store_true", help="Verify ID exists on platform")
+
+    # unmap
+    p_unmap = sub.add_parser("unmap", help="Remove a manual platform mapping")
+    p_unmap.add_argument("playlist", help="Playlist name")
+    p_unmap.add_argument("title", help="Track title (substring match)")
+    p_unmap.add_argument("--tidal", action="store_true", help="Remove Tidal mapping")
+    p_unmap.add_argument("--ytmusic", action="store_true", help="Remove YouTube Music mapping")
+
     # Shell completions via shtab
     try:
         import shtab
@@ -182,6 +197,12 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "export":
             from tuneshift.commands.export_cmd import handle_export
             return handle_export(args, db)
+        elif args.command == "map":
+            from tuneshift.commands.map_cmd import handle_map
+            return handle_map(args, db)
+        elif args.command == "unmap":
+            from tuneshift.commands.map_cmd import handle_unmap
+            return handle_unmap(args, db)
         else:
             parser.print_help()
             return 1
