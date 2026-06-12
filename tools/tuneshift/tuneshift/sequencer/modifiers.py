@@ -304,3 +304,75 @@ def score_candidate(
 
     result = effective_base * product
     return max(result, SCORE_FLOOR)
+
+
+def _intensity_curve(frac: float) -> float:
+    """Emotional intensity target independent of energy."""
+    if frac < 0.15:
+        return 0.4
+    if frac < 0.35:
+        return 0.55
+    if frac < 0.55:
+        return 0.7
+    if frac < 0.75:
+        return 0.95
+    if frac < 0.90:
+        return 0.6
+    return 0.45
+
+
+def intensity_arc_modifier(
+    candidate: TrackMetadata,
+    context: SequenceContext,
+    strength: float = 1.0,
+) -> float:
+    """Reward tracks whose emotional intensity fits the narrative position."""
+    if context.total <= 1:
+        return 1.0
+    intensity = candidate.emotional_intensity
+    if intensity is None:
+        return 1.0
+    frac = context.position / max(context.total - 1, 1)
+    target = _intensity_curve(frac)
+    fit = 1.0 - abs(intensity - target)
+    return (0.85 + 0.30 * fit) * strength + 1.0 * (1.0 - strength)
+
+
+def chapter_break_modifier(
+    candidate: TrackMetadata,
+    context: SequenceContext,
+    intent: "PlaylistIntent | None" = None,
+    strength: float = 1.0,
+) -> float:
+    """At chapter boundaries, reward contrast."""
+    if intent is None or context.position not in intent.chapter_boundaries:
+        return 1.0
+
+    recent_textures = {t.sonic_texture for t in context.recent_tracks if t.sonic_texture}
+    recent_stances = {t.narrator_stance for t in context.recent_tracks if t.narrator_stance}
+
+    novelty_bonus = 0.0
+    if candidate.sonic_texture and candidate.sonic_texture not in recent_textures:
+        novelty_bonus += 0.1
+    if candidate.narrator_stance and candidate.narrator_stance not in recent_stances:
+        novelty_bonus += 0.1
+
+    return (1.0 + novelty_bonus) * strength + 1.0 * (1.0 - strength)
+
+
+def duration_pacing_modifier(
+    candidate: TrackMetadata,
+    context: SequenceContext,
+    strength: float = 1.0,
+) -> float:
+    """Penalize same-length runs."""
+    if not candidate.duration_ms:
+        return 1.0
+
+    recent_durations = [t.duration_ms for t in context.recent_tracks if t.duration_ms]
+    if len(recent_durations) >= 3:
+        avg_recent = sum(recent_durations) / len(recent_durations)
+        if abs(candidate.duration_ms - avg_recent) < 25000:
+            return 0.92 * strength + 1.0 * (1.0 - strength)
+
+    return 1.0
