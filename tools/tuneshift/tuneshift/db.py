@@ -932,3 +932,67 @@ class Database:
             auto_reorder=bool(row["auto_reorder"]),
             reorder_arc=row["reorder_arc"],
         )
+
+    def set_goal(self, playlist_id: int, goal: str | None) -> None:
+        """Set the goal for a playlist."""
+        self.conn.execute("UPDATE playlists SET goal = ? WHERE id = ?", (goal, playlist_id))
+        self.conn.commit()
+
+    def get_goal(self, playlist_id: int) -> str | None:
+        """Get the goal for a playlist."""
+        row = self.conn.execute("SELECT goal FROM playlists WHERE id = ?", (playlist_id,)).fetchone()
+        return row[0] if row else None
+
+    def set_weights(self, playlist_id: int, weights: dict | None) -> None:
+        """Set the weights for a playlist."""
+        val = json.dumps(weights) if weights else None
+        self.conn.execute("UPDATE playlists SET weights = ? WHERE id = ?", (val, playlist_id))
+        self.conn.commit()
+
+    def get_weights(self, playlist_id: int) -> dict | None:
+        """Get the weights for a playlist."""
+        row = self.conn.execute("SELECT weights FROM playlists WHERE id = ?", (playlist_id,)).fetchone()
+        return json.loads(row[0]) if row and row[0] else None
+
+    def set_constraints(self, playlist_id: int, constraints: dict | None) -> None:
+        """Set the curation constraints for a playlist."""
+        val = json.dumps(constraints) if constraints else None
+        self.conn.execute("UPDATE playlists SET curation_constraints = ? WHERE id = ?", (val, playlist_id))
+        self.conn.commit()
+
+    def get_constraints(self, playlist_id: int) -> dict | None:
+        """Get the curation constraints for a playlist."""
+        row = self.conn.execute("SELECT curation_constraints FROM playlists WHERE id = ?", (playlist_id,)).fetchone()
+        return json.loads(row[0]) if row and row[0] else None
+
+    def set_preferences(self, playlist_id: int, prefs: dict | None) -> None:
+        """Set the preferences for a playlist."""
+        val = json.dumps(prefs) if prefs else None
+        self.conn.execute("UPDATE playlists SET preferences = ? WHERE id = ?", (val, playlist_id))
+        self.conn.commit()
+
+    def get_preferences(self, playlist_id: int) -> dict | None:
+        """Get the preferences for a playlist."""
+        row = self.conn.execute("SELECT preferences FROM playlists WHERE id = ?", (playlist_id,)).fetchone()
+        return json.loads(row[0]) if row and row[0] else None
+
+    def set_playlist_type(self, playlist_id: int, playlist_type: str | None) -> None:
+        """Set the playlist type."""
+        self.conn.execute("UPDATE playlists SET playlist_type = ? WHERE id = ?", (playlist_type, playlist_id))
+        self.conn.commit()
+
+    def get_playlist_type(self, playlist_id: int) -> str | None:
+        """Get the playlist type."""
+        row = self.conn.execute("SELECT playlist_type FROM playlists WHERE id = ?", (playlist_id,)).fetchone()
+        return row[0] if row else None
+
+    def set_mood_profile(self, playlist_id: int, mood_profile: dict | None) -> None:
+        """Set the mood profile for a playlist."""
+        val = json.dumps(mood_profile) if mood_profile else None
+        self.conn.execute("UPDATE playlists SET mood_profile = ? WHERE id = ?", (val, playlist_id))
+        self.conn.commit()
+
+    def get_mood_profile(self, playlist_id: int) -> dict | None:
+        """Get the mood profile for a playlist."""
+        row = self.conn.execute("SELECT mood_profile FROM playlists WHERE id = ?", (playlist_id,)).fetchone()
+        return json.loads(row[0]) if row and row[0] else None
