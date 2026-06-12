@@ -142,6 +142,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_unmap.add_argument("--tidal", action="store_true", help="Remove Tidal mapping")
     p_unmap.add_argument("--ytmusic", action="store_true", help="Remove YouTube Music mapping")
 
+    # goal
+    p_goal = sub.add_parser("goal", help="Set or show playlist goal/theme")
+    p_goal.add_argument("playlist", help="Playlist name")
+    p_goal.add_argument("text", nargs="?", help="Goal text to set")
+    p_goal.add_argument("--clear", action="store_true", help="Clear the goal")
+
+    # weights
+    p_weights = sub.add_parser("weights", help="Manage sequencing weight presets")
+    p_weights.add_argument("action", nargs="?", default="list", choices=["list", "set", "show"])
+    p_weights.add_argument("playlist", nargs="?", help="Playlist name")
+    p_weights.add_argument("--preset", help="Named preset to apply")
+    p_weights.add_argument("values", nargs="*", help="dimension=value pairs")
+
     # Shell completions via shtab
     try:
         import shtab
@@ -218,6 +231,12 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "unmap":
             from tuneshift.commands.map_cmd import handle_unmap
             return handle_unmap(args, db)
+        elif args.command == "goal":
+            from tuneshift.commands.goal_cmd import handle_goal
+            return handle_goal(args, db)
+        elif args.command == "weights":
+            from tuneshift.commands.weights_cmd import handle_weights
+            return handle_weights(args, db)
         else:
             parser.print_help()
             return 1
