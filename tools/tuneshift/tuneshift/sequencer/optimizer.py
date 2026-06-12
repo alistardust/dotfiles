@@ -445,6 +445,12 @@ def optimize_sequence(
         tracks, track_map, pinned_opener_id, pinned_closer_id, arc,
     )
 
+    # Remove opener/closer from position_pins to prevent duplication
+    position_pins = {
+        pos: tid for pos, tid in position_pins.items()
+        if tid != opener.track_id and tid != closer.track_id
+    }
+
     # Remove position-pinned tracks from the free pool (they'll be inserted after)
     position_pinned_ids = set(position_pins.values())
     remaining = [t for t in remaining if t.track_id not in position_pinned_ids]
