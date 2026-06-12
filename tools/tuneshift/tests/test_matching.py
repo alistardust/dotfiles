@@ -6,6 +6,7 @@ from tuneshift.matching import (
     score_match,
     classify_results,
     is_remaster,
+    duration_proximity_bonus,
 )
 
 
@@ -81,3 +82,15 @@ def test_is_remaster_empty() -> None:
 ])
 def test_normalize_title_strips_featured_artists(raw, expected):
     assert normalize_title(raw) == expected
+
+
+@pytest.mark.parametrize("candidate,canonical,expected", [
+    (200, 200, 10),      # exact match
+    (195, 200, 10),      # within 5%
+    (180, 200, 5),       # within 15% (10% diff)
+    (150, 200, 0),       # too different (25% diff)
+    (None, 200, 0),      # missing candidate duration
+    (200, None, 0),      # missing canonical duration
+])
+def test_duration_proximity_bonus(candidate, canonical, expected):
+    assert duration_proximity_bonus(candidate, canonical) == expected

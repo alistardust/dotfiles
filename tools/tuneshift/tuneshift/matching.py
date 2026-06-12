@@ -223,6 +223,26 @@ def duration_penalty(
     return 0
 
 
+def duration_proximity_bonus(
+    candidate_duration: int | None,
+    canonical_duration: int | None,
+) -> int:
+    """Bonus 0-10 for duration proximity to canonical track.
+
+    Rewards candidates whose duration closely matches what we expect.
+    """
+    if not candidate_duration or not canonical_duration:
+        return 0
+    if canonical_duration < 30:
+        return 0
+    diff_pct = abs(candidate_duration - canonical_duration) / canonical_duration
+    if diff_pct < 0.05:
+        return 10
+    if diff_pct < 0.15:
+        return 5
+    return 0
+
+
 def score_match_with_version(
     source_title: str,
     source_artist: str,
@@ -246,7 +266,8 @@ def score_match_with_version(
     )
     penalty = version_penalty(result_title, result_album)
     dur_pen = duration_penalty(result_duration, reference_duration, all_durations)
-    return max(0, base - penalty - dur_pen)
+    dur_bonus = duration_proximity_bonus(result_duration, reference_duration)
+    return max(0, min(100, base - penalty - dur_pen + dur_bonus))
 
 
 def classify_results(scores: list[int]) -> str:
