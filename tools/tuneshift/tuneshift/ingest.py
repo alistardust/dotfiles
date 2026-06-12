@@ -7,10 +7,10 @@ def ingest_from_platform(
     client: object,
     playlist_id: str,
     enrich: bool = True,
-) -> tuple[str, int, int]:
+) -> tuple[str, int, int, int]:
     """Ingest a playlist from a platform into the canonical database.
 
-    Returns (playlist_name, total_tracks, new_tracks_created).
+    Returns (playlist_name, total_tracks, new_tracks_created, skipped_tracks).
     """
     platform_name = client.platform_name  # type: ignore[attr-defined]
 
@@ -37,42 +37,48 @@ def ingest_from_platform(
 
     # Process each track
     new_count = 0
+    skipped_count = 0
     track_ids_to_enrich: list[tuple[int, str]] = []
 
     for position, tr in enumerate(raw_tracks, start=1):
-        # Find or create canonical track
-        existing = db.find_track(tr.title, tr.artist, tr.album)
-        if existing:
-            track_id = existing.id
-        else:
-            from tuneshift.models import Track
-            new_track = Track(
-                title=tr.title,
-                artist=tr.artist,
-                album=tr.album,
-                duration_seconds=tr.duration_seconds,
-                isrc=tr.isrc,
-            )
-            track_id = db.add_track(new_track)
-            new_count += 1
-            track_ids_to_enrich.append((track_id, tr.platform_id))
+        try:
+            # Find or create canonical track
+            existing = db.find_track(tr.title, tr.artist, tr.album)
+            if existing:
+                track_id = existing.id
+            else:
+                from tuneshift.models import Track
+                new_track = Track(
+                    title=tr.title,
+                    artist=tr.artist,
+                    album=tr.album,
+                    duration_seconds=tr.duration_seconds,
+                    isrc=tr.isrc,
+                )
+                track_id = db.add_track(new_track)
+                new_count += 1
+                track_ids_to_enrich.append((track_id, tr.platform_id))
 
-        # Add to playlist (skip if already there)
-        db.add_track_to_playlist(playlist_db_id, track_id, position)
+            # Add to playlist (skip if already there)
+            db.add_track_to_playlist(playlist_db_id, track_id, position)
 
-        # Store platform mapping
-        from tuneshift.models import PlatformMapping
-        db.upsert_platform_mapping(PlatformMapping(
-            track_id=track_id,
-            platform=platform_name,
-            platform_track_id=tr.platform_id,
-            platform_title=tr.title,
-            platform_artist=tr.artist,
-            platform_album=tr.album,
-            match_score=100,
-            status="matched",
-            user_approved=True,
-        ))
+            # Store platform mapping
+            from tuneshift.models import PlatformMapping
+            db.upsert_platform_mapping(PlatformMapping(
+                track_id=track_id,
+                platform=platform_name,
+                platform_track_id=tr.platform_id,
+                platform_title=tr.title,
+                platform_artist=tr.artist,
+                platform_album=tr.album,
+                match_score=100,
+                status="matched",
+                user_approved=True,
+            ))
+        except Exception as exc:
+            import sys
+            print(f"  Skipping track at position {position}: {exc}", file=sys.stderr)
+            skipped_count += 1
 
     # Link platform playlist
     db.link_platform_playlist(playlist_db_id, platform_name, playlist_id)
@@ -81,7 +87,7 @@ def ingest_from_platform(
     if enrich and track_ids_to_enrich and hasattr(client, "get_track_metadata"):
         _enrich_tracks(db, client, track_ids_to_enrich)
 
-    return name, len(raw_tracks), new_count
+    return name, len(raw_tracks), new_count, skipped_count
 
 
 def _enrich_tracks(db: Database, client: object, tracks: list[tuple[int, str]]) -> None:

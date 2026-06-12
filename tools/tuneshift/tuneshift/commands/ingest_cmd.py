@@ -17,12 +17,15 @@ def handle_ingest(args, db: Database) -> int:
         return 1
 
     try:
-        name, total, new = ingest_from_platform(db, client, args.playlist_id)
+        name, total, new, skipped = ingest_from_platform(db, client, args.playlist_id)
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
 
-    print(f"Ingested \"{name}\" from {args.platform}: {total} tracks ({new} new)")
+    msg = f"Ingested \"{name}\" from {args.platform}: {total} tracks ({new} new)"
+    if skipped:
+        msg += f" ({skipped} unavailable, skipped)"
+    print(msg)
     return 0
 
 

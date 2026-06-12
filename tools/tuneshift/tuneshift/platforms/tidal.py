@@ -218,13 +218,32 @@ class TidalClient:
         return self._call_with_retry(_get_playlist)
 
     def get_playlist_tracks(self, playlist_id: str) -> list[TrackResult]:
-        """Return all tracks for a playlist in order."""
+        """Return all tracks for a playlist in order.
+
+        Skips unavailable/removed tracks (ObjectNotFound) and tracks with
+        no usable metadata (None name). Prints warnings to stderr.
+        """
+        import sys
         self._ensure_session()
 
         def _get_tracks() -> list[TrackResult]:
             assert self._session is not None
             playlist = self._session.playlist(playlist_id)
-            return [self._track_to_result(track) for track in playlist.tracks()]
+            results: list[TrackResult] = []
+            skipped = 0
+            for track in playlist.tracks():
+                try:
+                    if track is None or getattr(track, "name", None) is None:
+                        skipped += 1
+                        continue
+                    results.append(self._track_to_result(track))
+                except Exception as exc:
+                    track_id = getattr(track, "id", "unknown")
+                    print(f"  Skipping unavailable track {track_id}: {exc}", file=sys.stderr)
+                    skipped += 1
+            if skipped:
+                print(f"  Warning: {skipped} unavailable track(s) skipped", file=sys.stderr)
+            return results
 
         return self._call_with_retry(_get_tracks)
 
