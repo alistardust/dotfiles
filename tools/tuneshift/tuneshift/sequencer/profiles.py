@@ -11,6 +11,18 @@ DEFAULT_WEIGHTS: dict[str, float] = {
     "key": 0.05,
 }
 
+NARRATIVE_WEIGHTS: dict[str, float] = {
+    "themes": 0.20,
+    "energy": 0.12,
+    "instrumentation": 0.10,
+    "bpm": 0.08,
+    "mode": 0.05,
+    "key": 0.05,
+    "transition": 0.15,
+    "narrative": 0.15,
+    "emotional_arc": 0.10,
+}
+
 
 @dataclass
 class WeightProfile:
@@ -105,6 +117,16 @@ _BUILTIN_PROFILES: dict[str, WeightProfile] = {
         artist_min_separation=3,
         narrative_mode="dj_set",
         context_window=4,
+    ),
+    "narrative": WeightProfile(
+        name="narrative",
+        description="Full narrative intelligence with emotional arc",
+        weights=dict(NARRATIVE_WEIGHTS),
+        arc="narrative",
+        bold_jump_chance=0.0,
+        artist_min_separation=4,
+        narrative_mode="chapter",
+        context_window=5,
     ),
 }
 
