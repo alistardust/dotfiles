@@ -50,6 +50,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_add.add_argument("title", help="Track title")
     p_add.add_argument("artist", help="Artist name")
     p_add.add_argument("--album", help="Album name")
+    p_add.add_argument("--replace", help="Title of track to replace (inherits position and pins)")
 
     # rm
     p_rm = sub.add_parser("rm", help="Remove a track from a playlist")

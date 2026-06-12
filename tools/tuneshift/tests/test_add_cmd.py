@@ -110,3 +110,36 @@ class TestHandleAdd:
             handle_add(args, db)
 
         mock_client.add_tracks.assert_called_once_with("tidal-pl-123", ["t-999"])
+
+
+def test_add_with_replace_swaps_track(tmp_path: Path) -> None:
+    """--replace removes old track and puts new one at same position."""
+    db = Database(tmp_path / "test.db")
+    playlist_id = db.create_playlist("Test")
+    old_track = Track(title="American Dream", artist="Shea Diamond", album="Seen")
+    old_id = db.add_track(old_track)
+    db.add_track_to_playlist(playlist_id, old_id, position=0)
+    other = Track(title="Other", artist="Other")
+    other_id = db.add_track(other)
+    db.add_track_to_playlist(playlist_id, other_id, position=1)
+    db.set_pin(playlist_id, old_id, pin_type="opener")
+
+    args = SimpleNamespace(
+        playlist="Test",
+        title="I Am America",
+        artist="Shea Diamond",
+        album="Seen",
+        replace="American Dream",
+    )
+    result = handle_add(args, db)
+    assert result == 0
+
+    tracks = db.get_playlist_tracks(playlist_id)
+    assert len(tracks) == 2
+    assert tracks[0].title == "I Am America"
+    assert tracks[1].title == "Other"
+
+    pins = db.get_pins(playlist_id)
+    assert len(pins) == 1
+    assert pins[0].track_id == tracks[0].id
+    assert pins[0].pin_type == "opener"

@@ -555,6 +555,15 @@ class Database:
             for row in rows
         ]
 
+    def transfer_pins(self, playlist_id: int, from_track_id: int, to_track_id: int) -> None:
+        """Transfer all pins from one track to another within a playlist."""
+        with self.conn:
+            self.conn.execute(
+                """UPDATE playlist_pins SET track_id = ?
+                   WHERE playlist_id = ? AND track_id = ?""",
+                (to_track_id, playlist_id, from_track_id),
+            )
+
     def set_playlist_tracks(self, playlist_id: int, track_ids: list[int]) -> None:
         """Set the track order for a playlist, replacing existing rows."""
         self.conn.execute(

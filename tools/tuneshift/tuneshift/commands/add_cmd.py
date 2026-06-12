@@ -26,12 +26,38 @@ def handle_add(args, db: Database) -> int:
         )
         track_id = db.add_track(track)
 
-    # Find next position
-    tracks = db.get_playlist_tracks(playlist_id)
-    position = len(tracks) + 1
+    # Handle --replace flag
+    replace_target = getattr(args, "replace", None)
+    position = None
+    if replace_target:
+        tracks = db.get_playlist_tracks(playlist_id)
+        target_lower = replace_target.lower()
+        old_matches = [t for t in tracks if target_lower in t.title.lower()]
+        if not old_matches:
+            print(f"Replace target not found: {replace_target}", file=sys.stderr)
+            return 1
+        old_track = old_matches[0]
+        row = db.conn.execute(
+            "SELECT position FROM playlist_tracks WHERE playlist_id = ? AND track_id = ?",
+            (playlist_id, old_track.id),
+        ).fetchone()
+        position = row[0] if row else None
+        db.transfer_pins(playlist_id, old_track.id, track_id)
+        db.remove_track_from_playlist(playlist_id, old_track.id)
+        
+        # After removal, positions are renumbered. Get current track list and insert at old position
+        track_ids = db.get_playlist_track_ids(playlist_id)
+        track_ids.insert(position, track_id)
+        db.set_playlist_tracks(playlist_id, track_ids)
+        print(f'Replacing "{old_track.title}" with "{args.title}"')
+    else:
+        tracks = db.get_playlist_tracks(playlist_id)
+        position = len(tracks) + 1
+        db.add_track_to_playlist(playlist_id, track_id, position)
 
-    db.add_track_to_playlist(playlist_id, track_id, position)
     print(f"Added \"{args.title}\" by {args.artist} to \"{args.playlist}\" at position {position}")
+
+
 
     # Sync to linked platforms
     had_failures = _sync_add_to_platforms(db, playlist_id, track_id, args.title, args.artist)
