@@ -273,6 +273,7 @@ def score_candidate(
     context: SequenceContext,
     base_score: float,
     penalty_strengths: dict[str, float] | None = None,
+    intent: "PlaylistIntent | None" = None,
 ) -> float:
     """Apply all context modifiers to a base pairwise score."""
     strengths = penalty_strengths or {}
@@ -296,6 +297,9 @@ def score_candidate(
             strengths.get("energy_monotony", 1.0),
         ),
         narrative_arc_modifier(candidate, context, strengths.get("narrative_arc", 1.0)),
+        intensity_arc_modifier(candidate, context, strengths.get("intensity_arc", 1.0)),
+        chapter_break_modifier(candidate, context, intent, strengths.get("chapter_break", 1.0)),
+        duration_pacing_modifier(candidate, context, strengths.get("duration_pacing", 1.0)),
     ]
 
     product = 1.0

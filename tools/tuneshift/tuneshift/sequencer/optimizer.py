@@ -294,6 +294,7 @@ def _greedy_build(
     narrative_mode: str,
     context_window: int,
     penalty_overrides: dict[str, float] | None,
+    intent: "PlaylistIntent | None" = None,
 ) -> list[TrackMetadata]:
     """Build sequence using greedy nearest-neighbor with bold jumps and block insertion."""
     context = SequenceContext(
@@ -337,6 +338,7 @@ def _greedy_build(
                 context,
                 base * arc_mult,
                 penalty_overrides,
+                intent,
             )
             candidates.append((adjusted, candidate))
 
@@ -344,8 +346,10 @@ def _greedy_build(
 
         bold_jump_cooldown = max(0, bold_jump_cooldown - 1)
         protect_region = position <= 2 or position >= track_count - 3
+        use_bold_jumps = arc != "narrative" or intent is None
         if (
-            not protect_region
+            use_bold_jumps
+            and not protect_region
             and bold_jump_cooldown == 0
             and random.random() < bold_jump_chance
             and len(candidates) > 3
@@ -411,10 +415,13 @@ def optimize_sequence(
         remaining, track_map, adjacency_groups, opener, closer,
     )
 
+    from tuneshift.sequencer.intent import infer_intent
+    intent = infer_intent(tracks) if arc == "narrative" else None
+
     sequence = _greedy_build(
         opener, closer, free_tracks, anchor_blocks,
         track_count - len(position_pins), weights, arc, bold_jump_chance,
-        narrative_mode, context_window, penalty_overrides,
+        narrative_mode, context_window, penalty_overrides, intent,
     )
 
     # Insert position-pinned tracks at their target indices
