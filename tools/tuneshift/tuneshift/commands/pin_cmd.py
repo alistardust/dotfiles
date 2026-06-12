@@ -30,7 +30,10 @@ def handle_pin(args, db: Database) -> int:
     if getattr(args, "adjacent", None):
         return _set_adjacency(db, playlist, args.adjacent, getattr(args, "group", None))
 
-    print("Specify --opener, --closer, --position, --adjacent, --remove, or --list.", file=sys.stderr)
+    if getattr(args, "moment", None):
+        return _set_moment_pin(db, playlist, args.moment)
+
+    print("Specify --opener, --closer, --position, --adjacent, --moment, --remove, or --list.", file=sys.stderr)
     return 1
 
 
@@ -111,6 +114,20 @@ def _set_adjacency(db: Database, playlist, titles: list[str], group_name: str | 
     return 0
 
 
+def _set_moment_pin(db: Database, playlist, title: str) -> int:
+    """Pin a track as a narrative moment (placed at climax)."""
+    track = _find_track_in_playlist(db, playlist, title)
+    if not track:
+        return 1
+
+    # Remove any existing pin for this track first
+    db.remove_pin(playlist.id, track.id)
+
+    db.set_pin(playlist.id, track.id, pin_type="moment")
+    print(f'Pinned "{track.title}" as moment (will be placed at climax)')
+    return 0
+
+
 def _remove_pin(db: Database, playlist, title: str) -> int:
     """Remove a pin from a track."""
     track = _find_track_in_playlist(db, playlist, title)
@@ -140,5 +157,7 @@ def _list_pins(db: Database, playlist) -> int:
             print(f"  position {pin.group_order}: {name}")
         elif pin.pin_type == "anchor":
             print(f"  anchor [{pin.group_id}#{pin.group_order}]: {name}")
+        elif pin.pin_type == "moment":
+            print(f"  moment (climax): {name}")
 
     return 0

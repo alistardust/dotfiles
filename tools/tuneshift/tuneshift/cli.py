@@ -84,6 +84,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_pin.add_argument("--position", nargs=2, metavar=("INDEX", "TITLE"), help="Pin track to specific position (0-based)")
     p_pin.add_argument("--adjacent", nargs="+", metavar="TITLE", help="Pin tracks as adjacent group (in order)")
     p_pin.add_argument("--group", metavar="NAME", help="Name for adjacency group (default: auto)")
+    p_pin.add_argument("--moment", metavar="TITLE", help="Pin track as a narrative moment (placed at climax)")
     p_pin.add_argument("--remove", metavar="TITLE", help="Remove pin from track")
     p_pin.add_argument("--list", action="store_true", dest="list_pins", help="Show current pins")
 

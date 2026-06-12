@@ -189,6 +189,31 @@ def distribute_artists(
 break_artist_runs = distribute_artists
 
 
+def _place_moments(
+    tracks: list,
+    moments: list[int],
+    total: int,
+) -> dict[int, int]:
+    """Assign moment tracks to positions in the climax region (55-75%).
+
+    Returns dict of target_position -> track_id.
+    """
+    if not moments:
+        return {}
+    climax_start = int(total * 0.55)
+    climax_end = int(total * 0.75)
+    available_positions = list(range(climax_start, min(climax_end + 1, total - 1)))
+    if not available_positions:
+        return {}
+    step = max(1, len(available_positions) // (len(moments) + 1))
+    result: dict[int, int] = {}
+    for i, track_id in enumerate(moments):
+        pos = climax_start + (i + 1) * step
+        pos = min(pos, climax_end, total - 2)
+        result[pos] = track_id
+    return result
+
+
 def _resolve_pins(
     pins: list | None,
     track_map: dict[int, TrackMetadata],
@@ -219,6 +244,7 @@ def _resolve_pins(
             adjacency_groups[pin.group_id].append((pin.group_order or 0, pin.track_id))
         elif pin.pin_type == "position" and pin.group_order is not None:
             position_pins[pin.group_order] = pin.track_id
+        # Moment pins are handled separately in optimize_sequence
 
     # Sort adjacency groups by group_order
     for group_id in adjacency_groups:
@@ -397,6 +423,18 @@ def optimize_sequence(
 
     pinned_opener_id, pinned_closer_id, adjacency_groups, position_pins = _resolve_pins(pins, track_map)
 
+    # Infer intent early for narrative arc
+    from tuneshift.sequencer.intent import infer_intent
+    intent = infer_intent(tracks) if arc == "narrative" else None
+
+    # Collect moment track IDs and determine their target positions
+    moment_track_ids = [p.track_id for p in (pins or []) if p.pin_type == "moment"]
+    if not moment_track_ids and intent:
+        moment_track_ids = intent.climax_candidates
+
+    moment_positions = _place_moments(tracks, moment_track_ids, track_count)
+    position_pins.update(moment_positions)
+
     # Position pins at index 0 override opener; at last index override closer
     if 0 in position_pins:
         pinned_opener_id = position_pins.pop(0)
@@ -414,9 +452,6 @@ def optimize_sequence(
     free_tracks, anchor_blocks = _prepare_free_pool(
         remaining, track_map, adjacency_groups, opener, closer,
     )
-
-    from tuneshift.sequencer.intent import infer_intent
-    intent = infer_intent(tracks) if arc == "narrative" else None
 
     sequence = _greedy_build(
         opener, closer, free_tracks, anchor_blocks,
