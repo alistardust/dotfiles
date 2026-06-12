@@ -33,6 +33,11 @@ def handle_order(args, db: Database) -> int:
         return 0
 
     reordered = sequence_playlist(db, playlist.id, arc=arc)
+
+    if getattr(args, "dry_run", False):
+        _print_dry_run(db, reordered, playlist.name, arc)
+        return 0
+
     db.set_playlist_tracks(playlist.id, reordered)
 
     print(f'Reordered "{playlist.name}" ({len(reordered)} tracks, arc={arc})')
@@ -44,6 +49,20 @@ def handle_order(args, db: Database) -> int:
             return 1
 
     return 0
+
+
+def _print_dry_run(db: Database, track_ids: list[int], name: str, arc: str) -> None:
+    """Display proposed order without making changes."""
+    print(f'[DRY RUN] Proposed order for "{name}" ({len(track_ids)} tracks, arc={arc}):')
+    print()
+    for i, track_id in enumerate(track_ids, 1):
+        track = db.get_track(track_id)
+        if track:
+            print(f"  {i:3d}. {track.artist} - {track.title}")
+        else:
+            print(f"  {i:3d}. [unknown track id={track_id}]")
+    print()
+    print("No changes written. Remove --dry-run to apply.")
 
 
 def _push_order_to_platforms(db: Database, playlist) -> bool:
