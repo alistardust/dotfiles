@@ -108,6 +108,94 @@ class TidalClient:
                 return result
         return None
 
+    def search_album(self, query: str, limit: int = 5) -> list["AlbumResult"]:
+        """Search for albums on Tidal."""
+        from tuneshift.models import AlbumResult
+        self._ensure_session()
+
+        def _search() -> list[AlbumResult]:
+            assert self._session is not None
+            results = self._session.search(query, models=[tidalapi.album.Album], limit=limit)
+            albums = results.get("albums", []) or []
+            return [
+                AlbumResult(
+                    platform_id=str(album.id),
+                    title=album.name or "",
+                    artist=album.artist.name if getattr(album, "artist", None) else "",
+                    track_count=int(album.num_tracks or 0),
+                    release_year=getattr(album, "year", None),
+                )
+                for album in albums
+            ]
+
+        return self._call_with_retry(_search)
+
+    def get_album_tracks(self, album_id: str) -> list[TrackResult]:
+        """Get all tracks from a Tidal album."""
+        self._ensure_session()
+
+        def _get_tracks() -> list[TrackResult]:
+            assert self._session is not None
+            album = self._session.album(int(album_id))
+            return [self._track_to_result(track) for track in album.tracks()]
+
+        return self._call_with_retry(_get_tracks)
+
+    def search_artist(self, query: str, limit: int = 3) -> list["ArtistResult"]:
+        """Search for artists on Tidal."""
+        from tuneshift.models import ArtistResult
+        self._ensure_session()
+
+        def _search() -> list[ArtistResult]:
+            assert self._session is not None
+            results = self._session.search(query, models=[tidalapi.artist.Artist], limit=limit)
+            artists = results.get("artists", []) or []
+            return [
+                ArtistResult(
+                    platform_id=str(artist.id),
+                    name=artist.name or "",
+                )
+                for artist in artists
+            ]
+
+        return self._call_with_retry(_search)
+
+    def get_artist_albums(self, artist_id: str, limit: int = 20) -> list["AlbumResult"]:
+        """Get albums for a Tidal artist."""
+        from tuneshift.models import AlbumResult
+        self._ensure_session()
+
+        def _get_albums() -> list[AlbumResult]:
+            assert self._session is not None
+            artist = self._session.artist(int(artist_id))
+            albums = artist.get_albums()[:limit]
+            return [
+                AlbumResult(
+                    platform_id=str(album.id),
+                    title=album.name or "",
+                    artist=album.artist.name if getattr(album, "artist", None) else "",
+                    track_count=int(album.num_tracks or 0),
+                    release_year=getattr(album, "year", None),
+                )
+                for album in albums
+            ]
+
+        return self._call_with_retry(_get_albums)
+
+    def get_track(self, track_id: str) -> TrackResult | None:
+        """Fetch a single track by platform ID. Returns None if not found."""
+        self._ensure_session()
+
+        def _get_track() -> TrackResult | None:
+            assert self._session is not None
+            try:
+                track = self._session.track(int(track_id))
+            except Exception:
+                return None
+            return self._track_to_result(track)
+
+        return self._call_with_retry(_get_track)
+
     def get_playlist(self, playlist_id: str) -> PlaylistInfo | None:
         """Return playlist metadata or None if the playlist does not exist."""
         self._ensure_session()
