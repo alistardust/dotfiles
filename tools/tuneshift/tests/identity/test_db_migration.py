@@ -22,7 +22,7 @@ class TestSchemaV2Migration:
 
     def test_schema_version_is_current(self, db):
         row = db.conn.execute("SELECT value FROM schema_meta WHERE key = 'version'").fetchone()
-        assert int(row[0]) == 6
+        assert int(row[0]) == 7
 
     def test_migration_idempotent(self, tmp_path):
         db_path = tmp_path / "test.db"
@@ -94,7 +94,7 @@ class TestSchemaV2Migration:
         assert "auto_reorder" in playlist_cols
         assert "reorder_arc" in playlist_cols
         version = db.conn.execute("SELECT value FROM schema_meta WHERE key = 'version'").fetchone()[0]
-        assert int(version) == 6
+        assert int(version) == 7
         db.close()
 
 
@@ -280,3 +280,22 @@ class TestAutoReorder:
         assert a.reorder_arc == "descend"
         assert b.auto_reorder is False
         assert b.reorder_arc == "wave"
+
+
+class TestSchemaV7Migration:
+    def test_v7_playlist_columns_exist(self, db):
+        """Schema v7 adds goal, playlist_type, weights, mood_profile, curation_constraints, preferences."""
+        cursor = db.conn.execute("PRAGMA table_info(playlists)")
+        columns = {row[1] for row in cursor.fetchall()}
+        assert "goal" in columns
+        assert "playlist_type" in columns
+        assert "weights" in columns
+        assert "mood_profile" in columns
+        assert "curation_constraints" in columns
+        assert "preferences" in columns
+
+    def test_v7_playlist_tracks_version_override(self, db):
+        """Schema v7 adds version_override to playlist_tracks."""
+        cursor = db.conn.execute("PRAGMA table_info(playlist_tracks)")
+        columns = {row[1] for row in cursor.fetchall()}
+        assert "version_override" in columns

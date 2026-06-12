@@ -8,7 +8,7 @@ from pathlib import Path
 
 from tuneshift.models import PlatformMapping, Playlist, PlaylistPin, Track
 
-_SCHEMA_VERSION = 6
+_SCHEMA_VERSION = 7
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS tracks (
@@ -59,6 +59,12 @@ CREATE TABLE IF NOT EXISTS playlists (
     name TEXT NOT NULL UNIQUE,
     description TEXT,
     narrative TEXT,
+    goal TEXT,
+    playlist_type TEXT,
+    weights TEXT,
+    mood_profile TEXT,
+    curation_constraints TEXT,
+    preferences TEXT,
     auto_reorder INTEGER NOT NULL DEFAULT 0,
     reorder_arc TEXT NOT NULL DEFAULT 'wave',
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -69,6 +75,7 @@ CREATE TABLE IF NOT EXISTS playlist_tracks (
     playlist_id INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
     track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
     position INTEGER NOT NULL,
+    version_override TEXT,
     PRIMARY KEY (playlist_id, position)
 );
 
@@ -285,6 +292,29 @@ class Database:
                     self.conn.execute(
                         "ALTER TABLE playlists ADD COLUMN narrative TEXT"
                     )
+
+            if current_version < 7:
+                playlist_cols = {
+                    r[1] for r in self.conn.execute("PRAGMA table_info(playlists)").fetchall()
+                }
+                if "goal" not in playlist_cols:
+                    self.conn.execute("ALTER TABLE playlists ADD COLUMN goal TEXT")
+                if "playlist_type" not in playlist_cols:
+                    self.conn.execute("ALTER TABLE playlists ADD COLUMN playlist_type TEXT")
+                if "weights" not in playlist_cols:
+                    self.conn.execute("ALTER TABLE playlists ADD COLUMN weights TEXT")
+                if "mood_profile" not in playlist_cols:
+                    self.conn.execute("ALTER TABLE playlists ADD COLUMN mood_profile TEXT")
+                if "curation_constraints" not in playlist_cols:
+                    self.conn.execute("ALTER TABLE playlists ADD COLUMN curation_constraints TEXT")
+                if "preferences" not in playlist_cols:
+                    self.conn.execute("ALTER TABLE playlists ADD COLUMN preferences TEXT")
+
+                playlist_track_cols = {
+                    r[1] for r in self.conn.execute("PRAGMA table_info(playlist_tracks)").fetchall()
+                }
+                if "version_override" not in playlist_track_cols:
+                    self.conn.execute("ALTER TABLE playlist_tracks ADD COLUMN version_override TEXT")
 
             self.conn.execute(
                 "UPDATE schema_meta SET value = ? WHERE key = 'version'",
