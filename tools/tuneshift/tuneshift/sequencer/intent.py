@@ -3,6 +3,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 
 from tuneshift.sequencer.metadata import TrackMetadata
+from tuneshift.sequencer.narrative_parser import parse_narrative, NarrativeSection  # noqa: F401
 
 
 @dataclass
