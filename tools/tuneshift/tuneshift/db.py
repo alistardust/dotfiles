@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS tracks (
 
 CREATE TABLE IF NOT EXISTS platform_tracks (
     id INTEGER PRIMARY KEY,
-    track_id INTEGER NOT NULL REFERENCES tracks(id),
+    track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
     platform TEXT NOT NULL,
     platform_track_id TEXT NOT NULL,
     platform_title TEXT,
@@ -65,15 +65,15 @@ CREATE TABLE IF NOT EXISTS playlists (
 );
 
 CREATE TABLE IF NOT EXISTS playlist_tracks (
-    playlist_id INTEGER NOT NULL REFERENCES playlists(id),
-    track_id INTEGER NOT NULL REFERENCES tracks(id),
+    playlist_id INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+    track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
     position INTEGER NOT NULL,
     PRIMARY KEY (playlist_id, position)
 );
 
 CREATE TABLE IF NOT EXISTS platform_playlists (
     id INTEGER PRIMARY KEY,
-    playlist_id INTEGER NOT NULL REFERENCES playlists(id),
+    playlist_id INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
     platform TEXT NOT NULL,
     platform_playlist_id TEXT NOT NULL,
     last_synced_at TEXT,
@@ -82,7 +82,7 @@ CREATE TABLE IF NOT EXISTS platform_playlists (
 
 CREATE TABLE IF NOT EXISTS sync_log (
     id INTEGER PRIMARY KEY,
-    playlist_id INTEGER NOT NULL REFERENCES playlists(id),
+    playlist_id INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
     platform TEXT NOT NULL,
     action TEXT NOT NULL,
     tracks_added INTEGER DEFAULT 0,
@@ -95,7 +95,7 @@ CREATE TABLE IF NOT EXISTS sync_log (
 
 CREATE TABLE IF NOT EXISTS evidence (
     id INTEGER PRIMARY KEY,
-    track_id INTEGER NOT NULL REFERENCES tracks(id),
+    track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
     source TEXT NOT NULL,
     evidence_type TEXT NOT NULL,
     confidence REAL NOT NULL,
@@ -107,8 +107,8 @@ CREATE TABLE IF NOT EXISTS evidence (
 
 CREATE TABLE IF NOT EXISTS playlist_pins (
     id INTEGER PRIMARY KEY,
-    playlist_id INTEGER NOT NULL REFERENCES playlists(id),
-    track_id INTEGER NOT NULL REFERENCES tracks(id),
+    playlist_id INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+    track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
     pin_type TEXT NOT NULL,
     group_id TEXT,
     group_order INTEGER,
@@ -223,7 +223,7 @@ class Database:
                     """
                     CREATE TABLE IF NOT EXISTS evidence (
                         id INTEGER PRIMARY KEY,
-                        track_id INTEGER NOT NULL REFERENCES tracks(id),
+                        track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
                         source TEXT NOT NULL,
                         evidence_type TEXT NOT NULL,
                         confidence REAL NOT NULL,
@@ -256,8 +256,8 @@ class Database:
                     """
                     CREATE TABLE IF NOT EXISTS playlist_pins (
                         id INTEGER PRIMARY KEY,
-                        playlist_id INTEGER NOT NULL REFERENCES playlists(id),
-                        track_id INTEGER NOT NULL REFERENCES tracks(id),
+                        playlist_id INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+                        track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
                         pin_type TEXT NOT NULL,
                         group_id TEXT,
                         group_order INTEGER,

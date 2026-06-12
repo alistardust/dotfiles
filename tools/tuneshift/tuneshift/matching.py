@@ -266,8 +266,7 @@ def score_match_with_version(
     )
     penalty = version_penalty(result_title, result_album)
     dur_pen = duration_penalty(result_duration, reference_duration, all_durations)
-    dur_bonus = duration_proximity_bonus(result_duration, reference_duration)
-    return max(0, min(100, base - penalty - dur_pen + dur_bonus))
+    return max(0, min(100, base - penalty - dur_pen))
 
 
 def classify_results(scores: list[int]) -> str:

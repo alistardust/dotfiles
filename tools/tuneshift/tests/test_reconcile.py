@@ -220,6 +220,37 @@ def test_reconcile_short_circuits_on_high_confidence(mock_client, db_with_track)
         TrackResult(platform_id="t1", title="Louder", artist="Big Freedia", album="3rd Ward Bounce", duration_seconds=195),
     ]
     mock_client.search_track.side_effect = AssertionError("Should not be called")
+    mock_client.search_artist.side_effect = AssertionError("Should not be called")
+    mock_client.get_artist_albums.side_effect = AssertionError("Should not be called")
 
     result = reconcile_track(db, track_id, mock_client, force=True)
     assert result.platform_track_id == "t1"
+
+
+def test_reconcile_tries_all_strategies_when_low_scores(mock_client, db_with_track):
+    """Low-scoring results exhaust all strategies."""
+    db, track_id = db_with_track
+    from tuneshift.models import ArtistResult, AlbumResult, TrackResult
+
+    # Album lookup returns wrong track (low score)
+    mock_album = AlbumResult(platform_id="alb1", title="Other Album", artist="Other Artist", track_count=5)
+    mock_client.search_album.return_value = [mock_album]
+    mock_client.get_album_tracks.return_value = [
+        TrackResult(platform_id="t_wrong", title="Wrong Song", artist="Other Artist", album="Other Album"),
+    ]
+    # ISRC returns nothing
+    mock_client.search_isrc.return_value = None
+    # Title+artist returns weak match
+    mock_client.search_track.return_value = [
+        TrackResult(platform_id="t_weak", title="Louder (Live)", artist="Big Freedia", album="Live Album"),
+    ]
+    # Artist browse returns the real match
+    mock_artist = ArtistResult(platform_id="art1", name="Big Freedia")
+    mock_client.search_artist.return_value = [mock_artist]
+    mock_client.get_artist_albums.return_value = [mock_album]
+
+    result = reconcile_track(db, track_id, mock_client, force=True)
+    # All strategies were called
+    mock_client.search_album.assert_called()
+    mock_client.search_track.assert_called()
+    mock_client.search_artist.assert_called()

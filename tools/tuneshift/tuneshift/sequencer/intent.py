@@ -47,7 +47,9 @@ def infer_intent(tracks: list[TrackMetadata]) -> PlaylistIntent:
             texture_counter[t.sonic_texture] += 1
     sonic_palette = [tex for tex, _ in texture_counter.most_common(3)]
 
-    if len(tracks) <= 5:
+    if len(tracks) <= 3:
+        n_climax = 1
+    elif len(tracks) <= 5:
         n_climax = min(2, len(tracks))
     elif len(tracks) <= 15:
         n_climax = max(2, len(tracks) // 7)
