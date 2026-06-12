@@ -12,6 +12,10 @@ _EDITION_PARENS_RE = re.compile(
     re.IGNORECASE,
 )
 _THE_PREFIX_RE = re.compile(r"^the\s+", re.IGNORECASE)
+_FEAT_RE = re.compile(
+    r"\s*[\(\[]\s*(?:feat\.?|ft\.?|featuring|with)\s+[^\)\]]+[\)\]]",
+    re.IGNORECASE,
+)
 
 
 def normalize_title(title: str) -> str:
@@ -20,6 +24,7 @@ def normalize_title(title: str) -> str:
         return ""
     title = unicodedata.normalize("NFC", title)
     title = _EDITION_PARENS_RE.sub("", title)
+    title = _FEAT_RE.sub("", title)
     return title.strip().casefold()
 
 

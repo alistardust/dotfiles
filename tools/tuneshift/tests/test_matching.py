@@ -1,4 +1,5 @@
 """tests/test_matching.py"""
+import pytest
 from tuneshift.matching import (
     normalize_title,
     normalize_artist,
@@ -67,3 +68,16 @@ def test_is_remaster() -> None:
 
 def test_is_remaster_empty() -> None:
     assert not is_remaster("")
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("Louder (feat. Icona Pop)", "louder"),
+    ("Revolution! (ft. Someone)", "revolution!"),
+    ("Together (with Dua Lipa)", "together"),
+    ("Hello (featuring Adele)", "hello"),
+    ("Normal Title", "normal title"),
+    ("Title [feat. Artist]", "title"),
+    ("Already (Deluxe Remastered) (feat. X)", "already"),
+])
+def test_normalize_title_strips_featured_artists(raw, expected):
+    assert normalize_title(raw) == expected
