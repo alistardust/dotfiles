@@ -59,6 +59,16 @@ class TrackMetadata:
     lastfm_tags: list[str] = field(default_factory=list)
     camelot_code: str | None = None
     source: str | None = None
+    emotional_intensity: float | None = None
+    lyrical_subject: str | None = None
+    narrator_stance: str | None = None
+    sonic_texture: str | None = None
+    space: str | None = None
+    groove_feel: str | None = None
+    opens_with: str | None = None
+    closes_with: str | None = None
+    energy_arc_within: str | None = None
+    classification_confidence: float | None = None
 
 
 def isrc_to_camelot(key_note: int | None, mode: int | None) -> str | None:
@@ -135,6 +145,16 @@ def track_to_metadata(track: Track) -> TrackMetadata:
         lastfm_tags=_list_value(metadata.get("lastfm_tags")),
         camelot_code=str(camelot_code) if camelot_code else None,
         source=str(source) if source else None,
+        emotional_intensity=_float_value(metadata.get("emotional_intensity")),
+        lyrical_subject=metadata.get("lyrical_subject"),
+        narrator_stance=metadata.get("narrator_stance"),
+        sonic_texture=metadata.get("sonic_texture"),
+        space=metadata.get("space"),
+        groove_feel=metadata.get("groove_feel"),
+        opens_with=metadata.get("opens_with"),
+        closes_with=metadata.get("closes_with"),
+        energy_arc_within=metadata.get("energy_arc_within"),
+        classification_confidence=_float_value(metadata.get("classification_confidence")),
     )
 
 
