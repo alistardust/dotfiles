@@ -1,0 +1,105 @@
+from tuneshift.composer.models import EnhancedSection, SectionAssignments, TransitionType
+from tuneshift.composer.sequencer import sequence_sections
+from tuneshift.sequencer.metadata import TrackMetadata
+
+
+def _track(track_id: int, **kwargs) -> TrackMetadata:
+    defaults = {"title": f"T{track_id}", "artist": f"A{track_id}"}
+    defaults.update(kwargs)
+    return TrackMetadata(track_id=track_id, **defaults)
+
+
+def _section(
+    name: str,
+    *,
+    capacity: int,
+    transition_in: TransitionType = TransitionType.GRADUAL,
+    transition_out: TransitionType = TransitionType.GRADUAL,
+) -> EnhancedSection:
+    return EnhancedSection(
+        name=name,
+        start_position=1,
+        end_position=capacity,
+        description=f"{name} section",
+        implied_intensity=0.5,
+        implied_stance=None,
+        capacity=capacity,
+        transition_in=transition_in,
+        transition_out=transition_out,
+    )
+
+
+def test_preserves_section_order() -> None:
+    opening = _section("OPENING", capacity=2)
+    closer = _section("CLOSER", capacity=1)
+    assignments = SectionAssignments(
+        assignments={
+            "OPENING": [_track(1, energy=0.3), _track(2, energy=0.4)],
+            "CLOSER": [_track(3, energy=0.8)],
+        },
+        misfits=[],
+        unassigned=[],
+    )
+
+    ordered = sequence_sections(assignments, [opening, closer])
+
+    assert [track.track_id for track in ordered] == [1, 2, 3]
+
+
+def test_unassigned_appended_at_end() -> None:
+    opening = _section("OPENING", capacity=1)
+    assignments = SectionAssignments(
+        assignments={"OPENING": [_track(1, energy=0.3)]},
+        misfits=[],
+        unassigned=[_track(9, energy=0.9), _track(10, energy=0.1)],
+    )
+
+    ordered = sequence_sections(assignments, [opening])
+
+    assert [track.track_id for track in ordered[-2:]] == [9, 10]
+
+
+def test_build_section_trends_upward() -> None:
+    build = _section("BUILD", capacity=3, transition_out=TransitionType.BUILD)
+    assignments = SectionAssignments(
+        assignments={
+            "BUILD": [
+                _track(1, energy=0.8),
+                _track(2, energy=0.2),
+                _track(3, energy=0.5),
+            ]
+        },
+        misfits=[],
+        unassigned=[],
+    )
+
+    ordered = sequence_sections(assignments, [build])
+
+    assert [track.track_id for track in ordered] == [2, 3, 1]
+
+
+def test_sharp_cut_maximizes_contrast_at_boundary() -> None:
+    impact = _section("IMPACT", capacity=2, transition_out=TransitionType.SHARP_CUT)
+    release = _section("RELEASE", capacity=3)
+    assignments = SectionAssignments(
+        assignments={
+            "IMPACT": [
+                _track(1, energy=0.3),
+                _track(2, energy=0.95),
+            ],
+            "RELEASE": [
+                _track(3, energy=0.85),
+                _track(4, energy=0.1),
+                _track(5, energy=0.75),
+            ],
+        },
+        misfits=[],
+        unassigned=[],
+    )
+
+    ordered = sequence_sections(assignments, [impact, release])
+
+    ordered_ids = [track.track_id for track in ordered]
+    assert ordered_ids[1] == 2
+    assert ordered_ids[2] == 4
+    assert set(ordered_ids) == {1, 2, 3, 4, 5}
