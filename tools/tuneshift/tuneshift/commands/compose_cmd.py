@@ -4,13 +4,10 @@ from __future__ import annotations
 
 import sys
 
+from tuneshift.composer import compose_playlist
 from tuneshift.composer.candidate_finder import find_candidates
-from tuneshift.composer.gap_analyzer import analyze_composition_gaps
-from tuneshift.composer.matcher import match_tracks_to_sections
 from tuneshift.composer.models import ComposeResult, PlaylistConcept
 from tuneshift.composer.parser import parse_enhanced_narrative
-from tuneshift.composer.reviewer import review_composition
-from tuneshift.composer.sequencer import sequence_sections
 from tuneshift.db import Database
 from tuneshift.sequencer.metadata import track_to_metadata
 
@@ -128,19 +125,10 @@ def handle_compose(args, db: Database) -> int:
 
     concept = _get_concept(db, playlist.id)
     tracks = [track_to_metadata(track) for track in db.get_playlist_tracks(playlist.id)]
-    assignments = match_tracks_to_sections(tracks, sections, concept=concept)
-    gaps = analyze_composition_gaps(assignments, sections)
-    ordered = sequence_sections(assignments, sections)
-    findings = review_composition(ordered, assignments, sections, concept=concept)
-    result = ComposeResult(
-        ordered_tracks=ordered,
-        assignments=assignments,
-        gaps=gaps,
-        review_findings=findings,
-    )
+    result = compose_playlist(tracks, narrative, concept=concept)
 
     if getattr(args, "fill_gaps", False):
-        used_ids = {track.track_id for track in ordered}
+        used_ids = {track.track_id for track in result.ordered_tracks}
         result.candidates = {
             gap.section_name: find_candidates(
                 gap.fill_spec,
@@ -159,7 +147,7 @@ def handle_compose(args, db: Database) -> int:
     _render_composition(result, sections)
 
     if getattr(args, "apply", False):
-        db.set_playlist_tracks(playlist.id, [track.track_id for track in ordered])
+        db.set_playlist_tracks(playlist.id, [track.track_id for track in result.ordered_tracks])
         print(f'\nApplied composed order to "{playlist.name}".')
     elif getattr(args, "dry_run", False):
         print("\nDry run only, no changes applied.")
