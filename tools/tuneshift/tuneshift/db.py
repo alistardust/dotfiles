@@ -524,6 +524,88 @@ class Database:
         ).fetchall()
         return [self._row_to_track(row) for row in rows]
 
+    def search_tracks_by_metadata(
+        self,
+        intensity_range: tuple[float, float] | None = None,
+        stance: str | None = None,
+        keywords: list[str] | None = None,
+        limit: int = 20,
+    ) -> list[Track]:
+        """Search tracks using metadata-backed narrative attributes."""
+        rows = self.conn.execute("SELECT * FROM tracks ORDER BY updated_at DESC, id DESC").fetchall()
+        normalized_stance = stance.casefold() if stance else None
+        normalized_keywords = {
+            keyword.casefold().strip()
+            for keyword in (keywords or [])
+            if keyword and keyword.strip()
+        }
+        matches: list[tuple[int, Track]] = []
+
+        for row in rows:
+            track = self._row_to_track(row)
+            metadata = track.metadata or {}
+
+            track_intensity = metadata.get("emotional_intensity", track.energy)
+            if intensity_range is not None:
+                if track_intensity is None:
+                    continue
+                try:
+                    intensity_value = float(track_intensity)
+                except (TypeError, ValueError):
+                    continue
+                minimum, maximum = intensity_range
+                if intensity_value < minimum or intensity_value > maximum:
+                    continue
+
+            track_stance = metadata.get("narrator_stance")
+            if normalized_stance is not None:
+                if not isinstance(track_stance, str):
+                    continue
+                if track_stance.casefold() != normalized_stance:
+                    continue
+
+            overlap_count = 0
+            if normalized_keywords:
+                term_groups: list[str] = [track.title, track.artist]
+                if track.album:
+                    term_groups.append(track.album)
+                term_groups.extend(track.themes)
+                for key in (
+                    "vibes",
+                    "era_mood",
+                    "lastfm_tags",
+                    "lyrical_subject",
+                    "narrator_stance",
+                    "sonic_texture",
+                    "space",
+                    "groove_feel",
+                    "opens_with",
+                    "closes_with",
+                    "energy_arc_within",
+                ):
+                    value = metadata.get(key)
+                    if isinstance(value, list):
+                        term_groups.extend(str(item) for item in value if item)
+                    elif value:
+                        term_groups.append(str(value))
+
+                haystack = " ".join(term_groups).casefold()
+                overlap_count = sum(1 for keyword in normalized_keywords if keyword in haystack)
+                if overlap_count == 0:
+                    continue
+
+            matches.append((overlap_count, track))
+
+        matches.sort(
+            key=lambda item: (
+                item[0],
+                item[1].metadata.get("classification_confidence", 0.0),
+                item[1].id or 0,
+            ),
+            reverse=True,
+        )
+        return [track for _, track in matches[:limit]]
+
     def create_playlist(self, name: str, description: str | None = None) -> int:
         """Create a playlist and return its ID."""
         cursor = self.conn.execute(
