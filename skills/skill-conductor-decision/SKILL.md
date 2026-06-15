@@ -6,7 +6,29 @@ description: Decision layer guidance for the skill conductor. Helps choose the r
 # Decision Layer: Choosing the Right Thinking Tool
 
 You were routed here because the user needs to DECIDE something before building.
-Your job: pick the right decision skill and invoke it.
+Your job: ground in reality first, then pick the right decision skill and invoke it.
+
+## Reality Grounding Gate (before choosing a skill)
+
+Before invoking any decision skill, apply the "Ground in Reality" pre-decision trigger.
+(On fast-path per the main conductor, this reduces to a quick pattern check.)
+
+1. **Find real data.** If the task involves processing or transforming existing content,
+   locate a representative real example. Search the codebase, project files, test
+   fixtures (preferring real over synthetic). This is the system's job first; ask the
+   user only if you genuinely cannot find appropriate data.
+
+2. **Present it.** Show the user the actual data that will be processed. Anchor the
+   conversation in what exists, not what's imagined.
+
+3. **Validate against it.** Every design proposal must be checked: "Does this handle
+   the real case?" If it doesn't: the design is wrong, not the data.
+
+4. **Flag new formats.** If the design introduces ANY new syntax or structure the real
+   data doesn't already use, flag it per the Adaptation Direction invariant.
+
+If no existing data (greenfield): research analogous real-world examples. If none
+found: surface that the design is ungrounded. Do not design against imagined inputs.
 
 ## Decision Tree
 

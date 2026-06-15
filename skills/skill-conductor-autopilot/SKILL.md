@@ -180,6 +180,48 @@ MUST pause at these boundaries. Never proceed without affirmative approval:
 
 Use `ask_user` at checkpoints. Choices: proceed, modify, abort.
 
+## "Show Me" at Approval Checkpoints
+
+Implements "Ground in Reality: approval gate trigger." This is lighter than
+post-implementation validation (which already ran in QUALITY). The focus here
+is demonstrating to the user, not re-testing.
+
+At Plan Approval and Ship Approval, demonstrate against real data:
+
+**Plan Approval:** Before presenting plan for approval, find real data (system's job
+first) and trace through the planned logic with it. Show expected behavior at each
+step. Surface all assumptions about input format and structure. If assumptions can't
+be validated against real data, flag as risks.
+
+**Ship Approval:** After tests pass (QUALITY phase), show the feature processing
+actual content. Let the user see what the system produces. If output doesn't match
+expectation: do not ship, return to EXECUTION.
+
+**Greenfield:** If no real data exists, research analogous examples or surface that
+the design is ungrounded. The uncertainty is stated, never hidden.
+
+## ADHD-Aware Steering Checkpoints
+
+Separate from Drift Detection (which fires at decision points). Steering checkpoints
+are about attention/focus management in long sessions, not about solution quality.
+
+**Trigger:** 5+ turns within a single phase, or conversation noticeably drifting.
+
+This is a safety net, not a constant interruption. If work is flowing well: don't
+interrupt it.
+
+When triggered, one lightweight check:
+
+```
+--- Steering Check ---
+Original goal: [one sentence from session start]
+Current focus: [what we're doing now]
+Aligned? [yes / drifting toward X]
+---
+```
+
+If drifting: name it, suggest redirect. If aligned: continue without interruption.
+
 ## Stuck Detection
 
 A phase is stuck when:

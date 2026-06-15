@@ -115,7 +115,7 @@ Verification is NOT optional. It is a required gate between execution and shippi
 executing-plans / test-driven-development / subagent-driven-development / dispatching-parallel-agents
     |
     v (always, when work produces shippable code)
-verification-before-completion
+verification-before-completion (includes real-data validation)
     |
     v (pass only)
 finishing-a-development-branch
@@ -123,6 +123,41 @@ finishing-a-development-branch
 
 **Exception:** Debugging and review flows that do not produce shippable changes
 (e.g., investigation-only, requesting-code-review) do not require this gate.
+
+## Real-Data Validation (part of verification)
+
+Implements "Ground in Reality: post-implementation trigger." On fast-path, a quick
+confirmation that the change works is sufficient; the full protocol below applies
+at medium+ intensity.
+
+When `verification-before-completion` runs, it MUST include real-data validation
+in addition to test passing. Tests can pass against synthetic fixtures while the
+real use case remains broken.
+
+1. **After tests pass:** Run the implemented feature against actual data. Not a test
+   fixture. Not a synthetic example. The real thing (or the closest available).
+
+2. **Show the output.** Present it to the user. Ask: "Does this produce the result
+   you expected?"
+
+3. **If the output is wrong:** The implementation is wrong. Do not:
+   - Suggest the user change their data (Adaptation Direction invariant)
+   - Characterize broken output as "expected for Phase 1"
+   - Propose "graceful degradation" for core functionality
+   - Offer a workaround that shifts burden to the user
+
+4. **If real data unavailable:** Trace through implementation logic by hand with
+   the closest available example. Show expected behavior at each step.
+
+### Anti-patterns (drift signals in verification)
+
+| Anti-pattern | Correct response |
+|--------------|-----------------|
+| "Your data needs annotations" | Fix the parser |
+| "This will work in Phase 2" | If it's core, it works now |
+| "Falls back to scoring" | If text parsing is primary, make it work |
+| "All tests pass!" (but no real data shown) | Show it working on actual data |
+| "You could add markers to help" | The tool finds what's there |
 
 ## After Choosing
 

@@ -534,3 +534,50 @@ The review-gate continues to classify severity as before. The quality layer
 intercepts the output and remaps `blocking` to `true` for all findings before
 evaluating pass/fail. The review gate does not need modification; the quality
 layer wraps it.
+
+## Reality Test Dimension (post-spec and post-plan)
+
+Implements "Ground in Reality" as a review dimension within quality gates.
+This catches spec drift before implementation begins.
+
+In addition to existing review dimensions, post-spec and post-plan gates include
+a mandatory Reality Test.
+
+### Reality Test Checklist
+
+For `post-spec`:
+
+1. **Format assumption check:** Does the spec assume input formats that don't exist
+   in the user's real data? If it references a format, verify it exists.
+
+2. **New syntax introduction:** Does the spec introduce ANY new syntax, annotation,
+   keyword, or structural requirement? If yes without explicit user approval:
+   FINDING (severity: HIGH, "Spec introduces format user must adopt; violates
+   adaptation direction")
+
+3. **Synthetic vs. real validation:** Are examples drawn from real data or synthetic?
+   If synthetic and no real-data grounding established: FINDING (severity: MEDIUM,
+   "Spec validated only against synthetic examples")
+
+4. **Core requirement deferral:** Does the spec defer core functionality to future
+   phases? FINDING (severity: HIGH, "Core requirement deferred as Phase 1 limitation")
+
+5. **Workaround detection:** Does the spec suggest the user change their workflow or
+   data format to accommodate the system? FINDING (severity: CRITICAL, "Spec suggests
+   user adapt to tool; violates adaptation direction")
+
+For `post-plan` (same checks plus):
+
+6. **Implementation path:** Does the plan build fallback/degraded behavior BEFORE the
+   primary path? FINDING (severity: MEDIUM, "Plan builds fallback before primary;
+   risk of 'good enough' stopping point")
+
+### Named anti-patterns
+
+- **Scoring as crutch:** System defaults to numeric similarity/fitness scoring when
+  the answer is directly readable in the content. If text says "this goes here," a
+  parser should read that, not compute a relevance score.
+
+- **Workaround framing:** System suggests annotations or reformatting as "helpful"
+  when the real issue is that the tool can't parse what exists. This is a system bug
+  framed as user convenience.
