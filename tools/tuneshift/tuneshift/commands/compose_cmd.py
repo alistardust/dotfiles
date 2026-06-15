@@ -1,0 +1,213 @@
+"""Narrative composition commands."""
+
+from __future__ import annotations
+
+import sys
+
+from tuneshift.composer.candidate_finder import find_candidates
+from tuneshift.composer.gap_analyzer import analyze_composition_gaps
+from tuneshift.composer.matcher import match_tracks_to_sections
+from tuneshift.composer.models import ComposeResult, PlaylistConcept
+from tuneshift.composer.parser import parse_enhanced_narrative
+from tuneshift.composer.reviewer import review_composition
+from tuneshift.composer.sequencer import sequence_sections
+from tuneshift.db import Database
+from tuneshift.sequencer.metadata import track_to_metadata
+
+
+def _get_concept_store(db: Database, playlist_id: int) -> tuple[str, dict | None]:
+    preferences = db.get_preferences(playlist_id)
+    if preferences is not None:
+        return "preferences", preferences
+
+    constraints = db.get_constraints(playlist_id)
+    if constraints is not None:
+        return "constraints", constraints
+
+    return "preferences", {}
+
+
+def _get_concept(db: Database, playlist_id: int) -> PlaylistConcept | None:
+    store_name, store = _get_concept_store(db, playlist_id)
+    del store_name
+    concept_data = (store or {}).get("concept")
+    if not concept_data:
+        return None
+    return PlaylistConcept(
+        theme=concept_data.get("theme", ""),
+        hard_rules=list(concept_data.get("hard_rules", [])),
+        soft_rules=list(concept_data.get("soft_rules", [])),
+        genres=list(concept_data.get("genres", [])),
+        era=concept_data.get("era"),
+    )
+
+
+def _save_concept(db: Database, playlist_id: int, concept_data: dict | None) -> None:
+    store_name, store = _get_concept_store(db, playlist_id)
+    updated_store = dict(store or {})
+    if concept_data is None:
+        updated_store.pop("concept", None)
+    else:
+        updated_store["concept"] = concept_data
+
+    value = updated_store or None
+    if store_name == "preferences":
+        db.set_preferences(playlist_id, value)
+        return
+    db.set_constraints(playlist_id, value)
+
+
+def _render_analysis(result: ComposeResult) -> None:
+    print("Assignments:")
+    for section_name, tracks in result.assignments.assignments.items():
+        print(f"  {section_name}:")
+        if not tracks:
+            print("    (none)")
+            continue
+        for track in tracks:
+            print(f"    - {track.artist} - {track.title}")
+
+    print("\nGaps:")
+    if not result.gaps:
+        print("  (none)")
+    for gap in result.gaps:
+        print(f"  - [{gap.gap_type}] {gap.section_name}: {gap.description}")
+        candidates = result.candidates.get(gap.section_name, [])
+        for candidate in candidates:
+            print(
+                f"      candidate: {candidate.artist} - {candidate.title} "
+                f"({candidate.fitness_score:.2f})"
+            )
+
+
+def _render_composition(result: ComposeResult, sections: list) -> None:
+    print("Composed order:")
+    position = 1
+    for section in sections:
+        print(f"\n[{section.name}]")
+        tracks = result.assignments.assignments.get(section.name, [])
+        for track in tracks:
+            print(f"  {position:2d}. {track.artist} - {track.title}")
+            position += 1
+
+    if result.assignments.unassigned:
+        print("\n[UNASSIGNED]")
+        for track in result.assignments.unassigned:
+            print(f"  {position:2d}. {track.artist} - {track.title}")
+            position += 1
+
+    print("\nReview findings:")
+    if not result.review_findings:
+        print("  (none)")
+        return
+
+    for finding in result.review_findings:
+        section_prefix = f"{finding.section_name}: " if finding.section_name else ""
+        print(
+            f"  - [{finding.category}] {section_prefix}{finding.description} "
+            f"(severity={finding.severity:.2f})"
+        )
+
+
+def handle_compose(args, db: Database) -> int:
+    """Compose or analyze a playlist from its narrative."""
+    playlist = db.find_playlist_by_name(args.playlist)
+    if not playlist:
+        print(f"Playlist not found: {args.playlist}", file=sys.stderr)
+        return 1
+
+    narrative = db.get_narrative(playlist.id)
+    if not narrative:
+        print(f'No narrative set for "{playlist.name}".', file=sys.stderr)
+        return 1
+
+    sections = parse_enhanced_narrative(narrative)
+    if not sections:
+        print(f'No sections could be parsed from "{playlist.name}" narrative.', file=sys.stderr)
+        return 1
+
+    concept = _get_concept(db, playlist.id)
+    tracks = [track_to_metadata(track) for track in db.get_playlist_tracks(playlist.id)]
+    assignments = match_tracks_to_sections(tracks, sections, concept=concept)
+    gaps = analyze_composition_gaps(assignments, sections)
+    ordered = sequence_sections(assignments, sections)
+    findings = review_composition(ordered, assignments, sections, concept=concept)
+    result = ComposeResult(
+        ordered_tracks=ordered,
+        assignments=assignments,
+        gaps=gaps,
+        review_findings=findings,
+    )
+
+    if getattr(args, "fill_gaps", False):
+        used_ids = {track.track_id for track in ordered}
+        result.candidates = {
+            gap.section_name: find_candidates(
+                gap.fill_spec,
+                db=db,
+                concept=concept,
+                exclude_ids=used_ids,
+            )
+            for gap in gaps
+            if gap.fill_spec is not None
+        }
+
+    if getattr(args, "analyze", False):
+        _render_analysis(result)
+        return 0
+
+    _render_composition(result, sections)
+
+    if getattr(args, "apply", False):
+        db.set_playlist_tracks(playlist.id, [track.track_id for track in ordered])
+        print(f'\nApplied composed order to "{playlist.name}".')
+    elif getattr(args, "dry_run", False):
+        print("\nDry run only, no changes applied.")
+
+    return 0
+
+
+def handle_concept(args, db: Database) -> int:
+    """Show, update, or clear the playlist concept."""
+    playlist = db.find_playlist_by_name(args.playlist)
+    if not playlist:
+        print(f"Playlist not found: {args.playlist}", file=sys.stderr)
+        return 1
+
+    if getattr(args, "clear", False):
+        _save_concept(db, playlist.id, None)
+        print(f'Cleared concept for "{playlist.name}"')
+        return 0
+
+    concept = _get_concept(db, playlist.id)
+    if not any((getattr(args, "theme", None), getattr(args, "require", None), getattr(args, "prefer", None))):
+        if concept is None:
+            print(f'No concept set for "{playlist.name}".')
+            return 0
+        print(f'Concept for "{playlist.name}":')
+        print(f"  Theme: {concept.theme}")
+        print(f"  Hard rules: {concept.hard_rules}")
+        print(f"  Soft rules: {concept.soft_rules}")
+        if concept.genres:
+            print(f"  Genres: {concept.genres}")
+        if concept.era:
+            print(f"  Era: {concept.era}")
+        return 0
+
+    concept_data = {
+        "theme": concept.theme if concept is not None else "",
+        "hard_rules": list(concept.hard_rules) if concept is not None else [],
+        "soft_rules": list(concept.soft_rules) if concept is not None else [],
+        "genres": list(concept.genres) if concept is not None else [],
+        "era": concept.era if concept is not None else None,
+    }
+    if getattr(args, "theme", None):
+        concept_data["theme"] = args.theme
+    if getattr(args, "require", None) and args.require not in concept_data["hard_rules"]:
+        concept_data["hard_rules"].append(args.require)
+    if getattr(args, "prefer", None) and args.prefer not in concept_data["soft_rules"]:
+        concept_data["soft_rules"].append(args.prefer)
+
+    _save_concept(db, playlist.id, concept_data)
+    print(f'Updated concept for "{playlist.name}"')
+    return 0

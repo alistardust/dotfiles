@@ -187,6 +187,24 @@ def build_parser() -> argparse.ArgumentParser:
     p_link.add_argument("url", nargs="?", help="Platform URL or playlist ID (for manual link)")
     p_link.add_argument("--quiet", "-q", action="store_true", help="Suppress 'not found' messages")
 
+    # compose
+    p_compose = sub.add_parser("compose", help="Narrative-driven playlist composition")
+    p_compose.add_argument("playlist", help="Playlist name")
+    p_compose.add_argument("--analyze", action="store_true", help="Analyze only (gap report)")
+    p_compose.add_argument("--reorder", action="store_true", help="Reorder only")
+    p_compose.add_argument("--fill-gaps", action="store_true", help="Find candidates for gaps")
+    p_compose.add_argument("--dry-run", action="store_true", help="Preview without applying")
+    p_compose.add_argument("--apply", action="store_true", help="Apply changes to playlist")
+
+    # concept
+    p_concept = sub.add_parser("concept", help="Set or show playlist concept/theme")
+    p_concept.add_argument("playlist", help="Playlist name")
+    p_concept.add_argument("--theme", help="Playlist theme")
+    p_concept.add_argument("--require", help="Add a hard rule")
+    p_concept.add_argument("--prefer", help="Add a soft rule")
+    p_concept.add_argument("--show", action="store_true", help="Show current concept")
+    p_concept.add_argument("--clear", action="store_true", help="Clear concept")
+
     # Shell completions via shtab
     try:
         import shtab
@@ -281,6 +299,12 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "link":
             from tuneshift.commands.link_cmd import handle_link
             return handle_link(args, db)
+        elif args.command == "compose":
+            from tuneshift.commands.compose_cmd import handle_compose
+            return handle_compose(args, db)
+        elif args.command == "concept":
+            from tuneshift.commands.compose_cmd import handle_concept
+            return handle_concept(args, db)
         else:
             parser.print_help()
             return 1
@@ -299,4 +323,3 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     finally:
         db.close()
-
