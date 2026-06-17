@@ -27,9 +27,11 @@ _LOW_INTENSITY_WORDS = frozenset({
 })
 
 # Section name pattern: NAME (N) or NAME (N-M)
+# Captures everything from the colon to the next section header or end of text.
+# Uses DOTALL via inline flag for the body group, and MULTILINE for ^ anchoring.
 _SECTION_PATTERN = re.compile(
-    r"^([A-Z][A-Z_]*)\s*\((\d+)(?:-(\d+))?\)\s*:\s*(.+)$",
-    re.MULTILINE,
+    r"^([A-Z][A-Z_]*)\s*\((\d+)(?:-(\d+))?\)\s*:\s*(.*?)(?=\n[A-Z][A-Z_]*\s*\(\d|\Z)",
+    re.MULTILINE | re.DOTALL,
 )
 
 

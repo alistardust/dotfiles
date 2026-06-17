@@ -26,7 +26,8 @@ def compose_playlist(
     concept: PlaylistConcept | None = None,
 ) -> ComposeResult:
     """Run the end-to-end narrative composition pipeline."""
-    sections = parse_enhanced_narrative(narrative)
+    tracklist = [t.title for t in tracks]
+    sections = parse_enhanced_narrative(narrative, tracklist=tracklist)
     assignments = match_tracks_to_sections(tracks, sections, concept=concept)
     gaps = analyze_composition_gaps(assignments, sections)
     ordered = sequence_sections(assignments, sections)
