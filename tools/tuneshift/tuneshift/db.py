@@ -6,9 +6,9 @@ import re
 import sqlite3
 from pathlib import Path
 
-from tuneshift.models import PlatformMapping, Playlist, PlaylistPin, Track
+from tuneshift.models import Album, Artist, PlatformMapping, Playlist, PlaylistPin, Track
 
-_SCHEMA_VERSION = 7
+_SCHEMA_VERSION = 8
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS tracks (
@@ -33,7 +33,9 @@ CREATE TABLE IF NOT EXISTS tracks (
     mb_release_group_id TEXT,
     confidence_tier TEXT,
     confidence_score REAL,
-    resolved_at TEXT
+    resolved_at TEXT,
+    artist_id INTEGER REFERENCES artists(id),
+    album_id INTEGER REFERENCES albums(id)
 );
 
 CREATE TABLE IF NOT EXISTS platform_tracks (
@@ -129,6 +131,49 @@ CREATE TABLE IF NOT EXISTS schema_meta (
     value TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS artists (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    norm_name TEXT NOT NULL,
+    sort_name TEXT,
+    bio TEXT,
+    identity JSON,
+    tags JSON DEFAULT '[]',
+    identity_confidence TEXT DEFAULT 'unconfirmed',
+    genres JSON DEFAULT '[]',
+    origin TEXT,
+    active_start INTEGER,
+    active_end INTEGER,
+    mb_artist_id TEXT,
+    tidal_artist_id INTEGER,
+    spotify_artist_uri TEXT,
+    lastfm_url TEXT,
+    wikipedia_url TEXT,
+    enrichment_sources JSON DEFAULT '[]',
+    verified INTEGER DEFAULT 0,
+    enriched_at TEXT,
+    verified_at TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS albums (
+    id INTEGER PRIMARY KEY,
+    title TEXT NOT NULL,
+    norm_title TEXT NOT NULL,
+    artist_id INTEGER NOT NULL REFERENCES artists(id) ON DELETE CASCADE,
+    release_date TEXT,
+    release_type TEXT DEFAULT 'album',
+    edition TEXT DEFAULT 'original',
+    genres JSON DEFAULT '[]',
+    mb_release_group_id TEXT,
+    tidal_album_id INTEGER,
+    spotify_album_uri TEXT,
+    enriched_at TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    UNIQUE(norm_title, artist_id, edition)
+);
+
 CREATE INDEX IF NOT EXISTS idx_tracks_identity
     ON tracks(norm_title, norm_artist, norm_album);
 CREATE INDEX IF NOT EXISTS idx_platform_tracks_lookup
@@ -137,6 +182,9 @@ CREATE INDEX IF NOT EXISTS idx_playlist_tracks_order
     ON playlist_tracks(playlist_id, position);
 CREATE INDEX IF NOT EXISTS idx_tracks_isrc ON tracks(isrc) WHERE isrc IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_evidence_track ON evidence(track_id, is_current);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_artists_norm ON artists(norm_name);
+CREATE INDEX IF NOT EXISTS idx_artists_mb ON artists(mb_artist_id) WHERE mb_artist_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_albums_artist ON albums(artist_id);
 """
 
 _REMIX_RE = re.compile(r"\s*\((?:remaster(?:ed)?|deluxe edition)[^)]*\)\s*", re.IGNORECASE)
@@ -318,6 +366,128 @@ class Database:
                 }
                 if "version_override" not in playlist_track_cols:
                     self.conn.execute("ALTER TABLE playlist_tracks ADD COLUMN version_override TEXT")
+
+            if current_version < 8:
+                # Create artists table
+                self.conn.execute("""
+                    CREATE TABLE IF NOT EXISTS artists (
+                        id INTEGER PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        norm_name TEXT NOT NULL,
+                        sort_name TEXT,
+                        bio TEXT,
+                        identity JSON,
+                        tags JSON DEFAULT '[]',
+                        identity_confidence TEXT DEFAULT 'unconfirmed',
+                        genres JSON DEFAULT '[]',
+                        origin TEXT,
+                        active_start INTEGER,
+                        active_end INTEGER,
+                        mb_artist_id TEXT,
+                        tidal_artist_id INTEGER,
+                        spotify_artist_uri TEXT,
+                        lastfm_url TEXT,
+                        wikipedia_url TEXT,
+                        enrichment_sources JSON DEFAULT '[]',
+                        verified INTEGER DEFAULT 0,
+                        enriched_at TEXT,
+                        verified_at TEXT,
+                        created_at TEXT DEFAULT (datetime('now')),
+                        updated_at TEXT DEFAULT (datetime('now'))
+                    )
+                """)
+                self.conn.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_artists_norm ON artists(norm_name)"
+                )
+                self.conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_artists_mb ON artists(mb_artist_id)"
+                )
+
+                # Create albums table
+                self.conn.execute("""
+                    CREATE TABLE IF NOT EXISTS albums (
+                        id INTEGER PRIMARY KEY,
+                        title TEXT NOT NULL,
+                        norm_title TEXT NOT NULL,
+                        artist_id INTEGER NOT NULL REFERENCES artists(id) ON DELETE CASCADE,
+                        release_date TEXT,
+                        release_type TEXT DEFAULT 'album',
+                        edition TEXT DEFAULT 'original',
+                        genres JSON DEFAULT '[]',
+                        mb_release_group_id TEXT,
+                        tidal_album_id INTEGER,
+                        spotify_album_uri TEXT,
+                        enriched_at TEXT,
+                        created_at TEXT DEFAULT (datetime('now')),
+                        UNIQUE(norm_title, artist_id, edition)
+                    )
+                """)
+                self.conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_albums_artist ON albums(artist_id)"
+                )
+
+                # Add FK columns to tracks
+                track_cols = {
+                    r[1] for r in self.conn.execute("PRAGMA table_info(tracks)").fetchall()
+                }
+                if "artist_id" not in track_cols:
+                    self.conn.execute(
+                        "ALTER TABLE tracks ADD COLUMN artist_id INTEGER REFERENCES artists(id)"
+                    )
+                if "album_id" not in track_cols:
+                    self.conn.execute(
+                        "ALTER TABLE tracks ADD COLUMN album_id INTEGER REFERENCES albums(id)"
+                    )
+                self.conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_tracks_artist_id ON tracks(artist_id)"
+                )
+                self.conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_tracks_album_id ON tracks(album_id)"
+                )
+
+                # Populate artists from existing track data
+                # Use the most common casing for each norm_artist as the canonical name
+                self.conn.execute("""
+                    INSERT OR IGNORE INTO artists (name, norm_name)
+                    SELECT artist, norm_artist FROM (
+                        SELECT artist, norm_artist, COUNT(*) as cnt,
+                               ROW_NUMBER() OVER (PARTITION BY norm_artist ORDER BY COUNT(*) DESC) as rn
+                        FROM tracks
+                        GROUP BY artist, norm_artist
+                    ) WHERE rn = 1
+                """)
+
+                # Link tracks to artists
+                self.conn.execute("""
+                    UPDATE tracks SET artist_id = (
+                        SELECT id FROM artists WHERE artists.norm_name = tracks.norm_artist
+                    )
+                """)
+
+                # Populate albums from existing track data
+                self.conn.execute("""
+                    INSERT OR IGNORE INTO albums (title, norm_title, artist_id)
+                    SELECT t.album, t.norm_album, t.artist_id
+                    FROM (
+                        SELECT album, norm_album, artist_id,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY norm_album, artist_id ORDER BY COUNT(*) DESC
+                               ) as rn
+                        FROM tracks
+                        WHERE album IS NOT NULL AND artist_id IS NOT NULL
+                        GROUP BY album, norm_album, artist_id
+                    ) t WHERE t.rn = 1
+                """)
+
+                # Link tracks to albums
+                self.conn.execute("""
+                    UPDATE tracks SET album_id = (
+                        SELECT a.id FROM albums a
+                        WHERE a.norm_title = tracks.norm_album
+                        AND a.artist_id = tracks.artist_id
+                    )
+                    WHERE tracks.album IS NOT NULL AND tracks.artist_id IS NOT NULL
+                """)
 
             self.conn.execute(
                 "UPDATE schema_meta SET value = ? WHERE key = 'version'",
@@ -1102,3 +1272,117 @@ class Database:
         """Get the mood profile for a playlist."""
         row = self.conn.execute("SELECT mood_profile FROM playlists WHERE id = ?", (playlist_id,)).fetchone()
         return json.loads(row[0]) if row and row[0] else None
+
+    # ---- Artist methods ----
+
+    def get_artist(self, artist_id: int) -> Artist | None:
+        """Get an artist by ID."""
+        row = self.conn.execute(
+            "SELECT * FROM artists WHERE id = ?", (artist_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        return self._row_to_artist(row)
+
+    def get_artist_by_name(self, name: str) -> Artist | None:
+        """Get an artist by name (normalized lookup)."""
+        norm = normalize_artist(name)
+        row = self.conn.execute(
+            "SELECT * FROM artists WHERE norm_name = ?", (norm,)
+        ).fetchone()
+        if row is None:
+            return None
+        return self._row_to_artist(row)
+
+    def get_artists_for_playlist(self, playlist_id: int) -> list[Artist]:
+        """Get all unique artists in a playlist."""
+        rows = self.conn.execute("""
+            SELECT DISTINCT a.* FROM artists a
+            JOIN tracks t ON t.artist_id = a.id
+            JOIN playlist_tracks pt ON pt.track_id = t.id
+            WHERE pt.playlist_id = ?
+            ORDER BY a.name
+        """, (playlist_id,)).fetchall()
+        return [self._row_to_artist(row) for row in rows]
+
+    def update_artist(self, artist_id: int, **fields: Any) -> None:
+        """Update artist fields by keyword arguments."""
+        json_fields = {"identity", "tags", "genres", "enrichment_sources"}
+        sets: list[str] = []
+        values: list[Any] = []
+        for key, value in fields.items():
+            sets.append(f"{key} = ?")
+            if key in json_fields and not isinstance(value, str):
+                values.append(json.dumps(value))
+            else:
+                values.append(value)
+        if not sets:
+            return
+        sets.append("updated_at = datetime('now')")
+        values.append(artist_id)
+        self.conn.execute(
+            f"UPDATE artists SET {', '.join(sets)} WHERE id = ?", values
+        )
+        self.conn.commit()
+
+    def _row_to_artist(self, row: sqlite3.Row) -> Artist:
+        """Convert a DB row to an Artist dataclass."""
+        return Artist(
+            id=row["id"],
+            name=row["name"],
+            norm_name=row["norm_name"],
+            sort_name=row["sort_name"],
+            bio=row["bio"],
+            identity=json.loads(row["identity"]) if row["identity"] else None,
+            tags=json.loads(row["tags"]) if row["tags"] else [],
+            identity_confidence=row["identity_confidence"] or "unconfirmed",
+            genres=json.loads(row["genres"]) if row["genres"] else [],
+            origin=row["origin"],
+            active_start=row["active_start"],
+            active_end=row["active_end"],
+            mb_artist_id=row["mb_artist_id"],
+            tidal_artist_id=row["tidal_artist_id"],
+            spotify_artist_uri=row["spotify_artist_uri"],
+            lastfm_url=row["lastfm_url"],
+            wikipedia_url=row["wikipedia_url"],
+            enrichment_sources=json.loads(row["enrichment_sources"]) if row["enrichment_sources"] else [],
+            verified=bool(row["verified"]),
+            enriched_at=row["enriched_at"],
+            verified_at=row["verified_at"],
+        )
+
+    # ---- Album methods ----
+
+    def get_album(self, album_id: int) -> Album | None:
+        """Get an album by ID."""
+        row = self.conn.execute(
+            "SELECT * FROM albums WHERE id = ?", (album_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        return self._row_to_album(row)
+
+    def get_albums_by_artist(self, artist_id: int) -> list[Album]:
+        """Get all albums by an artist."""
+        rows = self.conn.execute(
+            "SELECT * FROM albums WHERE artist_id = ? ORDER BY release_date",
+            (artist_id,),
+        ).fetchall()
+        return [self._row_to_album(row) for row in rows]
+
+    def _row_to_album(self, row: sqlite3.Row) -> Album:
+        """Convert a DB row to an Album dataclass."""
+        return Album(
+            id=row["id"],
+            title=row["title"],
+            norm_title=row["norm_title"],
+            artist_id=row["artist_id"],
+            release_date=row["release_date"],
+            release_type=row["release_type"],
+            edition=row["edition"],
+            genres=json.loads(row["genres"]) if row["genres"] else [],
+            mb_release_group_id=row["mb_release_group_id"],
+            tidal_album_id=row["tidal_album_id"],
+            spotify_album_uri=row["spotify_album_uri"],
+            enriched_at=row["enriched_at"],
+        )

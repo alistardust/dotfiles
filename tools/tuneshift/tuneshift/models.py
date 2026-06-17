@@ -109,3 +109,48 @@ class PlaylistPin:
     pin_type: str  # "opener", "closer", "anchor", "position"
     group_id: str | None = None  # for adjacency groups
     group_order: int | None = None  # position within group, or target index for "position" pins
+
+
+@dataclass
+class Artist:
+    """A normalized artist entity in the library."""
+
+    id: int | None = None
+    name: str = ""
+    norm_name: str = ""
+    sort_name: str | None = None
+    bio: str | None = None
+    identity: dict[str, Any] | None = None
+    tags: list[str] = field(default_factory=list)
+    identity_confidence: str = "unconfirmed"
+    genres: list[str] = field(default_factory=list)
+    origin: str | None = None
+    active_start: int | None = None
+    active_end: int | None = None
+    mb_artist_id: str | None = None
+    tidal_artist_id: int | None = None
+    spotify_artist_uri: str | None = None
+    lastfm_url: str | None = None
+    wikipedia_url: str | None = None
+    enrichment_sources: list[str] = field(default_factory=list)
+    verified: bool = False
+    enriched_at: str | None = None
+    verified_at: str | None = None
+
+
+@dataclass
+class Album:
+    """A normalized album entity in the library."""
+
+    id: int | None = None
+    title: str = ""
+    norm_title: str = ""
+    artist_id: int | None = None
+    release_date: str | None = None
+    release_type: str = "album"
+    edition: str = "original"
+    genres: list[str] = field(default_factory=list)
+    mb_release_group_id: str | None = None
+    tidal_album_id: int | None = None
+    spotify_album_uri: str | None = None
+    enriched_at: str | None = None
