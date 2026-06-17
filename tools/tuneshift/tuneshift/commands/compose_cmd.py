@@ -80,18 +80,33 @@ def _render_analysis(result: ComposeResult) -> None:
 def _render_composition(result: ComposeResult, sections: list) -> None:
     print("Composed order:")
     position = 1
+
+    # Build section label lookup from the ordered tracks.
+    # When pins move tracks across section boundaries, we label by
+    # the section the track was assigned to (for context), but render
+    # in the actual pin-corrected order.
+    track_section: dict[int, str] = {}
     for section in sections:
-        print(f"\n[{section.name}]")
-        tracks = result.assignments.assignments.get(section.name, [])
-        for track in tracks:
-            print(f"  {position:2d}. {track.artist} - {track.title}")
-            position += 1
+        for track in result.assignments.assignments.get(section.name, []):
+            track_section[track.track_id] = section.name
+
+    current_section = None
+    for track in result.ordered_tracks:
+        section_name = track_section.get(track.track_id, "UNASSIGNED")
+        if section_name != current_section:
+            print(f"\n[{section_name}]")
+            current_section = section_name
+        print(f"  {position:2d}. {track.artist} - {track.title}")
+        position += 1
 
     if result.assignments.unassigned:
-        print("\n[UNASSIGNED]")
-        for track in result.assignments.unassigned:
-            print(f"  {position:2d}. {track.artist} - {track.title}")
-            position += 1
+        unassigned_ids = {t.track_id for t in result.assignments.unassigned}
+        remaining = [t for t in result.ordered_tracks if t.track_id in unassigned_ids]
+        if remaining:
+            print("\n[UNASSIGNED]")
+            for track in remaining:
+                print(f"  {position:2d}. {track.artist} - {track.title}")
+                position += 1
 
     print("\nReview findings:")
     if not result.review_findings:
@@ -125,7 +140,8 @@ def handle_compose(args, db: Database) -> int:
 
     concept = _get_concept(db, playlist.id)
     tracks = [track_to_metadata(track) for track in db.get_playlist_tracks(playlist.id)]
-    result = compose_playlist(tracks, narrative, concept=concept)
+    pins = db.get_pins(playlist.id)
+    result = compose_playlist(tracks, narrative, concept=concept, pins=pins)
 
     if getattr(args, "fill_gaps", False):
         used_ids = {track.track_id for track in result.ordered_tracks}

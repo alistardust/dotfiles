@@ -103,3 +103,108 @@ def test_sharp_cut_maximizes_contrast_at_boundary() -> None:
     assert ordered_ids[1] == 2
     assert ordered_ids[2] == 4
     assert set(ordered_ids) == {1, 2, 3, 4, 5}
+
+
+# --- Pin support tests ---
+
+from tuneshift.models import PlaylistPin
+
+
+def test_opener_pin_moves_track_to_first() -> None:
+    sec_a = _section("A", capacity=2)
+    sec_b = _section("B", capacity=2)
+    assignments = SectionAssignments(
+        assignments={
+            "A": [_track(1, energy=0.3), _track(2, energy=0.4)],
+            "B": [_track(3, energy=0.5), _track(4, energy=0.6)],
+        },
+        misfits=[],
+        unassigned=[],
+    )
+    pins = [PlaylistPin(playlist_id=1, track_id=3, pin_type="opener")]
+
+    ordered = sequence_sections(assignments, [sec_a, sec_b], pins=pins)
+
+    assert ordered[0].track_id == 3
+
+
+def test_closer_pin_moves_track_to_last() -> None:
+    sec_a = _section("A", capacity=2)
+    sec_b = _section("B", capacity=2)
+    assignments = SectionAssignments(
+        assignments={
+            "A": [_track(1, energy=0.3), _track(2, energy=0.4)],
+            "B": [_track(3, energy=0.5), _track(4, energy=0.6)],
+        },
+        misfits=[],
+        unassigned=[],
+    )
+    pins = [PlaylistPin(playlist_id=1, track_id=1, pin_type="closer")]
+
+    ordered = sequence_sections(assignments, [sec_a, sec_b], pins=pins)
+
+    assert ordered[-1].track_id == 1
+
+
+def test_opener_and_closer_pins_together() -> None:
+    sec = _section("ALL", capacity=4)
+    assignments = SectionAssignments(
+        assignments={
+            "ALL": [_track(1), _track(2), _track(3), _track(4)],
+        },
+        misfits=[],
+        unassigned=[],
+    )
+    pins = [
+        PlaylistPin(playlist_id=1, track_id=3, pin_type="opener"),
+        PlaylistPin(playlist_id=1, track_id=1, pin_type="closer"),
+    ]
+
+    ordered = sequence_sections(assignments, [sec], pins=pins)
+
+    assert ordered[0].track_id == 3
+    assert ordered[-1].track_id == 1
+
+
+def test_adjacent_group_keeps_tracks_together() -> None:
+    sec = _section("ALL", capacity=5)
+    assignments = SectionAssignments(
+        assignments={
+            "ALL": [_track(1), _track(2), _track(3), _track(4), _track(5)],
+        },
+        misfits=[],
+        unassigned=[],
+    )
+    pins = [
+        PlaylistPin(playlist_id=1, track_id=4, pin_type="anchor", group_id="grp", group_order=0),
+        PlaylistPin(playlist_id=1, track_id=2, pin_type="anchor", group_id="grp", group_order=1),
+    ]
+
+    ordered = sequence_sections(assignments, [sec], pins=pins)
+
+    ids = [t.track_id for t in ordered]
+    idx_4 = ids.index(4)
+    idx_2 = ids.index(2)
+    assert idx_2 == idx_4 + 1
+
+
+def test_opener_with_adjacent_group() -> None:
+    """Opener pin + adjacent group: opener first, group member immediately after."""
+    sec = _section("ALL", capacity=4)
+    assignments = SectionAssignments(
+        assignments={
+            "ALL": [_track(1), _track(2), _track(3), _track(4)],
+        },
+        misfits=[],
+        unassigned=[],
+    )
+    pins = [
+        PlaylistPin(playlist_id=1, track_id=1, pin_type="opener"),
+        PlaylistPin(playlist_id=1, track_id=2, pin_type="anchor", group_id="opener", group_order=1),
+    ]
+
+    ordered = sequence_sections(assignments, [sec], pins=pins)
+
+    # Opener at position 0, adjacent group member at position 1
+    assert ordered[0].track_id == 1
+    assert ordered[1].track_id == 2

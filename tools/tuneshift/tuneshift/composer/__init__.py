@@ -17,6 +17,7 @@ from tuneshift.composer.models import (
 from tuneshift.composer.parser import parse_enhanced_narrative
 from tuneshift.composer.reviewer import review_composition
 from tuneshift.composer.sequencer import sequence_sections
+from tuneshift.models import PlaylistPin
 from tuneshift.sequencer.metadata import TrackMetadata
 
 
@@ -24,13 +25,14 @@ def compose_playlist(
     tracks: list[TrackMetadata],
     narrative: str,
     concept: PlaylistConcept | None = None,
+    pins: list[PlaylistPin] | None = None,
 ) -> ComposeResult:
     """Run the end-to-end narrative composition pipeline."""
     tracklist = [t.title for t in tracks]
     sections = parse_enhanced_narrative(narrative, tracklist=tracklist)
     assignments = match_tracks_to_sections(tracks, sections, concept=concept)
     gaps = analyze_composition_gaps(assignments, sections)
-    ordered = sequence_sections(assignments, sections)
+    ordered = sequence_sections(assignments, sections, pins=pins)
     findings = review_composition(ordered, assignments, sections, concept=concept)
     return ComposeResult(
         ordered_tracks=ordered,
