@@ -155,13 +155,13 @@ enforce_ratchet(current_metrics, baseline):
 
 ## Orchestration Protocol
 
-The quality layer wraps the test-gate and review-gate, adding severity remapping,
-ratchet checks, and exemption management.
+The quality layer wraps the test-gate, test-audit, and review-gate, adding
+severity remapping, ratchet checks, and exemption management.
 
-**Execution order: test-gate first, then review-gate (sequential).** The review-gate's
-fix agent may modify source files. Running test-gate first establishes a clean baseline
-before any fixes are applied. This avoids race conditions where test-gate analyzes
-files that review-gate's fix agent is simultaneously modifying.
+**Execution order: test-gate first, then test-audit, then review-gate (sequential).**
+Test-gate establishes quality metrics. Test-audit evaluates strategy and traceability
+(reads test-gate results to avoid re-parsing). Review-gate runs last because its fix
+agent may modify source files.
 
 ```
 quality_gate(config):
@@ -169,9 +169,20 @@ quality_gate(config):
 
   # --- Phase-appropriate gate dispatch ---
   if config.gate_phase == "post-execution":
-    # Run test gate FIRST (establishes baseline before review fixes)
+    # 1. Test gate FIRST (establishes baseline before any fixes)
     test_result = invoke_test_gate(config)
-    # Then run review gate (may apply fixes to source files)
+    # 2. Test audit (strategy, traceability; reads test_gate_result)
+    audit_result = invoke_test_audit({
+      gate_phase: "post-execution",
+      changeset_scope: config.changeset_scope,
+      complexity_tier: config.complexity_tier,
+      work_type: config.work_type,
+      base_ref: config.base_ref,
+      test_gate_result: test_result,
+      spec_artifact: config.spec_artifact,
+      plan_artifact: config.plan_artifact
+    })
+    # 3. Review gate LAST (may apply fixes to source files)
     review_result = invoke_review_gate({
       gate_id: "mr",
       changeset_scope: config.changeset_scope,
@@ -179,20 +190,37 @@ quality_gate(config):
       base_ref: config.base_ref,
       head_ref: "HEAD"
     })
-    all_findings = collect_gate_findings(test_result, review_result)
+    all_findings = collect_gate_findings(test_result, audit_result, review_result)
 
   elif config.gate_phase in ("post-spec", "post-plan"):
-    # Specs/plans only need review gate (no test gate, no file mutations)
+    # Specs/plans: review gate + test audit (testability/strategy check)
     review_result = invoke_review_gate({
       gate_id: config.gate_phase,
       artifact_paths: config.changeset_scope,
       complexity_tier: config.complexity_tier
     })
-    all_findings = collect_gate_findings(review_result)
+    audit_result = invoke_test_audit({
+      gate_phase: config.gate_phase,
+      changeset_scope: config.changeset_scope,
+      complexity_tier: config.complexity_tier,
+      spec_artifact: config.spec_artifact,
+      plan_artifact: config.plan_artifact
+    })
+    all_findings = collect_gate_findings(review_result, audit_result)
 
   elif config.gate_phase == "mr":
-    # Full MR gate: test first, then review (sequential for safety)
+    # Full MR gate: test-gate -> test-audit -> review-gate (sequential)
     test_result = invoke_test_gate(config)
+    audit_result = invoke_test_audit({
+      gate_phase: "mr",
+      changeset_scope: config.changeset_scope,
+      complexity_tier: config.complexity_tier,
+      work_type: config.work_type,
+      base_ref: config.base_ref,
+      test_gate_result: test_result,
+      spec_artifact: config.spec_artifact,
+      plan_artifact: config.plan_artifact
+    })
     review_result = invoke_review_gate({
       gate_id: "mr",
       changeset_scope: config.changeset_scope,
@@ -200,7 +228,7 @@ quality_gate(config):
       base_ref: config.base_ref,
       head_ref: config.head_ref
     })
-    all_findings = collect_gate_findings(test_result, review_result)
+    all_findings = collect_gate_findings(test_result, audit_result, review_result)
 
 # --- Gate outcome merging ---
 # Handles heterogeneous outcomes (PASSED, ESCALATED_BLOCKING, ERROR)
@@ -215,10 +243,13 @@ collect_gate_findings(*results):
     elif result.status == "ERROR":
       escalations += [{severity: "CRITICAL", summary: "Gate failed: " + result.error}]
   if escalations:
-    return remap_all_blocking(findings + escalations)
-  return remap_all_blocking(findings)
+    findings = remap_all_blocking(findings + escalations)
+  else:
+    findings = remap_all_blocking(findings)
+  return findings
 
-  # --- Ratchet check ---
+# --- Ratchet check (runs in quality_gate after collect) ---
+# `all_findings` is the result of collect_gate_findings(...)
   current_metrics = compute_current_metrics(config)
   ratchet_violations = enforce_ratchet(current_metrics, baseline)
   all_findings.extend(ratchet_violations)
@@ -226,7 +257,7 @@ collect_gate_findings(*results):
   # --- Check expired exemptions ---
   expired = [e for e in baseline.debt.exemptions if e.expires_at < now()]
   for exemption in expired:
-    all_findings.append({
+    findings.append({
       severity: exemption.severity,  # original severity resurfaces
       summary: f"Exemption expired: {exemption.justification}",
       detail: f"Ticket {exemption.ticket} exemption expired on {exemption.expires_at}. Fix or renew.",
@@ -345,15 +376,18 @@ data loss risk, broken production path.
   |           QUALITY INVARIANTS LAYER                |
   |                                                   |
   |   post-spec/post-plan:                           |
-  |     quality_gate -> review-gate (remapped)       |
+  |     quality_gate -> review-gate + test-audit     |
+  |                     (both remapped)              |
   |                                                   |
   |   post-execution:                                |
-  |     quality_gate -> test-gate -> review-gate     |
-  |                     (both remapped)              |
+  |     quality_gate -> test-gate -> test-audit      |
+  |                     -> review-gate               |
+  |                     (all remapped)               |
   |                                                   |
   |   mr:                                            |
-  |     quality_gate -> test-gate -> review-gate     |
-  |                     (both remapped)              |
+  |     quality_gate -> test-gate -> test-audit      |
+  |                     -> review-gate               |
+  |                     (all remapped)               |
   +--------------------------------------------------+
                          |
                          v (PASSED only)
@@ -383,10 +417,10 @@ test-gate and review-gate internally with zero-debt enforcement.
 
 | Transition | `gate_phase` | Additional inputs |
 |-----------|-------------|-------------------|
-| Spec produced | `post-spec` | `changeset_scope` = artifact paths |
-| Plan produced | `post-plan` | `changeset_scope` = artifact paths |
-| Execution complete | `post-execution` | `work_type`, full changeset |
-| MR opened | `mr` | `head_ref`, full changeset |
+| Spec produced | `post-spec` | `changeset_scope` = artifact paths, `spec_artifact` |
+| Plan produced | `post-plan` | `changeset_scope` = artifact paths, `plan_artifact` |
+| Execution complete | `post-execution` | `work_type`, full changeset, `spec_artifact`, `plan_artifact` |
+| MR opened | `mr` | `head_ref`, full changeset, `spec_artifact`, `plan_artifact` |
 
 ## Proportionality (preventing over-enforcement)
 

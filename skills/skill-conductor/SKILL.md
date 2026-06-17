@@ -316,6 +316,10 @@ Pass to autopilot: `COMPLEXITY_TIER`, `WORKFLOW_TYPE`, `SKIP_GATES`
 | Execution complete | `post-execution` | changeset, complexity, work_type, base_ref |
 | MR opened | `mr` | changeset, complexity, base_ref, head_ref |
 
+The quality layer dispatches test-gate, test-audit, and review-gate internally.
+At `mr` phase, test-audit produces a mandatory traceability matrix (requirement
+gaps are blocking).
+
 ### Artifact detection
 
 - **post-spec:** `docs/superpowers/specs/*`, `~/.gstack/projects/*`, explicit "spec"
@@ -342,7 +346,7 @@ If invoked BY a sub-skill, do NOT re-invoke the caller. Route and stop.
 | Context | `skill-conductor-context` | gsd-new-project, gsd-map-codebase, gsd-discuss-phase, gsd-plan-phase, gsd-execute-phase |
 | Decision | `skill-conductor-decision` | office-hours, brainstorming, plan-ceo/eng/design-review, autoplan, cso |
 | Execution | `skill-conductor-execution` | writing-plans, executing-plans, TDD, verification, parallel-agents, debugging, ship |
-| Quality | `skill-conductor-quality` | Wraps test-gate + review-gate. Zero-debt enforcement. |
+| Quality | `skill-conductor-quality` | Wraps test-gate + test-audit + review-gate. Zero-debt enforcement. |
 | Autopilot | `skill-conductor-autopilot` | State machine, workflow templates, checkpoints, recovery |
 
 ### Model selection (cheapest correct)
