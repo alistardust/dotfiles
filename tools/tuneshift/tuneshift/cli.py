@@ -205,6 +205,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_concept.add_argument("--show", action="store_true", help="Show current concept")
     p_concept.add_argument("--clear", action="store_true", help="Clear concept")
 
+    # review
+    p_review = sub.add_parser("review", help="Review playlist for concept compliance")
+    p_review.add_argument("playlist", help="Playlist name")
+
     # Shell completions via shtab
     try:
         import shtab
@@ -305,6 +309,9 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "concept":
             from tuneshift.commands.compose_cmd import handle_concept
             return handle_concept(args, db)
+        elif args.command == "review":
+            from tuneshift.commands.compose_cmd import handle_review
+            return handle_review(args, db)
         else:
             parser.print_help()
             return 1

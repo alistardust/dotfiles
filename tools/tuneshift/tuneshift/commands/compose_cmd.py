@@ -121,6 +121,13 @@ def _render_composition(result: ComposeResult, sections: list) -> None:
         )
 
 
+def _build_artist_lookup(db: Database, playlist_id: int) -> dict[str, "Artist"]:
+    """Build a name->Artist lookup for all artists in a playlist."""
+    from tuneshift.models import Artist
+    artists = db.get_artists_for_playlist(playlist_id)
+    return {a.name.casefold(): a for a in artists}
+
+
 def handle_compose(args, db: Database) -> int:
     """Compose or analyze a playlist from its narrative."""
     playlist = db.find_playlist_by_name(args.playlist)
@@ -141,7 +148,10 @@ def handle_compose(args, db: Database) -> int:
     concept = _get_concept(db, playlist.id)
     tracks = [track_to_metadata(track) for track in db.get_playlist_tracks(playlist.id)]
     pins = db.get_pins(playlist.id)
-    result = compose_playlist(tracks, narrative, concept=concept, pins=pins)
+    artist_lookup = _build_artist_lookup(db, playlist.id)
+    result = compose_playlist(
+        tracks, narrative, concept=concept, pins=pins, artist_lookup=artist_lookup
+    )
 
     if getattr(args, "fill_gaps", False):
         used_ids = {track.track_id for track in result.ordered_tracks}
@@ -214,4 +224,57 @@ def handle_concept(args, db: Database) -> int:
 
     _save_concept(db, playlist.id, concept_data)
     print(f'Updated concept for "{playlist.name}"')
+    return 0
+
+
+def handle_review(args, db: Database) -> int:
+    """Review a playlist for concept compliance (works with or without narrative)."""
+    from tuneshift.composer.reviewer import review_playlist
+
+    playlist = db.find_playlist_by_name(args.playlist)
+    if not playlist:
+        print(f"Playlist not found: {args.playlist}", file=sys.stderr)
+        return 1
+
+    concept = _get_concept(db, playlist.id)
+    if concept is None:
+        print(f'No concept set for "{playlist.name}". Nothing to review.', file=sys.stderr)
+        return 1
+
+    tracks = [track_to_metadata(track) for track in db.get_playlist_tracks(playlist.id)]
+    artist_lookup = _build_artist_lookup(db, playlist.id)
+
+    findings = review_playlist(tracks, concept=concept, artist_lookup=artist_lookup)
+
+    print(f'Review: "{playlist.name}" ({len(tracks)} tracks)')
+    print(f'Concept: {concept.theme}')
+    print(f'Hard rules: {concept.hard_rules}')
+    print(f'Soft rules: {concept.soft_rules}')
+    print()
+
+    if not findings:
+        print("No issues found.")
+        return 0
+
+    hard = [f for f in findings if f.severity >= 0.8]
+    soft = [f for f in findings if 0.3 < f.severity < 0.8]
+    unknown = [f for f in findings if f.severity <= 0.3]
+
+    if hard:
+        print(f"VIOLATIONS ({len(hard)}):")
+        for f in hard:
+            print(f"  - {f.description}")
+        print()
+
+    if soft:
+        print(f"WARNINGS ({len(soft)}):")
+        for f in soft:
+            print(f"  - {f.description}")
+        print()
+
+    if unknown:
+        print(f"UNVERIFIED ({len(unknown)}):")
+        for f in unknown:
+            print(f"  - {f.description}")
+
     return 0
