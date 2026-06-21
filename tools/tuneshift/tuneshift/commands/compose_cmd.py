@@ -276,5 +276,32 @@ def handle_review(args, db: Database) -> int:
         print(f"UNVERIFIED ({len(unknown)}):")
         for f in unknown:
             print(f"  - {f.description}")
+        print()
+
+    if getattr(args, "fix", False) and hard:
+        # Remove tracks that violate hard rules
+        removed: list[str] = []
+        for finding in hard:
+            # Extract track title from finding description
+            # Format: 'HARD: "Title" by Artist - Rule: ...'
+            import re as _re
+            title_match = _re.search(r'"([^"]+)" by (.+?) - Rule:', finding.description)
+            if not title_match:
+                continue
+            title = title_match.group(1)
+            artist_name = title_match.group(2)
+            # Find the track in the playlist
+            for track in tracks:
+                if track.title == title and track.artist == artist_name:
+                    db.remove_track_from_playlist(playlist.id, track.track_id)
+                    removed.append(f"{title} by {artist_name}")
+                    break
+
+        if removed:
+            print(f"REMOVED ({len(removed)} tracks):")
+            for r in removed:
+                print(f"  - {r}")
+        else:
+            print("No tracks could be matched for removal.")
 
     return 0

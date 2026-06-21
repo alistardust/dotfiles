@@ -208,6 +208,7 @@ def build_parser() -> argparse.ArgumentParser:
     # review
     p_review = sub.add_parser("review", help="Review playlist for concept compliance")
     p_review.add_argument("playlist", help="Playlist name")
+    p_review.add_argument("--fix", action="store_true", help="Remove tracks that violate hard rules")
 
     # Shell completions via shtab
     try:
