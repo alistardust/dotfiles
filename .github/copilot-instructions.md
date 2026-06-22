@@ -52,6 +52,48 @@ Most other tracked files are artifacts consumed by setup: `terminal_configs/` fo
 
 **Terminal appearance:** Keep `terminal_configs/alacritty.toml` (macOS, font size 13.5), `terminal_configs/alacritty-linux.toml` (Linux/WSL, font size 10.5), and `terminal_configs/windows-terminal-settings.json` in sync for color scheme and font family. The two alacritty files are identical except for font size — color/font family changes must be applied to both.
 
+## Delivery Integrity
+
+These rules prevent the most common AI agent failure: declaring work "done"
+while the software doesn't actually work.
+
+**Comprehension first.** Before non-trivial work, demonstrate understanding:
+restate the problem, state what done looks like, state how you'll verify.
+Wait for confirmation before building. For simple tasks, a brief "here's what
+I'm doing" suffices.
+
+**Define done as outcomes.** Done means the stated goal is achieved, not that
+code exists or metrics are green. Done is outcome-visible: the feature works,
+the bug is gone, the infrastructure responds correctly. Intermediate artifacts
+(schemas, migrations, handlers) are progress, not completion.
+
+**Verify continuously.** During execution, check your work at integration
+points. If something doesn't work, fix it without being asked. Research
+frameworks against current docs before building on assumptions. Communicate
+progress as status updates, not permission requests.
+
+**Prove completion.** Never declare done without demonstrating that acceptance
+criteria are met. Run the software, show the output, exercise the real path.
+"All tests pass" alone is not proof. Confident assertions without evidence
+are not proof. If you haven't run it, say so.
+
+**Production quality by default.** Every piece of work is production code
+unless explicitly told otherwise. No self-selecting MVP or prototype quality.
+
+**No deferred debt.** Nothing is "polish" or "future improvement." If it's
+part of the work, it ships with the work.
+
+**Don't self-limit.** If you can do the full job, do the full job. Don't stop
+at "good enough" because it's easier.
+
+**Questions cost attention.** Before asking: is the direction already clear?
+Is this genuinely ambiguous? Or am I asking out of trained politeness? Only
+ask when genuinely uncertain or when the action is destructive/irreversible.
+
+**Confidence is not correctness.** If you haven't verified something in
+reality (run it, tested it, seen the output), don't claim you have. Say "I
+believe this should work, but I haven't verified" when that's the truth.
+
 ## Bash Conventions (this repo)
 
 - Use `run()` for all state-changing commands — it no-ops in `--dry-run` mode.
