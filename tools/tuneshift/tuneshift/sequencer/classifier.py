@@ -168,6 +168,7 @@ class OllamaBackend:
     def __init__(self, host: str | None = None, model: str | None = None) -> None:
         self._host = host or os.environ.get("OLLAMA_HOST", "http://localhost:11434")
         self._validated_models: set[str] = set()
+        self.selected_model: str | None = model
         # Validate the target model exists if specified
         if model:
             self._validate_model(model)
@@ -264,13 +265,29 @@ def detect_backend() -> tuple[str, LLMBackend] | tuple[None, None]:
 
     # Check if Ollama is reachable AND has a usable model
     ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-    target_model = os.environ.get("TUNESHIFT_CLASSIFIER_MODEL", _DEFAULT_MODELS.get("ollama", "llama3.1:8b"))
+    explicit_model = os.environ.get("TUNESHIFT_CLASSIFIER_MODEL")
     try:
         import urllib.request
-        urllib.request.urlopen(f"{ollama_host}/api/tags", timeout=2)
+        with urllib.request.urlopen(f"{ollama_host}/api/tags", timeout=2) as resp:
+            data = json.loads(resp.read())
+            available_models = [m["name"] for m in data.get("models", [])]
+
+        if not available_models:
+            return None, None
+
+        # Use explicit model if set, otherwise pick best available
+        if explicit_model and explicit_model in available_models:
+            target_model = explicit_model
+        elif _DEFAULT_MODELS["ollama"] in available_models:
+            target_model = _DEFAULT_MODELS["ollama"]
+        else:
+            # Pick the largest available model (prefer llama variants)
+            llama_models = [m for m in available_models if "llama" in m]
+            target_model = llama_models[0] if llama_models else available_models[0]
+
         backend = OllamaBackend(ollama_host, model=target_model)
         return "ollama", backend
-    except (OSError, ImportError, ValueError):
+    except (OSError, ImportError, ValueError, json.JSONDecodeError):
         pass
 
     return None, None
@@ -338,6 +355,7 @@ class TrackClassifier:
         self._model = (
             model
             or os.environ.get("TUNESHIFT_CLASSIFIER_MODEL")
+            or getattr(self._backend, "selected_model", None)
             or _DEFAULT_MODELS.get(self._backend_name or "", "gpt-4o-mini")
         )
 
