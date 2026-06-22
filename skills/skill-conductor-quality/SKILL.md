@@ -615,3 +615,31 @@ For `post-plan` (same checks plus):
 - **Workaround framing:** System suggests annotations or reformatting as "helpful"
   when the real issue is that the tool can't parse what exists. This is a system bug
   framed as user convenience.
+
+### Proof of Completion (Delivery Integrity)
+
+The QUALITY phase cannot pass to SHIP without completion evidence.
+
+**Required:** Demonstration that acceptance criteria (defined in the
+comprehension contract) are met. This means showing actual behavior, not
+asserting it.
+
+**Evidence types (any sufficient):**
+- Command output showing the feature/fix working
+- Integration test output exercising the real path
+- Screenshot or terminal output of the running software
+- Infrastructure probe showing correct response
+
+**Insufficient alone:**
+- Unit test pass counts or coverage percentages
+- Lint/format clean status
+- Agent assertion ("I've verified this works")
+- Tests that mock the exact boundary under question
+
+**Scaling:**
+- Simple changes: showing the result inline is sufficient
+- Feature work: run and demonstrate
+- Complex integration: end-to-end demonstration of the integration path
+
+**Override:** The human can say "good enough, ship it" at any time. This gate
+restricts the agent's self-declaration, not the human's judgment.
