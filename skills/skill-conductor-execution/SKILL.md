@@ -159,6 +159,29 @@ real use case remains broken.
 | "All tests pass!" (but no real data shown) | Show it working on actual data |
 | "You could add markers to help" | The tool finds what's there |
 
+### Continuous Verification (Delivery Integrity)
+
+During execution, the implementing agent must:
+
+- **Verify at integration points.** When connecting components, confirm the
+  connection works before building the next layer. Don't assume; check.
+- **Research before building.** Before using a framework or library API,
+  verify against current documentation. Stale assumptions cause the majority
+  of integration bugs.
+- **Self-correct without prompting.** If something doesn't work during
+  execution, fix it immediately. Don't wait to be told. Don't present broken
+  intermediate state as progress.
+- **Status updates, not permission requests.** Communicate progress
+  informally. Don't stop to ask "shall I continue?" when direction is clear.
+- **Escalate scope changes only.** If a fix changes the acceptance criteria
+  or significantly expands scope, raise it. Everything else: just handle it.
+
+Anti-patterns:
+- Building all components in isolation then attempting integration at the end
+- Mocking boundaries during development that you'll need to verify later
+- Presenting intermediate layers as deliverables ("schema done!")
+- Stopping after each file/module to ask for permission to continue
+
 ## After Choosing
 
 Invoke the chosen skill. The per-skill tier suggestions above are starting points
