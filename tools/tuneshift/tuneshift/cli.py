@@ -216,6 +216,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_config.add_argument("value", nargs="?", help="Config value")
     p_config.add_argument("--show", action="store_true", help="Show current LLM configuration")
 
+    # batch
+    p_batch = sub.add_parser("batch", help="Batch playlist operations (plan/apply model)")
+    p_batch.add_argument("playlist", nargs="?", help="Playlist name")
+    p_batch.add_argument("--dedupe", action="store_true", help="Flag artists with more than --cap tracks")
+    p_batch.add_argument("--cap", type=int, default=1, help="Max tracks per artist for --dedupe (default: 1)")
+    p_batch.add_argument("--rm-artist", help="Remove all tracks by an artist (including features)")
+    p_batch.add_argument("--review-findings", action="store_true", help="Plan fixes from concept review")
+    p_batch.add_argument("--plan", action="store_true", help="Generate plan (no changes)")
+    p_batch.add_argument("--show-plan", action="store_true", help="Show current plan")
+    p_batch.add_argument("--apply", action="store_true", help="Apply current plan")
+    p_batch.add_argument("--discard", action="store_true", help="Discard current plan")
+    p_batch.add_argument("--undo", action="store_true", help="Restore from pre-apply backup")
+    p_batch.add_argument("--interactive", action="store_true", help="Walk through decisions one at a time")
+
     # Shell completions via shtab
     try:
         import shtab
@@ -373,6 +387,9 @@ def main(argv: list[str] | None = None) -> int:
             return handle_review(args, db)
         elif args.command == "config":
             return _handle_config(args)
+        elif args.command == "batch":
+            from tuneshift.commands.batch_cmd import handle_batch
+            return handle_batch(args, db)
         else:
             parser.print_help()
             return 1
