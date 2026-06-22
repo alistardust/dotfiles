@@ -222,6 +222,27 @@ Aligned? [yes / drifting toward X]
 
 If drifting: name it, suggest redirect. If aligned: continue without interruption.
 
+## Delivery Integrity in Autopilot
+
+When running in autopilot mode, these rules override default tendencies:
+
+**No artificial stopping points.** Between PLANNING and the final QUALITY
+gate, execution is continuous. Do not stop to ask permission between layers
+or present intermediate artifacts as milestones. Internal layers are commits,
+not checkpoints.
+
+**The deliverable is the stated goal.** Autopilot runs until the acceptance
+criteria from the comprehension contract are met. "Schema created" is not
+done. "Migration run" is not done. The feature/fix/deliverable working is
+done.
+
+**Self-limit detection.** If the autopilot is about to declare a phase
+complete, check: does the result meet the comprehension contract? Or is it
+stopping because a technical layer is "done"? If the latter, keep going.
+
+**Proof before SHIP.** The QUALITY phase must include proof of completion
+(see skill-conductor-quality). Autopilot does not skip this gate.
+
 ## Stuck Detection
 
 A phase is stuck when:
