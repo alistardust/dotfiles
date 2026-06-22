@@ -30,6 +30,20 @@ Before invoking any decision skill, apply the "Ground in Reality" pre-decision t
 If no existing data (greenfield): research analogous real-world examples. If none
 found: surface that the design is ungrounded. Do not design against imagined inputs.
 
+### Comprehension Contract (Delivery Integrity)
+
+Before routing to any implementation skill, verify:
+
+1. The problem is understood (agent can restate it, not just parrot it)
+2. Done is defined (what outcome-visible result marks completion)
+3. Verification method is stated (how will we prove it works)
+
+If any of these are missing, the DECISION phase must surface them before
+routing. This is not a template to fill out; it's a check that understanding
+exists before action begins.
+
+Skip when: conversational questions, research tasks, explicit user override.
+
 ## Decision Tree
 
 ```
