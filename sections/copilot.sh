@@ -88,6 +88,24 @@ section_copilot() {
     fi
 
     log "To authenticate, run: copilot /login"
+
+    # Extensions -- user-level Copilot CLI extensions
+    local ext_src="${SCRIPT_DIR}/copilot-extensions"
+    local ext_dest="$HOME/.copilot/extensions"
+    if [[ -d "$ext_src" ]]; then
+        run mkdir -p "$ext_dest"
+        for ext_path in "$ext_src"/*/; do
+            [[ -d "$ext_path" ]] || continue
+            local ext_name
+            ext_name="$(basename "$ext_path")"
+            if [[ -L "${ext_dest}/${ext_name}" || -d "${ext_dest}/${ext_name}" ]]; then
+                ok "Extension '${ext_name}' already installed."
+            else
+                run ln -sf "$ext_path" "${ext_dest}/${ext_name}"
+                ok "Extension '${ext_name}' installed."
+            fi
+        done
+    fi
 }
 
 # -- Verification (--verify mode) ---------------------------------------------
@@ -106,4 +124,6 @@ verify_copilot() {
                                         && pass "bun installed (gstack dependency)"             || fail "bun not installed (required by gstack)"
     [[ -d "$HOME/.copilot/skills/gstack" ]] \
                                         && pass "gstack installed for Copilot"                  || fail "gstack not installed for Copilot"
+    [[ -e "$HOME/.copilot/extensions/prompt-injection-guard/extension.mjs" ]] \
+                                        && pass "prompt-injection-guard extension installed"    || fail "prompt-injection-guard extension missing"
 }
