@@ -81,6 +81,20 @@ After context is anchored:
 - **If approach needs validation:** Route to decision layer (gstack reviews)
 - **If both:** Decision first (validate approach), then execution
 
+### Comprehension Handoff (Delivery Integrity)
+
+When the CONTEXT phase hands off to DECISION or PLANNING, ensure:
+
+- The problem statement is captured (not just the user's words, but the
+  understood intent)
+- Any existing relevant context has been surfaced (related code, prior
+  decisions, architectural constraints)
+- The scope is understood (what's in, what's out, what's ambiguous)
+
+This enables the DECISION phase to build a proper comprehension contract.
+Without clear context, acceptance criteria will be vague and proof of
+completion will be meaningless.
+
 ## After Choosing
 
 Invoke the chosen GSD skill. Let it run its own flow. GSD skills are
