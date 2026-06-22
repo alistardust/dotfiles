@@ -18,9 +18,28 @@ import json
 import logging
 import os
 import time
+from pathlib import Path
 from typing import Any, Protocol
 
 logger = logging.getLogger(__name__)
+
+_TOKEN_DIR = Path.home() / ".local" / "share" / "tuneshift"
+
+
+def _load_stored_key(backend: str) -> str | None:
+    """Load a stored API key from tuneshift's credential directory."""
+    key_file = _TOKEN_DIR / f"{backend}_key"
+    if key_file.exists():
+        return key_file.read_text().strip()
+    return None
+
+
+def store_llm_key(backend: str, key: str) -> None:
+    """Store an API key securely in tuneshift's credential directory."""
+    _TOKEN_DIR.mkdir(parents=True, exist_ok=True)
+    key_file = _TOKEN_DIR / f"{backend}_key"
+    key_file.write_text(key)
+    key_file.chmod(0o600)
 
 _CLASSIFICATION_PROMPT = """Classify the following tracks. Return a JSON array with one object per track.
 
@@ -87,11 +106,21 @@ class AnthropicBackend:
     """Backend for Anthropic's Messages API."""
 
     def __init__(self, api_key: str | None = None) -> None:
-        resolved_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
+        resolved_key = api_key or os.environ.get("ANTHROPIC_API_KEY") or _load_stored_key("anthropic")
         if not resolved_key:
             raise ValueError("ANTHROPIC_API_KEY is required for anthropic backend")
         from anthropic import Anthropic
         self._client = Anthropic(api_key=resolved_key)
+        self._api_errors = self._get_api_errors()
+
+    @staticmethod
+    def _get_api_errors() -> tuple:
+        """Get Anthropic error types for exception handling."""
+        try:
+            from anthropic import APIError
+            return (APIError,)
+        except ImportError:
+            return ()
 
     def complete(self, prompt: str, model: str, max_tokens: int = 4096) -> str:
         response = self._client.messages.create(
@@ -110,7 +139,7 @@ class OpenAICompatibleBackend:
         api_key: str | None = None,
         base_url: str | None = None,
     ) -> None:
-        resolved_key = api_key or os.environ.get("OPENAI_API_KEY")
+        resolved_key = api_key or os.environ.get("OPENAI_API_KEY") or _load_stored_key("openai")
         resolved_url = base_url or os.environ.get("TUNESHIFT_LLM_BASE_URL")
         if not resolved_key and not resolved_url:
             raise ValueError(
@@ -136,12 +165,36 @@ class OpenAICompatibleBackend:
 class OllamaBackend:
     """Backend for local Ollama instance."""
 
-    def __init__(self, host: str | None = None) -> None:
+    def __init__(self, host: str | None = None, model: str | None = None) -> None:
         self._host = host or os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+        self._validated_models: set[str] = set()
+        # Validate the target model exists if specified
+        if model:
+            self._validate_model(model)
+
+    def _validate_model(self, model: str) -> None:
+        """Check that the model is actually available locally."""
+        if model in self._validated_models:
+            return
+        import urllib.request
+        try:
+            with urllib.request.urlopen(f"{self._host}/api/tags", timeout=5) as resp:
+                data = json.loads(resp.read())
+                available = [m["name"] for m in data.get("models", [])]
+                if model not in available:
+                    raise ValueError(
+                        f"Ollama model '{model}' not found. "
+                        f"Available: {available}. "
+                        f"Run: ollama pull {model}"
+                    )
+                self._validated_models.add(model)
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"Cannot reach Ollama at {self._host}: {exc}") from exc
 
     def complete(self, prompt: str, model: str, max_tokens: int = 4096) -> str:
         import urllib.request
 
+        self._validate_model(model)
         payload = json.dumps({
             "model": model,
             "prompt": prompt,
@@ -191,13 +244,13 @@ def detect_backend() -> tuple[str, LLMBackend] | tuple[None, None]:
             return None, None
 
     # Auto-detect
-    if os.environ.get("ANTHROPIC_API_KEY"):
+    if os.environ.get("ANTHROPIC_API_KEY") or _load_stored_key("anthropic"):
         try:
             return "anthropic", AnthropicBackend()
         except (ImportError, ValueError):
             pass
 
-    if os.environ.get("OPENAI_API_KEY"):
+    if os.environ.get("OPENAI_API_KEY") or _load_stored_key("openai"):
         try:
             return "openai", OpenAICompatibleBackend()
         except (ImportError, ValueError):
@@ -209,13 +262,15 @@ def detect_backend() -> tuple[str, LLMBackend] | tuple[None, None]:
         except (ImportError, ValueError, Exception):
             pass
 
-    # Check if Ollama is reachable
+    # Check if Ollama is reachable AND has a usable model
     ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+    target_model = os.environ.get("TUNESHIFT_CLASSIFIER_MODEL", _DEFAULT_MODELS.get("ollama", "llama3.1:8b"))
     try:
         import urllib.request
         urllib.request.urlopen(f"{ollama_host}/api/tags", timeout=2)
-        return "ollama", OllamaBackend(ollama_host)
-    except (OSError, ImportError):
+        backend = OllamaBackend(ollama_host, model=target_model)
+        return "ollama", backend
+    except (OSError, ImportError, ValueError):
         pass
 
     return None, None

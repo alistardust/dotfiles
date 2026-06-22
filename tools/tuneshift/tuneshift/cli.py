@@ -210,6 +210,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_review.add_argument("playlist", help="Playlist name")
     p_review.add_argument("--fix", action="store_true", help="Remove tracks that violate hard rules")
 
+    # config
+    p_config = sub.add_parser("config", help="Configure TuneShift settings")
+    p_config.add_argument("key", nargs="?", help="Config key (e.g., anthropic-key, openai-key, llm-backend)")
+    p_config.add_argument("value", nargs="?", help="Config value")
+    p_config.add_argument("--show", action="store_true", help="Show current LLM configuration")
+
     # Shell completions via shtab
     try:
         import shtab
@@ -218,6 +224,58 @@ def build_parser() -> argparse.ArgumentParser:
         pass
 
     return parser
+
+
+def _handle_config(args) -> int:
+    """Handle the config command."""
+    import sys
+    from tuneshift.sequencer.classifier import detect_backend, store_llm_key, _load_stored_key, _TOKEN_DIR
+
+    if getattr(args, "show", False) or not args.key:
+        name, backend = detect_backend()
+        print("LLM Configuration:")
+        if name:
+            from tuneshift.sequencer.classifier import TrackClassifier
+            classifier = TrackClassifier()
+            print(f"  Backend: {classifier.backend_info}")
+        else:
+            print("  Backend: none configured")
+        print()
+        print(f"  Stored keys: {_TOKEN_DIR}")
+        for key_name in ("anthropic", "openai"):
+            stored = _load_stored_key(key_name)
+            if stored:
+                print(f"    {key_name}: {stored[:8]}...")
+            else:
+                print(f"    {key_name}: not set")
+        print()
+        print("  To configure: tuneshift config anthropic-key <your-key>")
+        print("                tuneshift config openai-key <your-key>")
+        return 0
+
+    key_map = {
+        "anthropic-key": "anthropic",
+        "openai-key": "openai",
+    }
+
+    if args.key not in key_map:
+        print(f"Unknown config key: {args.key}", file=sys.stderr)
+        print(f"Valid keys: {', '.join(key_map.keys())}", file=sys.stderr)
+        return 1
+
+    if not args.value:
+        print(f"Usage: tuneshift config {args.key} <value>", file=sys.stderr)
+        return 1
+
+    backend_name = key_map[args.key]
+    store_llm_key(backend_name, args.value)
+    print(f"Stored {backend_name} API key in {_TOKEN_DIR / f'{backend_name}_key'}")
+
+    # Verify it works
+    name, backend = detect_backend()
+    if name:
+        print(f"Backend now active: {name}")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -313,6 +371,8 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "review":
             from tuneshift.commands.compose_cmd import handle_review
             return handle_review(args, db)
+        elif args.command == "config":
+            return _handle_config(args)
         else:
             parser.print_help()
             return 1
