@@ -14,25 +14,23 @@ def handle_rm(args, db: Database) -> int:
     target = args.target
     tracks = db.get_playlist_tracks(playlist.id)
 
-    # Try as position number first
-    try:
-        position = int(target)
-        if position < 1 or position > len(tracks):
-            print(f"Position {position} out of range (1-{len(tracks)})", file=sys.stderr)
-            return 1
-        track = tracks[position - 1]
-        had_failure = _remove_and_sync(db, playlist, track, position)
-        return 1 if had_failure else 0
-    except ValueError:
-        pass
-
-    # Match by title
+    # Try title match first (even if target looks numeric, e.g., "360")
     target_lower = target.lower()
     matches = [(i + 1, t) for i, t in enumerate(tracks) if target_lower in t.title.lower()]
 
+    # If no title match and target is numeric, treat as position
     if not matches:
-        print(f"No track matching \"{target}\" in \"{playlist.name}\"", file=sys.stderr)
-        return 1
+        try:
+            position = int(target)
+            if position < 1 or position > len(tracks):
+                print(f"Position {position} out of range (1-{len(tracks)})", file=sys.stderr)
+                return 1
+            track = tracks[position - 1]
+            had_failure = _remove_and_sync(db, playlist, track, position)
+            return 1 if had_failure else 0
+        except ValueError:
+            print(f"No track matching \"{target}\" in \"{playlist.name}\"", file=sys.stderr)
+            return 1
 
     if len(matches) == 1:
         pos, track = matches[0]
