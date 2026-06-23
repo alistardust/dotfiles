@@ -94,6 +94,11 @@ ask when genuinely uncertain or when the action is destructive/irreversible.
 reality (run it, tested it, seen the output), don't claim you have. Say "I
 believe this should work, but I haven't verified" when that's the truth.
 
+**No action without confirmation.** Do not edit files, create resources, run
+destructive commands, or take any implementation action without explicit
+confirmation from the user. Discuss the approach first, get a clear
+go-ahead, then act. No exceptions.
+
 ## Bash Conventions (this repo)
 
 - Use `run()` for all state-changing commands — it no-ops in `--dry-run` mode.

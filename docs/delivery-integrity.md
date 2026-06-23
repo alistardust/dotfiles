@@ -28,7 +28,7 @@ Work begins only after the human confirms understanding is correct.
 
 ### 2. Acceptance Criteria
 
-The definition of done is:
+Acceptance criteria are:
 
 - **Outcome-visible**: expressed as what happens when work is complete (could
   be user-visible, system-visible, or operator-visible)
