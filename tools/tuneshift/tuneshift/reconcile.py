@@ -240,6 +240,20 @@ def reconcile_track(
             f"{best_result.duration_seconds}s vs expected ~{track.duration_seconds}s"
         )
 
+    # Artist mismatch check: if best result has a completely different artist, flag it
+    from tuneshift.matching import normalize_artist as _norm_artist
+    from difflib import SequenceMatcher as _SM
+    src_artist_norm = _norm_artist(track.artist)
+    res_artist_norm = _norm_artist(best_result.artist) if best_result.artist else ""
+    if src_artist_norm and res_artist_norm:
+        artist_ratio = _SM(None, src_artist_norm, res_artist_norm).ratio()
+        if artist_ratio < 0.4:
+            is_div = True
+            div_note = (
+                f"Artist mismatch: expected \"{track.artist}\", "
+                f"got \"{best_result.artist}\""
+            )
+
     match_type = candidate_strategies.get(best_result.platform_id, "")
 
     return ReconcileResult(

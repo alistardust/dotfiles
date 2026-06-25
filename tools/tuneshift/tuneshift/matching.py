@@ -101,6 +101,10 @@ def score_match(
             ratio = SequenceMatcher(None, norm_src_artist, norm_res_artist).ratio()
             if ratio > 0.80:
                 score += 20
+            elif ratio < 0.4:
+                # Completely different artist: heavy penalty
+                # "Britney Spears" vs "The Marias" should never match
+                score -= 30
 
     if source_album:
         norm_src_album = normalize_title(source_album)
