@@ -1050,7 +1050,7 @@ def handle_batch(args, db: Database) -> int:
         if narrative_file:
             ops.extend(plan_structure_from_file(db, playlist.id, narrative_file))
         else:
-            # LLM mode: requires classifier backend
+            # LLM mode: propose sections
             from tuneshift.sequencer.classifier import TrackClassifier
             classifier = TrackClassifier()
             if not classifier.available:
@@ -1058,9 +1058,10 @@ def handle_batch(args, db: Database) -> int:
                 print("Configure with: tuneshift config anthropic-key <key>", file=sys.stderr)
                 print("Or provide sections: --structure --narrative-file arc.txt", file=sys.stderr)
                 return 1
-            # TODO: LLM-proposed structuring (Tier 2)
-            print("LLM-proposed structuring not yet implemented. Use --narrative-file.", file=sys.stderr)
-            return 1
+            structure_ops = plan_structure_llm(db, playlist.id, classifier)
+            if structure_ops is None:
+                return 1
+            ops.extend(structure_ops)
 
     if not ops:
         print("No changes needed.")
@@ -1309,6 +1310,114 @@ def plan_structure_from_file(
                 track_id=track.track_id,
                 section_name=section.name,
                 reason=f"assigned to {section.name} by fitness",
+            ))
+
+    return ops
+
+
+_STRUCTURE_PROMPT = """You are a music playlist curator. Given a tracklist, propose a narrative arc structure.
+
+TRACKLIST ({track_count} tracks):
+{tracklist}
+
+{concept_context}
+
+Create a narrative arc with 4-7 sections. Use this EXACT format (one section per line):
+
+SECTION_NAME (start-end): Description of mood/energy/theme. Mention key tracks in (parentheses).
+
+Rules:
+- Section names are ALL CAPS with underscores (e.g., OPENER, BUILD, PEAK, COMEDOWN, CLOSER)
+- Position ranges must be 1-based and cover all {track_count} tracks with no gaps
+- Descriptions should capture the energy, mood, and flow of that section
+- Mention 2-3 key tracks per section in parentheses
+
+Example output:
+OPENER (1-3): High energy invitation to the party. (Track A), (Track B).
+BUILD (4-12): Rising intensity, the groove settles in. (Track C), (Track D).
+PEAK (13-20): Maximum energy, the main event. (Track E), (Track F).
+COMEDOWN (21-25): Cooling down. (Track G).
+CLOSER (26-28): Final emotional statement. (Track H).
+
+Respond with ONLY the section definitions, nothing else."""
+
+
+def plan_structure_llm(db, playlist_id: int, classifier) -> list[PlanOperation] | None:
+    """Use LLM to propose narrative sections for a playlist."""
+    from tuneshift.commands.compose_cmd import _get_concept
+    from tuneshift.composer.parser import parse_enhanced_narrative
+    from tuneshift.composer.matcher import match_tracks_to_sections
+    from tuneshift.sequencer.metadata import track_to_metadata
+
+    tracks_raw = db.get_playlist_tracks(playlist_id)
+    tracks = [track_to_metadata(t) for t in tracks_raw]
+    track_count = len(tracks_raw)
+
+    # Build tracklist string
+    tracklist_lines = []
+    for i, t in enumerate(tracks_raw):
+        tracklist_lines.append(f"  {i+1}. {t.title} - {t.artist}")
+    tracklist_str = "\n".join(tracklist_lines)
+
+    # Concept context
+    concept = _get_concept(db, playlist_id)
+    concept_context = ""
+    if concept:
+        concept_context = f"PLAYLIST CONCEPT: {concept.theme}"
+        if concept.hard_rules:
+            concept_context += f"\nRules: {', '.join(concept.hard_rules)}"
+
+    prompt = _STRUCTURE_PROMPT.format(
+        track_count=track_count,
+        tracklist=tracklist_str,
+        concept_context=concept_context,
+    )
+
+    print(f"  Generating narrative structure via {classifier.backend_info}...")
+    try:
+        response = classifier._backend.complete(prompt, classifier._model, max_tokens=2000)
+    except (OSError, RuntimeError, ValueError) as exc:
+        print(f"  LLM error: {exc}", file=sys.stderr)
+        return None
+
+    # Parse the response as a narrative
+    tracklist_names = [t.title for t in tracks]
+    sections = parse_enhanced_narrative(response, tracklist=tracklist_names)
+
+    if not sections:
+        print("  LLM response could not be parsed as sections.", file=sys.stderr)
+        print("  Raw response:", file=sys.stderr)
+        print(f"  {response[:500]}", file=sys.stderr)
+        print("  Try --narrative-file with manually written sections.", file=sys.stderr)
+        return None
+
+    print(f"  Proposed {len(sections)} sections:")
+    for s in sections:
+        print(f"    {s.name} ({s.start_position}-{s.end_position}): {s.description[:60]}...")
+
+    # Assign tracks to sections by fitness
+    assignments = match_tracks_to_sections(tracks, sections, concept=concept)
+
+    ops: list[PlanOperation] = []
+
+    # Set narrative
+    ops.append(PlanOperation(
+        action="set_narrative",
+        reason="LLM-proposed narrative structure",
+        target_name=response.strip(),
+    ))
+
+    # Section assignments
+    for section in sections:
+        section_tracks = assignments.assignments.get(section.name, [])
+        for track in section_tracks:
+            ops.append(PlanOperation(
+                action="assign_section",
+                track_title=track.title,
+                track_artist=track.artist,
+                track_id=track.track_id,
+                section_name=section.name,
+                reason=f"LLM assigned to {section.name}",
             ))
 
     return ops
