@@ -158,3 +158,145 @@ class TestRenderPlan:
         assert "KEEP (1):" in output
         assert '"A" by X' in output
         assert "1 removal(s), 1 keep(s)" in output
+
+
+class TestMultiArtistCreditSplitting:
+    def test_comma_split(self):
+        from tuneshift.commands.batch_cmd import split_artist_credits
+        assert split_artist_credits("Drake, 21 Savage") == ["Drake", "21 Savage"]
+
+    def test_ampersand_split(self):
+        from tuneshift.commands.batch_cmd import split_artist_credits
+        assert split_artist_credits("Simon & Garfunkel") == ["Simon", "Garfunkel"]
+
+    def test_and_split(self):
+        from tuneshift.commands.batch_cmd import split_artist_credits
+        assert split_artist_credits("Hall and Oates") == ["Hall", "Oates"]
+
+    def test_single_artist_no_split(self):
+        from tuneshift.commands.batch_cmd import split_artist_credits
+        assert split_artist_credits("Against Me!") == ["Against Me!"]
+
+
+class TestBanEnforcementAtAdd:
+    def test_banned_primary_artist_blocked(self, db):
+        db.ban_artist("Nicki Minaj", "transphobe")
+        from tuneshift.commands.batch_cmd import check_track_against_bans
+        result = check_track_against_bans(db, "Super Bass", "Nicki Minaj")
+        assert result == "Nicki Minaj"
+
+    def test_banned_featured_artist_blocked(self, db):
+        db.ban_artist("Nicki Minaj", "transphobe")
+        from tuneshift.commands.batch_cmd import check_track_against_bans
+        result = check_track_against_bans(db, "Hot Girl Summer (feat. Nicki Minaj & Ty Dolla $ign)", "Megan Thee Stallion")
+        assert result == "Nicki Minaj"
+
+    def test_banned_multi_credit_blocked(self, db):
+        db.ban_artist("Drake", "test")
+        from tuneshift.commands.batch_cmd import check_track_against_bans
+        result = check_track_against_bans(db, "Rich Flex", "Drake, 21 Savage")
+        assert result == "Drake"
+
+    def test_unbanned_artist_passes(self, db):
+        from tuneshift.commands.batch_cmd import check_track_against_bans
+        result = check_track_against_bans(db, "Good Song", "Good Artist")
+        assert result is None
+
+    def test_diacritic_normalization(self, db):
+        db.ban_artist("Beyonce", "test")
+        # Should match with accent
+        assert db.is_artist_banned("Beyonce")
+
+
+class TestAtomicApplyAndUndo:
+    def test_apply_records_only_executed_ops(self, db):
+        from tuneshift.commands.batch_cmd import apply_plan, BatchPlan, PlanOperation
+        playlist_id = db.create_playlist("Test")
+        _add_tracks(db, playlist_id, [
+            ("Track 1", "Artist A", "Album"),
+            ("Track 2", "Artist B", "Album"),
+        ])
+        tracks = db.get_playlist_tracks(playlist_id)
+
+        plan = BatchPlan(playlist_name="Test", playlist_id=playlist_id)
+        plan.operations = [
+            PlanOperation(action="rm", track_title="Track 1", track_artist="Artist A",
+                          track_id=tracks[0].id, position=0, previous_position=0),
+            PlanOperation(action="rm", track_title="Nonexistent", track_artist="Nobody",
+                          track_id=99999, position=5, previous_position=5),
+        ]
+        removed, added = apply_plan(db, plan)
+        assert removed == 1  # only one actually existed
+
+        # History should record 1 op, not 2
+        history = db.get_batch_history(playlist_id)
+        assert len(history) == 1
+        recorded_ops = json.loads(history[0]["plan_json"])["operations"]
+        assert len(recorded_ops) == 1
+        assert recorded_ops[0]["track"] == "Track 1"
+
+    def test_undo_restores_removed_track(self, db):
+        from tuneshift.commands.batch_cmd import apply_plan, undo_batch, BatchPlan, PlanOperation
+        playlist_id = db.create_playlist("Test")
+        _add_tracks(db, playlist_id, [
+            ("Track 1", "Artist A", "Album"),
+            ("Track 2", "Artist B", "Album"),
+            ("Track 3", "Artist C", "Album"),
+        ])
+        tracks = db.get_playlist_tracks(playlist_id)
+
+        plan = BatchPlan(playlist_name="Test", playlist_id=playlist_id)
+        plan.operations = [
+            PlanOperation(action="rm", track_title="Track 2", track_artist="Artist B",
+                          track_id=tracks[1].id, position=1, previous_position=1),
+        ]
+        apply_plan(db, plan)
+
+        # Verify removal
+        remaining = db.get_playlist_tracks(playlist_id)
+        assert len(remaining) == 2
+        assert all(t.title != "Track 2" for t in remaining)
+
+        # Undo
+        result = undo_batch(db)
+        assert result is True
+
+        # Verify restoration
+        restored = db.get_playlist_tracks(playlist_id)
+        assert len(restored) == 3
+        assert any(t.title == "Track 2" for t in restored)
+
+
+class TestPlanFileParsing:
+    def test_parse_removes_and_adds(self):
+        from tuneshift.commands.batch_cmd import parse_plan_file
+        content = "- Bad Song - Bad Artist\n+ Good Song - Good Artist\n# comment\n"
+        ops = parse_plan_file(content)
+        assert len(ops) == 2
+        assert ops[0].action == "rm"
+        assert ops[0].track_title == "Bad Song"
+        assert ops[1].action == "add"
+        assert ops[1].track_artist == "Good Artist"
+
+    def test_parse_section_move(self):
+        from tuneshift.commands.batch_cmd import parse_plan_file
+        content = "= My Song - Artist -> sec:WRATH\n"
+        ops = parse_plan_file(content)
+        assert len(ops) == 1
+        assert ops[0].action == "assign_section"
+        assert ops[0].section_name == "WRATH"
+
+    def test_parse_position_move(self):
+        from tuneshift.commands.batch_cmd import parse_plan_file
+        content = "= My Song - Artist -> pos:7\n"
+        ops = parse_plan_file(content)
+        assert len(ops) == 1
+        assert ops[0].position == 7
+
+    def test_parse_section_with_position(self):
+        from tuneshift.commands.batch_cmd import parse_plan_file
+        content = "= My Song - Artist -> sec:WRATH:3\n"
+        ops = parse_plan_file(content)
+        assert len(ops) == 1
+        assert ops[0].section_name == "WRATH"
+        assert ops[0].position == 3

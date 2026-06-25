@@ -813,6 +813,19 @@ def handle_batch(args, db: Database) -> int:
         print("No changes needed.")
         return 0
 
+    # Resolve track_ids for ops that only have title/artist (from plan files/stdin/CLI)
+    tracks = db.get_playlist_tracks(playlist.id)
+    for op in ops:
+        if op.track_id is None and op.action == "rm" and op.track_title:
+            title_lower = op.track_title.casefold()
+            for i, t in enumerate(tracks):
+                if title_lower in t.title.casefold():
+                    if not op.track_artist or op.track_artist.casefold() in t.artist.casefold():
+                        op.track_id = t.id
+                        op.position = i
+                        op.previous_position = i
+                        break
+
     plan = BatchPlan(
         playlist_name=playlist.name,
         playlist_id=playlist.id,
