@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -389,33 +390,19 @@ def parse_plan_file(content: str) -> list[PlanOperation]:
 
 
 def apply_plan(db: Database, plan: BatchPlan) -> tuple[int, int]:
-    """Apply a plan: execute removals and additions, record history, auto-reorder.
+    """Apply a plan: execute ALL local DB changes first, then sync.
+
+    DB changes are atomic (all happen or none). Platform sync happens after
+    and failures don't affect local state. History records only what actually
+    executed.
 
     Returns (removals_applied, additions_applied).
     """
-    from tuneshift.commands.rm_cmd import _remove_and_sync
-
     removed = 0
     added = 0
+    executed_ops: list[dict] = []
 
-    # Record in history before making changes (with full plan for undo)
-    history_id = db.record_batch(plan.playlist_id, json.dumps({
-        "playlist": plan.playlist_name,
-        "created": plan.created_at,
-        "operations": [
-            {
-                "action": op.action, "track": op.track_title,
-                "artist": op.track_artist, "track_id": op.track_id,
-                "reason": op.reason, "position": op.position,
-                "previous_position": op.previous_position,
-                "previous_section": op.previous_section,
-            }
-            for op in plan.operations
-        ],
-    }))
-
-    # Process removals
-    playlist_obj = type("P", (), {"id": plan.playlist_id, "name": plan.playlist_name})()
+    # Phase 1: Execute ALL local DB changes (no platform sync yet)
     for op in plan.removals:
         if op.track_id is None:
             continue
@@ -424,40 +411,62 @@ def apply_plan(db: Database, plan: BatchPlan) -> tuple[int, int]:
         if track is None:
             continue
         position = next(
-            (i + 1 for i, t in enumerate(tracks) if t.id == op.track_id), 0
+            (i for i, t in enumerate(tracks) if t.id == op.track_id), 0
         )
-        _remove_and_sync(db, playlist_obj, track, position)
+        db.remove_track_from_playlist(plan.playlist_id, track.id)
         removed += 1
+        executed_ops.append({
+            "action": "rm", "track": op.track_title, "artist": op.track_artist,
+            "track_id": op.track_id, "reason": op.reason,
+            "position": position, "previous_position": position,
+            "previous_section": op.previous_section,
+        })
 
-    # Process additions
     for op in plan.additions:
         if not op.track_title:
             continue
-        # Find track in library by title/artist match
-        from tuneshift.db import normalize_title, normalize_artist
         tracks_found = db.find_tracks_by_title_artist(op.track_title, op.track_artist)
         if tracks_found:
             track = tracks_found[0]
-            # Add to playlist at end
             existing = db.get_playlist_tracks(plan.playlist_id)
+            # Skip if already in playlist
+            if any(t.id == track.id for t in existing):
+                continue
             next_pos = len(existing)
             db.conn.execute(
-                "INSERT OR IGNORE INTO playlist_tracks (playlist_id, track_id, position) VALUES (?, ?, ?)",
+                "INSERT INTO playlist_tracks (playlist_id, track_id, position) VALUES (?, ?, ?)",
                 (plan.playlist_id, track.id, next_pos),
             )
             db.conn.commit()
             added += 1
+            executed_ops.append({
+                "action": "add", "track": op.track_title, "artist": op.track_artist,
+                "track_id": track.id, "reason": op.reason,
+                "position": next_pos, "previous_position": None,
+                "previous_section": None,
+            })
 
-    # Auto-reorder if enabled
+    # Phase 2: Record ONLY what actually executed in history
+    if executed_ops:
+        db.record_batch(plan.playlist_id, json.dumps({
+            "playlist": plan.playlist_name,
+            "created": plan.created_at,
+            "operations": executed_ops,
+        }))
+
+    # Phase 3: Auto-reorder if enabled
     playlist_row = db.conn.execute(
-        "SELECT auto_reorder, reorder_arc, narrative FROM playlists WHERE id = ?",
+        "SELECT auto_reorder, reorder_arc FROM playlists WHERE id = ?",
         (plan.playlist_id,),
     ).fetchone()
     if playlist_row and playlist_row[0]:
         from tuneshift.sequencer.optimizer import sequence_playlist
         arc = playlist_row[1] or "wave"
-        narrative = playlist_row[2]
-        sequence_playlist(db, plan.playlist_id, arc=arc, narrative=narrative)
+        sequence_playlist(db, plan.playlist_id, arc=arc)
+
+    # Phase 4: Report sync instructions
+    if removed or added:
+        print(f"  Run `tuneshift sync \"{plan.playlist_name}\" <platform>` to push changes.")
 
     return removed, added
 
@@ -584,12 +593,17 @@ def undo_batch(db: Database, history_id: int | None = None) -> bool:
             pos = op.get("previous_position", op.get("position"))
             existing = db.get_playlist_tracks(playlist_id)
             insert_pos = min(pos, len(existing)) if pos is not None else len(existing)
-            # Shift positions to make room
-            db.conn.execute(
-                "UPDATE playlist_tracks SET position = position + 1 "
-                "WHERE playlist_id = ? AND position >= ?",
-                (playlist_id, insert_pos),
-            )
+            # Shift positions down to make room (from end to avoid PK conflicts)
+            max_pos = db.conn.execute(
+                "SELECT MAX(position) FROM playlist_tracks WHERE playlist_id = ?",
+                (playlist_id,),
+            ).fetchone()[0] or 0
+            for shift_pos in range(max_pos, insert_pos - 1, -1):
+                db.conn.execute(
+                    "UPDATE playlist_tracks SET position = ? "
+                    "WHERE playlist_id = ? AND position = ?",
+                    (shift_pos + 1, playlist_id, shift_pos),
+                )
             db.conn.execute(
                 "INSERT OR IGNORE INTO playlist_tracks (playlist_id, track_id, position) "
                 "VALUES (?, ?, ?)",

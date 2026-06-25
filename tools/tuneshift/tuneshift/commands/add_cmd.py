@@ -7,6 +7,17 @@ from tuneshift.models import Track
 
 def handle_add(args, db: Database) -> int:
     """Add a track to a playlist."""
+    # Check banned artists BEFORE doing anything
+    from tuneshift.commands.batch_cmd import check_track_against_bans
+    banned = check_track_against_bans(db, args.title, args.artist)
+    if banned:
+        print(
+            f"Blocked: \"{args.title}\" by {args.artist} "
+            f"includes banned artist \"{banned}\".",
+            file=sys.stderr,
+        )
+        return 1
+
     playlist = db.find_playlist_by_name(args.playlist)
     if not playlist:
         playlist_id = db.create_playlist(args.playlist)
