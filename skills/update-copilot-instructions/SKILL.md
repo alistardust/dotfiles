@@ -3,6 +3,11 @@ name: update-copilot-instructions
 description: Procedure for updating Copilot instruction files. Use this skill when asked to add, modify, or remove content from any Copilot instructions file, including ~/.copilot/copilot-instructions.md or any repo-level .github/copilot-instructions.md.
 ---
 
+<!-- CROSS-TOOL NOTE: This skill references Copilot CLI-specific paths and files.
+     In Claude Code, the equivalent paths are ~/.claude/CLAUDE.md (global) and
+     CLAUDE.md (repo-level). The procedure applies to both tools; adapt paths
+     accordingly. -->
+
 ## Process for updating instructions
 
 Before writing any new or modified instruction to any Copilot instructions file:
