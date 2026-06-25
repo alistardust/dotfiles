@@ -40,6 +40,23 @@ install_instructions() {
     fi
 }
 
+_install_local_skills() {
+    local target_dir="$1"
+    local skill src dest
+    run mkdir -p "$target_dir"
+    for src in "${SCRIPT_DIR}/skills"/*/; do
+        [[ -d "$src" ]] || continue
+        skill="$(basename "$src")"
+        dest="${target_dir}/${skill}"
+        # Remove existing symlink (e.g., from superpowers/plugins) so repo version wins
+        if [[ -L "$dest" ]]; then
+           run rm "$dest"
+        fi
+        run mkdir -p "$dest"
+        run cp -R "${src}/." "$dest/"
+    done
+}
+
 install_gstack() {
     local gstack_dir="$1"
     local host_flag="$2"
