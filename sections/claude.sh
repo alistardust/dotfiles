@@ -61,4 +61,29 @@ verify_claude() {
                                         && pass "bun installed (gstack dependency)"            || fail "bun not installed (required by gstack)"
     [[ -d "$HOME/.claude/skills/gstack" ]] \
                                         && pass "gstack installed"                             || fail "gstack not installed"
+
+    # Check local skills installed
+    local skill src skills_dir="$HOME/.claude/skills"
+    [[ -d "$skills_dir" ]] \
+        && pass "Claude skills directory exists" \
+        || fail "Claude skills directory missing (~/.claude/skills/)"
+    for src in "${SCRIPT_DIR}/skills"/*/; do
+        [[ -d "$src" ]] || continue
+        skill="$(basename "$src")"
+        [[ -f "${skills_dir}/${skill}/SKILL.md" ]] \
+            && pass "Claude skill installed: ${skill}" \
+            || fail "Claude skill missing: ${skill}"
+    done
+
+    # Cross-tool parity check
+    local copilot_count claude_count
+    copilot_count=$(find "$HOME/.copilot/skills" -maxdepth 2 -name "SKILL.md" 2>/dev/null | wc -l | tr -d ' ')
+    claude_count=$(find "$skills_dir" -maxdepth 2 -name "SKILL.md" 2>/dev/null | wc -l | tr -d ' ')
+    if [[ "$copilot_count" -gt 0 && "$claude_count" -gt 0 ]]; then
+        if [[ "$copilot_count" -eq "$claude_count" ]]; then
+            pass "Skills parity: ${copilot_count} skills in both tools"
+        else
+            warn "Skills drift: Copilot has ${copilot_count}, Claude has ${claude_count}"
+        fi
+    fi
 }
