@@ -74,16 +74,51 @@ def _set_position_pin(db: Database, playlist, title: str, pin_type: str) -> int:
 
 
 def _set_index_pin(db: Database, playlist, title: str, position: int) -> int:
-    """Pin a track to a specific position index."""
+    """Pin a track to a specific position index.
+
+    If the track is in an adjacency group, promotes the entire group to
+    positional pins starting at the given position.
+    """
     track = _find_track_in_playlist(db, playlist, title)
     if not track:
         return 1
 
-    # Remove any existing pin for this track
+    # Check if this track is in an adjacency group
+    existing_pins = db.get_pins(playlist.id)
+    track_pin = next((p for p in existing_pins if p.track_id == track.id), None)
+
+    if track_pin and track_pin.pin_type == "anchor" and track_pin.group_id:
+        # Promote the whole group to positional pins
+        group_members = sorted(
+            [p for p in existing_pins if p.group_id == track_pin.group_id],
+            key=lambda p: p.group_order or 0,
+        )
+        # Find this track's order within the group
+        track_order = next(
+            (i for i, p in enumerate(group_members) if p.track_id == track.id), 0
+        )
+        # Assign positions: this track at `position`, others relative
+        base_position = position - track_order
+        for i, member in enumerate(group_members):
+            target_pos = base_position + i
+            db.remove_pin(playlist.id, member.track_id)
+            # Clear any existing pin at this position
+            for pin in existing_pins:
+                if pin.pin_type == "position" and pin.group_order == target_pos and pin.track_id != member.track_id:
+                    db.remove_pin(playlist.id, pin.track_id)
+            db.set_pin(playlist.id, member.track_id, "position", group_order=target_pos)
+
+        group_desc = ", ".join(
+            f'"{db.conn.execute("SELECT title FROM tracks WHERE id = ?", (m.track_id,)).fetchone()[0]}" at {base_position + i}'
+            for i, m in enumerate(group_members)
+        )
+        print(f'Promoted group "{track_pin.group_id}" to positions: {group_desc}')
+        return 0
+
+    # Normal case: single track position pin
     db.remove_pin(playlist.id, track.id)
 
     # Remove any existing position pin at this index
-    existing_pins = db.get_pins(playlist.id)
     for pin in existing_pins:
         if pin.pin_type == "position" and pin.group_order == position:
             db.remove_pin(playlist.id, pin.track_id)

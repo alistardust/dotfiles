@@ -262,19 +262,28 @@ def _select_endpoints(
     pinned_opener_id: int | None,
     pinned_closer_id: int | None,
     arc: str,
+    exclude_from_auto: set[int] | None = None,
 ) -> tuple[TrackMetadata, TrackMetadata, list[TrackMetadata]]:
-    """Choose opener and closer, return (opener, closer, remaining)."""
+    """Choose opener and closer, return (opener, closer, remaining).
+
+    exclude_from_auto: track IDs that should not be auto-selected as
+    opener/closer (e.g., position-pinned tracks that belong elsewhere).
+    """
+    excluded = exclude_from_auto or set()
+
     if pinned_opener_id and pinned_opener_id in track_map:
         opener = track_map[pinned_opener_id]
     else:
-        opener = select_opener(tracks, arc)
+        candidates = [t for t in tracks if t.track_id not in excluded]
+        opener = select_opener(candidates or tracks, arc)
 
     remaining = [t for t in tracks if t.track_id != opener.track_id]
 
     if pinned_closer_id and pinned_closer_id in track_map:
         closer = track_map[pinned_closer_id]
     else:
-        closer = select_closer(remaining, arc)
+        candidates = [t for t in remaining if t.track_id not in excluded]
+        closer = select_closer(candidates or remaining, arc)
 
     remaining = [t for t in remaining if t.track_id != closer.track_id]
     return opener, closer, remaining
@@ -481,6 +490,7 @@ def optimize_sequence(
 
     opener, closer, remaining = _select_endpoints(
         tracks, track_map, pinned_opener_id, pinned_closer_id, arc,
+        exclude_from_auto=set(position_pins.values()),
     )
 
     # Remove opener/closer from position_pins to prevent duplication
