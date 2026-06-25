@@ -27,8 +27,8 @@ install_instructions() {
     local tool_name="$4"
 
     run mkdir -p "$dest_dir"
-    if [[ -f "$dest_file" ]]; then
-        ok "${tool_name} instructions already exist at ${dest_file}."
+    if [[ -f "$dest_file" ]] && diff -q "$src_file" "$dest_file" &>/dev/null; then
+        ok "${tool_name} instructions up to date at ${dest_file}."
     else
         log "Writing ${tool_name} instructions..."
         if [[ "$DRY_RUN" == "true" ]]; then
