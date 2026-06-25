@@ -362,14 +362,126 @@ def review_playlist(
     concept: PlaylistConcept | None = None,
     artist_lookup: dict[str, Artist] | None = None,
 ) -> list[ReviewFinding]:
-    """Review a playlist for concept compliance without requiring narrative/sections.
+    """Review a playlist for concept compliance and vibe outliers.
 
-    Use this for non-narrative playlists (e.g., Fruit Salad) where the composer
-    pipeline isn't applicable but concept rules still need checking.
+    Checks:
+    1. Concept hard/soft rules (if concept exists)
+    2. Vibe cluster outliers (always, if enough tracks have metadata)
     """
     findings: list[ReviewFinding] = []
     if concept:
         findings.extend(_review_concept_compliance(
             tracks, concept, artist_lookup or {}
         ))
+    findings.extend(_review_vibe_outliers(tracks))
+    return findings
+
+
+def _review_vibe_outliers(tracks: list[TrackMetadata]) -> list[ReviewFinding]:
+    """Detect tracks that are sonic outliers from the playlist's vibe profile.
+
+    Uses vibe categories (positive/negative/intense/mellow/dark) to group
+    similar vibes together, avoiding false positives from inconsistent
+    classifier vocabulary.
+    """
+    if len(tracks) < 5:
+        return []
+
+    # Map vibes to broad categories for fuzzy comparison
+    _VIBE_CATEGORIES: dict[str, set[str]] = {
+        "upbeat": {"upbeat", "energetic", "playful", "joyful", "fun", "lively",
+                   "bouncy", "danceable", "celebratory", "exuberant", "groovy"},
+        "dark": {"dark", "haunting", "eerie", "sinister", "ominous", "gothic",
+                 "brooding", "foreboding", "menacing", "gloomy"},
+        "melancholic": {"melancholic", "sad", "sorrowful", "longing", "wistful",
+                        "bittersweet", "nostalgic", "yearning", "mournful", "heartbreak"},
+        "intense": {"intense", "passionate", "powerful", "anthemic", "dramatic",
+                    "emotive", "fierce", "urgent", "explosive", "raw"},
+        "confident": {"confident", "assertive", "sassy", "empowering", "bold",
+                      "defiant", "swagger", "fierce", "proud", "independent"},
+        "romantic": {"romantic", "sensual", "tender", "intimate", "loving",
+                     "flirtatious", "arousing", "seductive", "warm", "affectionate"},
+        "chill": {"chill", "mellow", "relaxed", "laid-back", "dreamy", "smooth",
+                  "atmospheric", "ambient", "peaceful", "serene"},
+        "country": {"country", "folk", "acoustic", "nashville", "twangy",
+                    "americana", "bluegrass", "honky-tonk"},
+        "rock": {"rock", "gritty", "distorted", "heavy", "punk", "grunge",
+                 "alternative", "garage"},
+    }
+
+    def categorize_vibes(vibes: list[str]) -> set[str]:
+        categories: set[str] = set()
+        for v in vibes:
+            v_lower = v.casefold()
+            for cat, words in _VIBE_CATEGORIES.items():
+                if v_lower in words:
+                    categories.add(cat)
+                    break
+        return categories
+
+    # Build playlist category profile
+    cat_counts: dict[str, int] = {}
+    tracks_with_vibes = 0
+
+    for track in tracks:
+        if track.vibes:
+            tracks_with_vibes += 1
+            cats = categorize_vibes(track.vibes)
+            for c in cats:
+                cat_counts[c] = cat_counts.get(c, 0) + 1
+
+    if tracks_with_vibes < len(tracks) * 0.5:
+        return []
+
+    # Categories present in the playlist at all (at least 2 tracks)
+    present_cats = {c for c, count in cat_counts.items() if count >= 2}
+
+    if not present_cats:
+        return []
+
+    # Dominant categories for display (appearing in >25% of tracks)
+    dominant_cats = {c for c, count in cat_counts.items() if count >= tracks_with_vibes * 0.25}
+
+    findings: list[ReviewFinding] = []
+
+    for track in tracks:
+        if not track.vibes:
+            continue
+
+        track_cats = categorize_vibes(track.vibes)
+        if not track_cats:
+            continue
+
+        # Check overlap with the playlist's present categories
+        overlap = track_cats & present_cats
+        foreign_cats = track_cats - present_cats
+
+        # Pure outlier: NO overlap at all with anything on the playlist
+        if not overlap:
+            findings.append(ReviewFinding(
+                category="vibe_outlier",
+                description=(
+                    f'"{track.title}" by {track.artist} - '
+                    f'vibes [{", ".join(sorted(track.vibes)[:4])}] '
+                    f'(categories: {", ".join(sorted(track_cats))}) '
+                    f'do not match playlist profile '
+                    f'(dominant: {", ".join(sorted(dominant_cats or present_cats))})'
+                ),
+                severity=0.7,
+                section_name=None,
+            ))
+        # Partial outlier: has foreign categories that appear nowhere else
+        # AND those foreign categories are genre-defining (country, rock)
+        elif foreign_cats & {"country", "rock"}:
+            findings.append(ReviewFinding(
+                category="vibe_outlier",
+                description=(
+                    f'"{track.title}" by {track.artist} - '
+                    f'includes [{", ".join(sorted(foreign_cats))}] vibes '
+                    f'not found elsewhere on this playlist'
+                ),
+                severity=0.5,
+                section_name=None,
+            ))
+
     return findings
