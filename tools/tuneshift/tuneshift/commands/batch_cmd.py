@@ -41,16 +41,47 @@ def extract_featured_artists(title: str) -> list[str]:
     return [p.strip() for p in parts if p.strip()]
 
 
+def split_artist_credits(artist: str) -> list[str]:
+    """Split a multi-artist credit into individual artist names.
+
+    Handles: "Drake, 21 Savage", "Jack & Diane", "A and B", "X x Y"
+    """
+    import re
+    parts = re.split(r"\s*(?:,\s+|&|\band\b|\bx\b)\s*", artist, flags=re.IGNORECASE)
+    return [p.strip() for p in parts if p.strip()]
+
+
+def check_track_against_bans(db: Database, title: str, artist: str) -> str | None:
+    """Check if any credited artist on a track is banned.
+
+    Checks primary artist (split on multi-credit delimiters) and featured
+    artists extracted from the title. Returns the banned name if found, None otherwise.
+    """
+    # Check primary artist segments
+    for segment in split_artist_credits(artist):
+        if db.is_artist_banned(segment):
+            return segment
+    # Check featured artists in title
+    for featured in extract_featured_artists(title):
+        if db.is_artist_banned(featured):
+            return featured
+    return None
+
+
 @dataclass
 class PlanOperation:
     """A single planned change to a playlist."""
 
-    action: str  # "rm", "add", "keep"
-    track_title: str
-    track_artist: str
+    action: str  # "rm", "add", "keep", "create_playlist", "move_to_playlist", "assign_section", "set_narrative"
+    track_title: str = ""
+    track_artist: str = ""
     track_id: int | None = None
     reason: str = ""
     position: int | None = None
+    previous_position: int | None = None
+    previous_section: str | None = None
+    target_name: str | None = None  # for split/merge/section targets
+    section_name: str | None = None
 
 
 @dataclass
@@ -267,8 +298,98 @@ def plan_review_fixes(
     return ops
 
 
+def plan_sweep_banned(
+    db: Database, playlist_id: int | None = None
+) -> dict[int, list[PlanOperation]]:
+    """Sweep one or all playlists for banned artists.
+
+    Returns a dict of playlist_id -> list of removal operations.
+    """
+    if playlist_id is not None:
+        playlist_ids = [playlist_id]
+    else:
+        playlists = db.list_playlists()
+        playlist_ids = [p.id for p in playlists]
+
+    results: dict[int, list[PlanOperation]] = {}
+    for pid in playlist_ids:
+        tracks = db.get_playlist_tracks(pid)
+        ops: list[PlanOperation] = []
+        for i, t in enumerate(tracks):
+            banned_name = check_track_against_bans(db, t.title, t.artist)
+            if banned_name:
+                ops.append(PlanOperation(
+                    action="rm",
+                    track_title=t.title,
+                    track_artist=t.artist,
+                    track_id=t.id,
+                    reason=f"banned artist: {banned_name}",
+                    position=i,
+                    previous_position=i,
+                ))
+        if ops:
+            results[pid] = ops
+    return results
+
+
+def parse_plan_file(content: str) -> list[PlanOperation]:
+    """Parse a plan file in simple text format.
+
+    Format:
+      - Title - Artist          # remove
+      + Title - Artist          # add
+      = Title - Artist -> pos:7       # move to position
+      = Title - Artist -> sec:WRATH   # move to section
+      = Title - Artist -> sec:WRATH:3 # move to position within section
+    """
+    ops: list[PlanOperation] = []
+    for line in content.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+
+        if line.startswith("- "):
+            parts = line[2:].rsplit(" - ", 1)
+            if len(parts) == 2:
+                ops.append(PlanOperation(action="rm", track_title=parts[0].strip(), track_artist=parts[1].strip()))
+            else:
+                ops.append(PlanOperation(action="rm", track_title=line[2:].strip()))
+        elif line.startswith("+ "):
+            parts = line[2:].rsplit(" - ", 1)
+            if len(parts) == 2:
+                ops.append(PlanOperation(action="add", track_title=parts[0].strip(), track_artist=parts[1].strip()))
+            else:
+                ops.append(PlanOperation(action="add", track_title=line[2:].strip()))
+        elif line.startswith("= "):
+            # Move operation: = Title - Artist -> target
+            if " -> " not in line:
+                continue
+            left, target = line[2:].rsplit(" -> ", 1)
+            parts = left.rsplit(" - ", 1)
+            title = parts[0].strip() if parts else left.strip()
+            artist = parts[1].strip() if len(parts) == 2 else ""
+            target = target.strip()
+
+            if target.startswith("pos:"):
+                pos = int(target[4:])
+                ops.append(PlanOperation(
+                    action="assign_section", track_title=title, track_artist=artist,
+                    position=pos, reason=f"move to position {pos}",
+                ))
+            elif target.startswith("sec:"):
+                sec_parts = target[4:].split(":", 1)
+                section = sec_parts[0]
+                sec_pos = int(sec_parts[1]) if len(sec_parts) > 1 else None
+                ops.append(PlanOperation(
+                    action="assign_section", track_title=title, track_artist=artist,
+                    section_name=section, position=sec_pos,
+                    reason=f"move to section {section}" + (f" position {sec_pos}" if sec_pos else ""),
+                ))
+    return ops
+
+
 def apply_plan(db: Database, plan: BatchPlan) -> tuple[int, int]:
-    """Apply a plan: execute removals and additions, sync to platforms.
+    """Apply a plan: execute removals and additions, record history, auto-reorder.
 
     Returns (removals_applied, additions_applied).
     """
@@ -277,7 +398,24 @@ def apply_plan(db: Database, plan: BatchPlan) -> tuple[int, int]:
     removed = 0
     added = 0
 
-    # Process removals first
+    # Record in history before making changes (with full plan for undo)
+    history_id = db.record_batch(plan.playlist_id, json.dumps({
+        "playlist": plan.playlist_name,
+        "created": plan.created_at,
+        "operations": [
+            {
+                "action": op.action, "track": op.track_title,
+                "artist": op.track_artist, "track_id": op.track_id,
+                "reason": op.reason, "position": op.position,
+                "previous_position": op.previous_position,
+                "previous_section": op.previous_section,
+            }
+            for op in plan.operations
+        ],
+    }))
+
+    # Process removals
+    playlist_obj = type("P", (), {"id": plan.playlist_id, "name": plan.playlist_name})()
     for op in plan.removals:
         if op.track_id is None:
             continue
@@ -288,10 +426,38 @@ def apply_plan(db: Database, plan: BatchPlan) -> tuple[int, int]:
         position = next(
             (i + 1 for i, t in enumerate(tracks) if t.id == op.track_id), 0
         )
-        _remove_and_sync(db, type("P", (), {"id": plan.playlist_id, "name": plan.playlist_name})(), track, position)
+        _remove_and_sync(db, playlist_obj, track, position)
         removed += 1
 
-    # TODO: process additions when add-from/fill is implemented
+    # Process additions
+    for op in plan.additions:
+        if not op.track_title:
+            continue
+        # Find track in library by title/artist match
+        from tuneshift.db import normalize_title, normalize_artist
+        tracks_found = db.find_tracks_by_title_artist(op.track_title, op.track_artist)
+        if tracks_found:
+            track = tracks_found[0]
+            # Add to playlist at end
+            existing = db.get_playlist_tracks(plan.playlist_id)
+            next_pos = len(existing)
+            db.conn.execute(
+                "INSERT OR IGNORE INTO playlist_tracks (playlist_id, track_id, position) VALUES (?, ?, ?)",
+                (plan.playlist_id, track.id, next_pos),
+            )
+            db.conn.commit()
+            added += 1
+
+    # Auto-reorder if enabled
+    playlist_row = db.conn.execute(
+        "SELECT auto_reorder, reorder_arc, narrative FROM playlists WHERE id = ?",
+        (plan.playlist_id,),
+    ).fetchone()
+    if playlist_row and playlist_row[0]:
+        from tuneshift.sequencer.optimizer import sequence_playlist
+        arc = playlist_row[1] or "wave"
+        narrative = playlist_row[2]
+        sequence_playlist(db, plan.playlist_id, arc=arc, narrative=narrative)
 
     return removed, added
 
@@ -388,8 +554,69 @@ def _interactive_dedupe(
     return ops
 
 
+def undo_batch(db: Database, history_id: int | None = None) -> bool:
+    """Undo a specific batch plan by reversing its operations.
+
+    If history_id is None, undoes the most recent non-reverted plan.
+    Returns True if successful.
+    """
+    if history_id is None:
+        row = db.conn.execute(
+            "SELECT id, playlist_id, plan_json FROM batch_history "
+            "WHERE reverted_at IS NULL ORDER BY applied_at DESC LIMIT 1"
+        ).fetchone()
+    else:
+        row = db.conn.execute(
+            "SELECT id, playlist_id, plan_json FROM batch_history WHERE id = ?",
+            (history_id,),
+        ).fetchone()
+
+    if row is None:
+        return False
+
+    hid, playlist_id, plan_json_str = row[0], row[1], row[2]
+    plan_data = json.loads(plan_json_str)
+
+    # Reverse each operation
+    for op in plan_data.get("operations", []):
+        if op["action"] == "rm" and op.get("track_id"):
+            # Re-add the track at its previous position
+            pos = op.get("previous_position", op.get("position"))
+            existing = db.get_playlist_tracks(playlist_id)
+            insert_pos = min(pos, len(existing)) if pos is not None else len(existing)
+            # Shift positions to make room
+            db.conn.execute(
+                "UPDATE playlist_tracks SET position = position + 1 "
+                "WHERE playlist_id = ? AND position >= ?",
+                (playlist_id, insert_pos),
+            )
+            db.conn.execute(
+                "INSERT OR IGNORE INTO playlist_tracks (playlist_id, track_id, position) "
+                "VALUES (?, ?, ?)",
+                (playlist_id, op["track_id"], insert_pos),
+            )
+        elif op["action"] == "add" and op.get("track_id"):
+            # Remove the track that was added
+            db.conn.execute(
+                "DELETE FROM playlist_tracks WHERE playlist_id = ? AND track_id = ?",
+                (playlist_id, op["track_id"]),
+            )
+            # Re-compact positions
+            tracks = db.get_playlist_tracks(playlist_id)
+            for i, t in enumerate(tracks):
+                db.conn.execute(
+                    "UPDATE playlist_tracks SET position = ? "
+                    "WHERE playlist_id = ? AND track_id = ?",
+                    (i, playlist_id, t.id),
+                )
+
+    db.conn.commit()
+    db.mark_batch_reverted(hid)
+    return True
+
+
 def handle_batch(args, db: Database) -> int:
-    """Handle batch operations: plan, show, apply, discard, undo."""
+    """Handle batch operations: plan, show, apply, discard, undo, history."""
     import sys
 
     # Show current plan
@@ -409,14 +636,43 @@ def handle_batch(args, db: Database) -> int:
             print("No plan to discard.")
         return 0
 
-    # Undo (restore backup)
-    if getattr(args, "undo", False):
-        restored = restore_backup(db)
-        if restored:
-            print(f"Restored from backup: {restored}")
-            print("Restart tuneshift to use the restored database.")
+    # History
+    if getattr(args, "history", False):
+        playlist_name = args.playlist or args.history
+        playlist = db.find_playlist_by_name(playlist_name) if isinstance(playlist_name, str) else None
+        if playlist is None:
+            # Show all history
+            rows = db.conn.execute(
+                "SELECT id, playlist_id, applied_at, reverted_at, plan_json "
+                "FROM batch_history ORDER BY applied_at DESC LIMIT 20"
+            ).fetchall()
         else:
-            print("No backup found.", file=sys.stderr)
+            rows = db.conn.execute(
+                "SELECT id, playlist_id, applied_at, reverted_at, plan_json "
+                "FROM batch_history WHERE playlist_id = ? ORDER BY applied_at DESC",
+                (playlist.id,),
+            ).fetchall()
+
+        if not rows:
+            print("No batch history found.")
+            return 0
+
+        for row in rows:
+            plan_data = json.loads(row[4])
+            status = "REVERTED" if row[3] else "active"
+            op_count = len(plan_data.get("operations", []))
+            rm_count = sum(1 for o in plan_data.get("operations", []) if o["action"] == "rm")
+            print(f"  #{row[0]} [{status}] {row[2]} - {plan_data.get('playlist', '?')} "
+                  f"({op_count} ops, {rm_count} removals)")
+        return 0
+
+    # Undo
+    if getattr(args, "undo", False):
+        undo_id = getattr(args, "id", None)
+        if undo_batch(db, undo_id):
+            print(f"Undone: plan #{undo_id or 'last'} reversed.")
+        else:
+            print("Nothing to undo.", file=sys.stderr)
             return 1
         return 0
 
@@ -432,14 +688,47 @@ def handle_batch(args, db: Database) -> int:
         if confirm not in ("y", "yes"):
             print("Cancelled.")
             return 0
-        backup_path = backup_db(db)
-        print(f"Backup created: {backup_path}")
         removed, added = apply_plan(db, plan)
         print(f"\nApplied: {removed} removed, {added} added")
         BatchPlan.discard()
         return 0
 
-    # Generate a plan (requires playlist name)
+    # Sweep banned (works with or without playlist)
+    if getattr(args, "sweep_banned", False):
+        playlist = db.find_playlist_by_name(args.playlist) if args.playlist else None
+        results = plan_sweep_banned(db, playlist.id if playlist else None)
+        if not results:
+            print("No banned artists found.")
+            return 0
+
+        # For single playlist, create one plan
+        if playlist:
+            ops = results.get(playlist.id, [])
+            plan = BatchPlan(playlist_name=playlist.name, playlist_id=playlist.id, operations=ops)
+            print(render_plan(plan))
+            if getattr(args, "plan", False):
+                plan.save()
+                print("\nPlan saved. Apply with: tuneshift batch --apply")
+            return 0
+
+        # Multi-playlist: show summary
+        total_ops = sum(len(ops) for ops in results.values())
+        print(f"Banned artist sweep: {total_ops} tracks across {len(results)} playlists")
+        for pid, ops in results.items():
+            pl_name = db.conn.execute("SELECT name FROM playlists WHERE id = ?", (pid,)).fetchone()[0]
+            print(f"  {pl_name}: {len(ops)} tracks")
+            for op in ops:
+                print(f"    - \"{op.track_title}\" by {op.track_artist} ({op.reason})")
+        if getattr(args, "plan", False):
+            # Save the first playlist's plan (multi-playlist sweep applies sequentially)
+            first_pid = next(iter(results))
+            first_name = db.conn.execute("SELECT name FROM playlists WHERE id = ?", (first_pid,)).fetchone()[0]
+            plan = BatchPlan(playlist_name=first_name, playlist_id=first_pid, operations=results[first_pid])
+            plan.save()
+            print(f"\nSaved plan for \"{first_name}\". Apply sequentially with: tuneshift batch --apply")
+        return 0
+
+    # Generate a plan (requires playlist name for most operations)
     if not args.playlist:
         print("Playlist name required for plan generation.", file=sys.stderr)
         return 1
@@ -449,8 +738,50 @@ def handle_batch(args, db: Database) -> int:
         print(f"Playlist not found: {args.playlist}", file=sys.stderr)
         return 1
 
+    # Check mutual exclusivity
+    if getattr(args, "interactive", False) and getattr(args, "from_stdin", False):
+        print("--interactive and --from-stdin are mutually exclusive.", file=sys.stderr)
+        return 1
+
     ops: list[PlanOperation] = []
 
+    # Multi-rm/add from CLI flags
+    for rm_title in (getattr(args, "rm", None) or []):
+        parts = rm_title.rsplit(" - ", 1)
+        title = parts[0].strip()
+        artist = parts[1].strip() if len(parts) == 2 else ""
+        # Find matching track
+        tracks = db.get_playlist_tracks(playlist.id)
+        for i, t in enumerate(tracks):
+            if t.title.casefold() == title.casefold() or title.casefold() in t.title.casefold():
+                if not artist or t.artist.casefold() == artist.casefold():
+                    ops.append(PlanOperation(
+                        action="rm", track_title=t.title, track_artist=t.artist,
+                        track_id=t.id, position=i, previous_position=i,
+                        reason="CLI --rm",
+                    ))
+                    break
+
+    for add_spec in (getattr(args, "add", None) or []):
+        parts = add_spec.rsplit(" - ", 1)
+        title = parts[0].strip()
+        artist = parts[1].strip() if len(parts) == 2 else ""
+        ops.append(PlanOperation(action="add", track_title=title, track_artist=artist, reason="CLI --add"))
+
+    # Plan file input
+    plan_file = getattr(args, "plan_file", None)
+    if plan_file:
+        content = Path(plan_file).read_text()
+        ops.extend(parse_plan_file(content))
+
+    # Stdin input
+    if getattr(args, "from_stdin", False):
+        import sys as _sys
+        if not _sys.stdin.isatty():
+            content = _sys.stdin.read()
+            ops.extend(parse_plan_file(content))
+
+    # Existing operations
     if getattr(args, "dedupe", False):
         cap = getattr(args, "cap", 1)
         if getattr(args, "interactive", False):
@@ -458,7 +789,7 @@ def handle_batch(args, db: Database) -> int:
         else:
             ops.extend(plan_dedupe(db, playlist.id, cap))
 
-    if getattr(args, "rm_artist", False):
+    if getattr(args, "rm_artist", None):
         ops.extend(plan_rm_artist(db, playlist.id, args.rm_artist))
 
     if getattr(args, "review_findings", False):
@@ -483,12 +814,9 @@ def handle_batch(args, db: Database) -> int:
         print("Apply with:  tuneshift batch --apply")
         print("Discard:     tuneshift batch --discard")
     else:
-        # No --plan flag: ask to apply directly
         print()
         confirm = input("Apply now? [y/N] ").strip().lower()
         if confirm in ("y", "yes"):
-            backup_path = backup_db(db)
-            print(f"Backup created: {backup_path}")
             removed, added = apply_plan(db, plan)
             print(f"\nApplied: {removed} removed, {added} added")
         else:

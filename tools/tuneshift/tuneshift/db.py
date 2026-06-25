@@ -8,7 +8,7 @@ from pathlib import Path
 
 from tuneshift.models import Album, Artist, PlatformMapping, Playlist, PlaylistPin, Track
 
-_SCHEMA_VERSION = 8
+_SCHEMA_VERSION = 9
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS tracks (
@@ -185,6 +185,23 @@ CREATE INDEX IF NOT EXISTS idx_evidence_track ON evidence(track_id, is_current);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_artists_norm ON artists(norm_name);
 CREATE INDEX IF NOT EXISTS idx_artists_mb ON artists(mb_artist_id) WHERE mb_artist_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_albums_artist ON albums(artist_id);
+
+CREATE TABLE IF NOT EXISTS banned_artists (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    norm_name TEXT NOT NULL UNIQUE,
+    reason TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS batch_history (
+    id INTEGER PRIMARY KEY,
+    playlist_id INTEGER NOT NULL,
+    plan_json TEXT NOT NULL,
+    applied_at TEXT NOT NULL DEFAULT (datetime('now')),
+    reverted_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_batch_history_playlist ON batch_history(playlist_id);
 """
 
 _REMIX_RE = re.compile(r"\s*\((?:remaster(?:ed)?|deluxe edition)[^)]*\)\s*", re.IGNORECASE)
@@ -208,6 +225,27 @@ def normalize_artist(value: str) -> str:
     if normalized.startswith("the "):
         normalized = normalized[4:]
     return normalized.strip()
+
+
+def normalize_ban_name(value: str) -> str:
+    """Normalize artist name for ban list matching.
+
+    Stricter than normalize_artist: also strips diacritics and punctuation
+    so "Beyonce" matches "Beyonce" and "P!nk" matches "Pink".
+    """
+    import unicodedata
+    # NFD decomposition separates base chars from combining marks
+    decomposed = unicodedata.normalize("NFD", value)
+    # Strip combining marks (accents, diacritics)
+    stripped = "".join(c for c in decomposed if unicodedata.category(c) != "Mn")
+    # Remove punctuation (keep alphanumeric and spaces)
+    cleaned = re.sub(r"[^\w\s]", "", stripped)
+    # Standard normalization
+    cleaned = cleaned.strip().lower().replace("&", "and")
+    cleaned = _WHITESPACE_RE.sub(" ", cleaned)
+    if cleaned.startswith("the "):
+        cleaned = cleaned[4:]
+    return cleaned.strip()
 
 
 def get_default_db_path() -> Path:
@@ -488,6 +526,30 @@ class Database:
                     )
                     WHERE tracks.album IS NOT NULL AND tracks.artist_id IS NOT NULL
                 """)
+
+            if current_version < 9:
+                self.conn.execute("""
+                    CREATE TABLE IF NOT EXISTS banned_artists (
+                        id INTEGER PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        norm_name TEXT NOT NULL UNIQUE,
+                        reason TEXT,
+                        created_at TEXT DEFAULT (datetime('now'))
+                    )
+                """)
+                self.conn.execute("""
+                    CREATE TABLE IF NOT EXISTS batch_history (
+                        id INTEGER PRIMARY KEY,
+                        playlist_id INTEGER NOT NULL,
+                        plan_json TEXT NOT NULL,
+                        applied_at TEXT NOT NULL DEFAULT (datetime('now')),
+                        reverted_at TEXT
+                    )
+                """)
+                self.conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_batch_history_playlist "
+                    "ON batch_history(playlist_id)"
+                )
 
             self.conn.execute(
                 "UPDATE schema_meta SET value = ? WHERE key = 'version'",
@@ -1386,3 +1448,70 @@ class Database:
             spotify_album_uri=row["spotify_album_uri"],
             enriched_at=row["enriched_at"],
         )
+
+    # ---- Banned Artist methods ----
+
+    def ban_artist(self, name: str, reason: str | None = None) -> int:
+        """Add an artist to the global ban list. Returns the ban ID."""
+        norm = normalize_ban_name(name)
+        cursor = self.conn.execute(
+            "INSERT OR IGNORE INTO banned_artists (name, norm_name, reason) VALUES (?, ?, ?)",
+            (name, norm, reason),
+        )
+        self.conn.commit()
+        return cursor.lastrowid or 0
+
+    def unban_artist(self, name: str) -> bool:
+        """Remove an artist from the ban list. Returns True if removed."""
+        norm = normalize_ban_name(name)
+        cursor = self.conn.execute(
+            "DELETE FROM banned_artists WHERE norm_name = ?", (norm,)
+        )
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def get_banned_artists(self) -> list[tuple[str, str | None]]:
+        """Get all banned artists as (name, reason) tuples."""
+        rows = self.conn.execute(
+            "SELECT name, reason FROM banned_artists ORDER BY name"
+        ).fetchall()
+        return [(row[0], row[1]) for row in rows]
+
+    def is_artist_banned(self, name: str) -> bool:
+        """Check if an artist name (or segment) is on the ban list."""
+        norm = normalize_ban_name(name)
+        row = self.conn.execute(
+            "SELECT 1 FROM banned_artists WHERE norm_name = ?", (norm,)
+        ).fetchone()
+        return row is not None
+
+    # ---- Batch History methods ----
+
+    def record_batch(self, playlist_id: int, plan_json: str) -> int:
+        """Record an applied batch plan in history. Returns the history ID."""
+        cursor = self.conn.execute(
+            "INSERT INTO batch_history (playlist_id, plan_json) VALUES (?, ?)",
+            (playlist_id, plan_json),
+        )
+        self.conn.commit()
+        return cursor.lastrowid or 0
+
+    def get_batch_history(self, playlist_id: int) -> list[dict]:
+        """Get batch history for a playlist."""
+        rows = self.conn.execute(
+            "SELECT id, plan_json, applied_at, reverted_at "
+            "FROM batch_history WHERE playlist_id = ? ORDER BY applied_at DESC",
+            (playlist_id,),
+        ).fetchall()
+        return [
+            {"id": r[0], "plan_json": r[1], "applied_at": r[2], "reverted_at": r[3]}
+            for r in rows
+        ]
+
+    def mark_batch_reverted(self, history_id: int) -> None:
+        """Mark a batch history entry as reverted."""
+        self.conn.execute(
+            "UPDATE batch_history SET reverted_at = datetime('now') WHERE id = ?",
+            (history_id,),
+        )
+        self.conn.commit()

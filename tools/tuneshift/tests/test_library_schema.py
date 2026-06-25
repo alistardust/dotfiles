@@ -253,7 +253,7 @@ class TestMigrationFromV7:
         version = db.conn.execute(
             "SELECT value FROM schema_meta WHERE key = 'version'"
         ).fetchone()[0]
-        assert int(version) == 8
+        assert int(version) == 9
 
         # Artists created
         artist_count = db.conn.execute("SELECT COUNT(*) FROM artists").fetchone()[0]

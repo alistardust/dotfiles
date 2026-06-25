@@ -154,3 +154,13 @@ class Album:
     tidal_album_id: int | None = None
     spotify_album_uri: str | None = None
     enriched_at: str | None = None
+
+
+@dataclass
+class BannedArtist:
+    """An artist on the global ban list."""
+
+    id: int | None = None
+    name: str = ""
+    norm_name: str = ""
+    reason: str | None = None

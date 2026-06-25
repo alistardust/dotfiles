@@ -222,13 +222,27 @@ def build_parser() -> argparse.ArgumentParser:
     p_batch.add_argument("--dedupe", action="store_true", help="Flag artists with more than --cap tracks")
     p_batch.add_argument("--cap", type=int, default=1, help="Max tracks per artist for --dedupe (default: 1)")
     p_batch.add_argument("--rm-artist", help="Remove all tracks by an artist (including features)")
+    p_batch.add_argument("--rm", action="append", help="Remove a track (repeatable: --rm 'Title - Artist')")
+    p_batch.add_argument("--add", action="append", help="Add a track (repeatable: --add 'Title - Artist')")
     p_batch.add_argument("--review-findings", action="store_true", help="Plan fixes from concept review")
+    p_batch.add_argument("--sweep-banned", action="store_true", help="Sweep for banned artists")
     p_batch.add_argument("--plan", action="store_true", help="Generate plan (no changes)")
+    p_batch.add_argument("--plan-file", help="Load operations from a plan file")
+    p_batch.add_argument("--from-stdin", action="store_true", help="Read operations from stdin")
     p_batch.add_argument("--show-plan", action="store_true", help="Show current plan")
     p_batch.add_argument("--apply", action="store_true", help="Apply current plan")
     p_batch.add_argument("--discard", action="store_true", help="Discard current plan")
-    p_batch.add_argument("--undo", action="store_true", help="Restore from pre-apply backup")
+    p_batch.add_argument("--undo", action="store_true", help="Undo a batch (operation-based)")
+    p_batch.add_argument("--id", type=int, help="History ID for --undo")
+    p_batch.add_argument("--history", nargs="?", const=True, help="Show batch history")
     p_batch.add_argument("--interactive", action="store_true", help="Walk through decisions one at a time")
+
+    # ban
+    p_ban = sub.add_parser("ban", help="Manage the global banned artist list")
+    p_ban.add_argument("artist", nargs="?", help="Artist name to ban")
+    p_ban.add_argument("--reason", help="Reason for banning")
+    p_ban.add_argument("--list", action="store_true", help="List all banned artists")
+    p_ban.add_argument("--remove", help="Remove an artist from the ban list")
 
     # Shell completions via shtab
     try:
@@ -289,6 +303,41 @@ def _handle_config(args) -> int:
     name, backend = detect_backend()
     if name:
         print(f"Backend now active: {name}")
+    return 0
+
+
+def _handle_ban(args, db) -> int:
+    """Handle the ban command."""
+    import sys
+
+    if getattr(args, "list", False):
+        banned = db.get_banned_artists()
+        if not banned:
+            print("No banned artists.")
+            return 0
+        print("Banned artists:")
+        for name, reason in banned:
+            reason_str = f" ({reason})" if reason else ""
+            print(f"  - {name}{reason_str}")
+        return 0
+
+    if getattr(args, "remove", None):
+        if db.unban_artist(args.remove):
+            print(f"Removed \"{args.remove}\" from ban list.")
+        else:
+            print(f"\"{args.remove}\" not found on ban list.", file=sys.stderr)
+            return 1
+        return 0
+
+    if not args.artist:
+        print("Usage: tuneshift ban <artist> [--reason <reason>]", file=sys.stderr)
+        print("       tuneshift ban --list", file=sys.stderr)
+        return 1
+
+    reason = getattr(args, "reason", None)
+    db.ban_artist(args.artist, reason)
+    print(f"Banned \"{args.artist}\"{f' ({reason})' if reason else ''}. "
+          f"Future adds will be blocked. Run --sweep-banned to check existing playlists.")
     return 0
 
 
@@ -390,6 +439,8 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "batch":
             from tuneshift.commands.batch_cmd import handle_batch
             return handle_batch(args, db)
+        elif args.command == "ban":
+            return _handle_ban(args, db)
         else:
             parser.print_help()
             return 1
