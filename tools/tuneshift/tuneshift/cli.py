@@ -226,6 +226,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_batch.add_argument("--add", action="append", help="Add a track (repeatable: --add 'Title - Artist')")
     p_batch.add_argument("--review-findings", action="store_true", help="Plan fixes from concept review")
     p_batch.add_argument("--sweep-banned", action="store_true", help="Sweep for banned artists")
+    p_batch.add_argument("--split", help="Split matching tracks into a new playlist (name)")
+    p_batch.add_argument("--filter", action="append", help="Filter for --split (artist:X, vibe:X, energy:<0.4)")
     p_batch.add_argument("--plan", action="store_true", help="Generate plan (no changes)")
     p_batch.add_argument("--plan-file", help="Load operations from a plan file")
     p_batch.add_argument("--from-stdin", action="store_true", help="Read operations from stdin")
@@ -243,6 +245,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_ban.add_argument("--reason", help="Reason for banning")
     p_ban.add_argument("--list", action="store_true", help="List all banned artists")
     p_ban.add_argument("--remove", help="Remove an artist from the ban list")
+
+    # merge (separate command since it takes multiple playlist args)
+    p_merge = sub.add_parser("merge", help="Merge playlists into one")
+    p_merge.add_argument("sources", nargs="+", help="Source playlist names")
+    p_merge.add_argument("--into", required=True, help="Target playlist name")
+    p_merge.add_argument("--plan", action="store_true", help="Generate plan (no changes)")
+    p_merge.add_argument("--delete-sources", action="store_true", help="Delete source playlists after merge")
 
     # Shell completions via shtab
     try:
@@ -441,6 +450,9 @@ def main(argv: list[str] | None = None) -> int:
             return handle_batch(args, db)
         elif args.command == "ban":
             return _handle_ban(args, db)
+        elif args.command == "merge":
+            from tuneshift.commands.batch_cmd import handle_merge
+            return handle_merge(args, db)
         else:
             parser.print_help()
             return 1

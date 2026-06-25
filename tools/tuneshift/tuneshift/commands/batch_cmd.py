@@ -333,6 +333,157 @@ def plan_sweep_banned(
     return results
 
 
+def match_filter(track, filter_str: str, db: Database | None = None) -> bool:
+    """Check if a track matches a filter expression.
+
+    Filter types:
+      artist:Name - match artist (case-insensitive)
+      vibe:keyword - match track vibes
+      theme:keyword - match track themes
+      energy:<0.4 - numeric comparison on energy
+      plain text - substring match on title
+    """
+    import re as _re
+    from tuneshift.sequencer.metadata import track_to_metadata
+
+    meta = track_to_metadata(track)
+
+    if filter_str.startswith("artist:"):
+        target = filter_str[7:].strip().casefold()
+        return target in track.artist.casefold()
+    elif filter_str.startswith("vibe:"):
+        target = filter_str[5:].strip().casefold()
+        return any(target in v.casefold() for v in meta.vibes)
+    elif filter_str.startswith("theme:"):
+        target = filter_str[6:].strip().casefold()
+        return any(target in t.casefold() for t in meta.themes)
+    elif filter_str.startswith("energy:"):
+        expr = filter_str[7:].strip()
+        track_energy = meta.energy or meta.emotional_intensity
+        if track_energy is None:
+            return False
+        match = _re.match(r"([<>]=?)\s*([\d.]+)", expr)
+        if not match:
+            return False
+        op, val = match.group(1), float(match.group(2))
+        if op == "<":
+            return track_energy < val
+        elif op == "<=":
+            return track_energy <= val
+        elif op == ">":
+            return track_energy > val
+        elif op == ">=":
+            return track_energy >= val
+        return False
+    else:
+        # Plain text: substring match on title
+        return filter_str.casefold() in track.title.casefold()
+
+
+def apply_filters(tracks: list, filters: list[str], db: Database | None = None) -> list:
+    """Apply AND-combined filters within each filter string (comma-separated),
+    OR-combined across multiple filter strings."""
+    if not filters:
+        return []
+
+    matched = set()
+    for filter_group in filters:
+        # Within a filter group, comma = AND
+        sub_filters = [f.strip() for f in filter_group.split(",")]
+        for i, track in enumerate(tracks):
+            if all(match_filter(track, sf, db) for sf in sub_filters):
+                matched.add(i)
+
+    return [tracks[i] for i in sorted(matched)]
+
+
+def plan_split(
+    db: Database, playlist_id: int, new_name: str, filters: list[str]
+) -> list[PlanOperation]:
+    """Plan splitting tracks matching filters into a new playlist."""
+    tracks = db.get_playlist_tracks(playlist_id)
+    matching = apply_filters(tracks, filters, db)
+
+    ops: list[PlanOperation] = []
+
+    if not matching:
+        return ops
+
+    # Create playlist operation
+    ops.append(PlanOperation(
+        action="create_playlist",
+        target_name=new_name,
+        reason=f"split target for filter: {', '.join(filters)}",
+    ))
+
+    # Move matching tracks
+    for track in matching:
+        pos = next((i for i, t in enumerate(tracks) if t.id == track.id), 0)
+        ops.append(PlanOperation(
+            action="move_to_playlist",
+            track_title=track.title,
+            track_artist=track.artist,
+            track_id=track.id,
+            target_name=new_name,
+            position=pos,
+            previous_position=pos,
+            reason=f"matches filter: {', '.join(filters)}",
+        ))
+
+    return ops
+
+
+def plan_merge(
+    db: Database, source_ids: list[int], into_id: int
+) -> list[PlanOperation]:
+    """Plan merging source playlists into a target, deduplicating."""
+    target_tracks = db.get_playlist_tracks(into_id)
+    target_track_ids = {t.id for t in target_tracks}
+
+    ops: list[PlanOperation] = []
+
+    for source_id in source_ids:
+        if source_id == into_id:
+            continue
+        source_tracks = db.get_playlist_tracks(source_id)
+        for track in source_tracks:
+            if track.id not in target_track_ids:
+                ops.append(PlanOperation(
+                    action="add",
+                    track_title=track.title,
+                    track_artist=track.artist,
+                    track_id=track.id,
+                    reason="merge: unique track from source",
+                ))
+                target_track_ids.add(track.id)
+
+    return ops
+
+
+def apply_split(db: Database, plan: "BatchPlan") -> tuple[int, int]:
+    """Apply a split plan: create new playlist, move tracks."""
+    moved = 0
+    new_playlist_id = None
+
+    for op in plan.operations:
+        if op.action == "create_playlist" and op.target_name:
+            existing = db.find_playlist_by_name(op.target_name)
+            if existing:
+                new_playlist_id = existing.id
+            else:
+                new_playlist_id = db.create_playlist(op.target_name)
+        elif op.action == "move_to_playlist" and op.track_id and new_playlist_id:
+            # Add to new playlist
+            new_tracks = db.get_playlist_tracks(new_playlist_id)
+            next_pos = len(new_tracks)
+            db.add_track_to_playlist(new_playlist_id, op.track_id, next_pos)
+            # Remove from source
+            db.remove_track_from_playlist(plan.playlist_id, op.track_id)
+            moved += 1
+
+    return moved, 0
+
+
 def parse_plan_file(content: str) -> list[PlanOperation]:
     """Parse a plan file in simple text format.
 
@@ -446,6 +597,36 @@ def apply_plan(db: Database, plan: BatchPlan) -> tuple[int, int]:
                 "previous_section": None,
             })
 
+    # Handle split operations (create_playlist + move_to_playlist)
+    new_playlist_id = None
+    moved = 0
+    for op in plan.operations:
+        if op.action == "create_playlist" and op.target_name:
+            existing = db.find_playlist_by_name(op.target_name)
+            if existing:
+                new_playlist_id = existing.id
+            else:
+                new_playlist_id = db.create_playlist(op.target_name)
+            executed_ops.append({
+                "action": "create_playlist", "track": "", "artist": "",
+                "track_id": None, "reason": op.reason,
+                "position": None, "previous_position": None,
+                "previous_section": None, "target_name": op.target_name,
+            })
+        elif op.action == "move_to_playlist" and op.track_id and new_playlist_id:
+            new_tracks = db.get_playlist_tracks(new_playlist_id)
+            next_pos = len(new_tracks)
+            db.add_track_to_playlist(new_playlist_id, op.track_id, next_pos)
+            db.remove_track_from_playlist(plan.playlist_id, op.track_id)
+            moved += 1
+            executed_ops.append({
+                "action": "move_to_playlist", "track": op.track_title,
+                "artist": op.track_artist, "track_id": op.track_id,
+                "reason": op.reason, "position": op.position,
+                "previous_position": op.previous_position,
+                "previous_section": None, "target_name": op.target_name,
+            })
+
     # Phase 2: Record ONLY what actually executed in history
     if executed_ops:
         db.record_batch(plan.playlist_id, json.dumps({
@@ -484,6 +665,14 @@ def render_plan(plan: BatchPlan) -> str:
             lines.append(f"    Reason: {op.reason}")
         lines.append("")
 
+    moves = [op for op in plan.operations if op.action == "move_to_playlist"]
+    if moves:
+        target = moves[0].target_name or "?"
+        lines.append(f"MOVE TO \"{target}\" ({len(moves)}):")
+        for op in moves:
+            lines.append(f'  - "{op.track_title}" by {op.track_artist}')
+        lines.append("")
+
     if plan.keeps:
         lines.append(f"KEEP ({len(plan.keeps)}):")
         for op in plan.keeps:
@@ -501,6 +690,8 @@ def render_plan(plan: BatchPlan) -> str:
     summary = []
     if plan.removals:
         summary.append(f"{len(plan.removals)} removal(s)")
+    if moves:
+        summary.append(f"{len(moves)} move(s)")
     if plan.additions:
         summary.append(f"{len(plan.additions)} addition(s)")
     if plan.keeps:
@@ -809,6 +1000,15 @@ def handle_batch(args, db: Database) -> int:
     if getattr(args, "review_findings", False):
         ops.extend(plan_review_fixes(db, playlist.id))
 
+    # Split operation
+    split_name = getattr(args, "split", None)
+    if split_name:
+        filters = getattr(args, "filter", None) or []
+        if not filters:
+            print("--split requires --filter to specify which tracks to move.", file=sys.stderr)
+            return 1
+        ops.extend(plan_split(db, playlist.id, split_name, filters))
+
     if not ops:
         print("No changes needed.")
         return 0
@@ -849,5 +1049,61 @@ def handle_batch(args, db: Database) -> int:
         else:
             plan_path = plan.save()
             print(f"Plan saved to {plan_path}. Apply with: tuneshift batch --apply")
+
+    return 0
+
+
+def handle_merge(args, db: Database) -> int:
+    """Handle the merge command: combine multiple playlists into one."""
+    source_names = args.sources
+    into_name = args.into
+
+    # Resolve all playlists
+    source_playlists = []
+    for name in source_names:
+        p = db.find_playlist_by_name(name)
+        if not p:
+            print(f"Playlist not found: {name}", file=sys.stderr)
+            return 1
+        source_playlists.append(p)
+
+    into_playlist = db.find_playlist_by_name(into_name)
+    if not into_playlist:
+        # Create target
+        into_id = db.create_playlist(into_name)
+        print(f"Created target playlist: {into_name}")
+    else:
+        into_id = into_playlist.id
+
+    source_ids = [p.id for p in source_playlists]
+    ops = plan_merge(db, source_ids, into_id)
+
+    if not ops:
+        print("No unique tracks to merge (all duplicates).")
+        return 0
+
+    plan = BatchPlan(playlist_name=into_name, playlist_id=into_id, operations=ops)
+    print(render_plan(plan))
+
+    if getattr(args, "plan", False):
+        plan.save()
+        print("\nPlan saved. Apply with: tuneshift batch --apply")
+        return 0
+
+    confirm = input("\nApply merge? [y/N] ").strip().lower()
+    if confirm not in ("y", "yes"):
+        plan.save()
+        print("Plan saved. Apply with: tuneshift batch --apply")
+        return 0
+
+    removed, added = apply_plan(db, plan)
+    print(f"\nMerged: {added} tracks added to \"{into_name}\"")
+
+    if getattr(args, "delete_sources", False):
+        for p in source_playlists:
+            if p.id != into_id:
+                db.conn.execute("DELETE FROM playlists WHERE id = ?", (p.id,))
+                print(f"  Deleted source playlist: {p.name}")
+        db.conn.commit()
 
     return 0
