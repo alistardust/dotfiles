@@ -627,6 +627,19 @@ def apply_plan(db: Database, plan: BatchPlan) -> tuple[int, int]:
                 "previous_section": None, "target_name": op.target_name,
             })
 
+    # Handle set_narrative (for --structure)
+    for op in plan.operations:
+        if op.action == "set_narrative" and op.target_name:
+            # target_name holds the narrative text for set_narrative ops
+            old_narrative = db.get_narrative(plan.playlist_id)
+            db.set_narrative(plan.playlist_id, op.target_name)
+            executed_ops.append({
+                "action": "set_narrative", "track": "", "artist": "",
+                "track_id": None, "reason": op.reason,
+                "position": None, "previous_position": None,
+                "previous_section": old_narrative, "target_name": op.target_name,
+            })
+
     # Phase 2: Record ONLY what actually executed in history
     if executed_ops:
         db.record_batch(plan.playlist_id, json.dumps({
@@ -696,6 +709,22 @@ def render_plan(plan: BatchPlan) -> str:
         summary.append(f"{len(plan.additions)} addition(s)")
     if plan.keeps:
         summary.append(f"{len(plan.keeps)} keep(s)")
+
+    section_assigns = [op for op in plan.operations if op.action == "assign_section"]
+    if section_assigns:
+        by_section: dict[str, list[PlanOperation]] = {}
+        for op in section_assigns:
+            by_section.setdefault(op.section_name or "?", []).append(op)
+        lines.append(f"STRUCTURE ({len(section_assigns)} assignments):")
+        for section_name, section_ops in by_section.items():
+            lines.append(f"  [{section_name}] ({len(section_ops)} tracks):")
+            for op in section_ops[:5]:
+                lines.append(f"    - {op.track_title} - {op.track_artist}")
+            if len(section_ops) > 5:
+                lines.append(f"    ... +{len(section_ops) - 5} more")
+        lines.append("")
+        summary.append(f"{len(section_assigns)} section assignment(s)")
+
     lines.append(f"Summary: {', '.join(summary) if summary else 'no changes'}")
 
     return "\n".join(lines)
@@ -1009,6 +1038,30 @@ def handle_batch(args, db: Database) -> int:
             return 1
         ops.extend(plan_split(db, playlist.id, split_name, filters))
 
+    # Rebuild
+    if getattr(args, "rebuild", False):
+        count = getattr(args, "count", 50)
+        fresh = getattr(args, "fresh", False)
+        ops.extend(plan_rebuild(db, playlist.id, count, fresh=fresh))
+
+    # Retroactive narrative structuring
+    if getattr(args, "structure", False):
+        narrative_file = getattr(args, "narrative_file", None)
+        if narrative_file:
+            ops.extend(plan_structure_from_file(db, playlist.id, narrative_file))
+        else:
+            # LLM mode: requires classifier backend
+            from tuneshift.sequencer.classifier import TrackClassifier
+            classifier = TrackClassifier()
+            if not classifier.available:
+                print("--structure without --narrative-file requires an LLM backend.", file=sys.stderr)
+                print("Configure with: tuneshift config anthropic-key <key>", file=sys.stderr)
+                print("Or provide sections: --structure --narrative-file arc.txt", file=sys.stderr)
+                return 1
+            # TODO: LLM-proposed structuring (Tier 2)
+            print("LLM-proposed structuring not yet implemented. Use --narrative-file.", file=sys.stderr)
+            return 1
+
     if not ops:
         print("No changes needed.")
         return 0
@@ -1107,3 +1160,155 @@ def handle_merge(args, db: Database) -> int:
         db.conn.commit()
 
     return 0
+
+
+def plan_rebuild(
+    db: Database, playlist_id: int, count: int, fresh: bool = False
+) -> list[PlanOperation]:
+    """Plan a concept-driven rebuild: review + fill from library.
+
+    1. Evaluate existing tracks against concept
+    2. Keep passes, remove failures
+    3. Fill to target count from library (Tier 1)
+    """
+    from tuneshift.commands.compose_cmd import _get_concept, _build_artist_lookup
+    from tuneshift.composer.reviewer import review_playlist
+    from tuneshift.sequencer.metadata import track_to_metadata
+
+    concept = _get_concept(db, playlist_id)
+    tracks_raw = db.get_playlist_tracks(playlist_id)
+    tracks = [track_to_metadata(t) for t in tracks_raw]
+    artist_lookup = _build_artist_lookup(db, playlist_id)
+
+    ops: list[PlanOperation] = []
+
+    if fresh:
+        # Remove everything
+        for i, t in enumerate(tracks_raw):
+            ops.append(PlanOperation(
+                action="rm", track_title=t.title, track_artist=t.artist,
+                track_id=t.id, position=i, previous_position=i,
+                reason="rebuild --fresh: clearing playlist",
+            ))
+        keep_ids: set[int] = set()
+    else:
+        # Review and keep/remove based on concept
+        findings = review_playlist(tracks, concept=concept, artist_lookup=artist_lookup) if concept else []
+        violation_ids: set[int] = set()
+
+        for finding in findings:
+            if finding.severity >= 0.8:
+                import re as _re
+                match = _re.search(r'"([^"]+)" by (.+?) - Rule:', finding.description)
+                if match:
+                    title, artist = match.group(1), match.group(2)
+                    for i, t in enumerate(tracks_raw):
+                        if t.title == title and t.artist == artist:
+                            ops.append(PlanOperation(
+                                action="rm", track_title=t.title, track_artist=t.artist,
+                                track_id=t.id, position=i, previous_position=i,
+                                reason=finding.description,
+                            ))
+                            violation_ids.add(t.id)
+                            break
+
+        keep_ids = {t.id for t in tracks_raw} - violation_ids
+
+    # Fill from library (Tier 1)
+    current_count = len(keep_ids)
+    needed = max(0, count - current_count)
+
+    if needed > 0 and concept:
+        # Search library for tracks that fit the concept
+        keywords = []
+        if concept.theme:
+            keywords.extend(concept.theme.split(","))
+        keywords.extend(concept.genres)
+
+        candidates = db.search_tracks_by_metadata(keywords=keywords, limit=needed * 3)
+
+        # Filter: not already in playlist, passes concept rules
+        playlist_track_ids = {t.id for t in tracks_raw}
+        added_count = 0
+        for candidate in candidates:
+            if candidate.id in playlist_track_ids or candidate.id in keep_ids:
+                continue
+            # Check banned
+            banned = check_track_against_bans(db, candidate.title, candidate.artist)
+            if banned:
+                continue
+            # Check concept hard rules (artist identity)
+            if concept.hard_rules:
+                artist = db.get_artist_by_name(candidate.artist)
+                if artist:
+                    from tuneshift.composer.reviewer import _check_rule_against_artist
+                    passes = all(
+                        _check_rule_against_artist(rule, artist) is not False
+                        for rule in concept.hard_rules
+                    )
+                    if not passes:
+                        continue
+
+            ops.append(PlanOperation(
+                action="add", track_title=candidate.title,
+                track_artist=candidate.artist, track_id=candidate.id,
+                reason=f"rebuild fill: library match (concept: {concept.theme})",
+            ))
+            added_count += 1
+            if added_count >= needed:
+                break
+
+        if added_count < needed:
+            shortfall = needed - added_count
+            print(f"  Note: filled {current_count + added_count}/{count} "
+                  f"({shortfall} unfilled: insufficient matching tracks in library)")
+
+    return ops
+
+
+def plan_structure_from_file(
+    db: Database, playlist_id: int, narrative_file: str
+) -> list[PlanOperation]:
+    """Plan track assignment to sections from a user-provided narrative file.
+
+    Assigns tracks by fitness (energy/mood/stance alignment).
+    """
+    from tuneshift.composer.parser import parse_enhanced_narrative
+    from tuneshift.composer.matcher import match_tracks_to_sections
+    from tuneshift.sequencer.metadata import track_to_metadata
+
+    content = Path(narrative_file).read_text()
+    tracks_raw = db.get_playlist_tracks(playlist_id)
+    tracks = [track_to_metadata(t) for t in tracks_raw]
+    tracklist = [t.title for t in tracks]
+
+    sections = parse_enhanced_narrative(content, tracklist=tracklist)
+    if not sections:
+        print("  No sections could be parsed from the narrative file.", file=sys.stderr)
+        return []
+
+    assignments = match_tracks_to_sections(tracks, sections, concept=None)
+
+    ops: list[PlanOperation] = []
+
+    # Set narrative operation
+    ops.append(PlanOperation(
+        action="set_narrative",
+        reason="retroactive structuring from file",
+        target_name=content.strip(),
+    ))
+
+    # Assign section operations (for rendering)
+    for section in sections:
+        section_tracks = assignments.assignments.get(section.name, [])
+        for track in section_tracks:
+            ops.append(PlanOperation(
+                action="assign_section",
+                track_title=track.title,
+                track_artist=track.artist,
+                track_id=track.track_id,
+                section_name=section.name,
+                reason=f"assigned to {section.name} by fitness",
+            ))
+
+    return ops
