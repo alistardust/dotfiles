@@ -30,6 +30,11 @@ section_claude() {
     local claude_src="${SCRIPT_DIR}/configs/claude-instructions.md"
     install_instructions "$claude_dir" "$claude_global" "$claude_src" "Claude Code"
 
+    # Install local skills from this repo
+    local skills_dir="${claude_dir}/skills"
+    _install_local_skills "$skills_dir"
+    ok "All local skills installed to ~/.claude/skills/"
+
     # gstack — virtual engineering team for Claude Code
     local gstack_dir="$HOME/.claude/skills/gstack"
     install_gstack "$gstack_dir" "--quiet"
