@@ -28,18 +28,8 @@ SKILLS_SHARED=(
 )
 
 # Local skills shipped in this repo (skills/<name>/SKILL.md -> ~/.copilot/skills/<name>/)
-SKILLS_LOCAL=(
-    code-audit
-    hunk-reviewer
-    skill-conductor
-    skill-conductor-decision
-    skill-conductor-context
-    skill-conductor-execution
-    skill-conductor-review-gate
-    a11y-review
-    a11y-review-deep
-    using-git-worktrees
-)
+# All directories in skills/ are installed automatically. No manual list needed.
+# To add a new skill: create skills/<name>/SKILL.md and re-run setup.
 
 section_copilot_skills() {
     log "Installing Copilot skills (profiles: work=${SKILLS_PROFILE[work]}, home=${SKILLS_PROFILE[home]})..."
@@ -75,14 +65,15 @@ sys.exit(1)
 " "$settings_file" "$default_model" && ok "Updated settings.json (model: ${default_model})" || true
     fi
 
-    # Install local skills from this repo first
-    local skill
-    for skill in "${SKILLS_LOCAL[@]}"; do
-        local src="${SCRIPT_DIR}/skills/${skill}"
-        local dest="${HOME}/.copilot/skills/${skill}"
-        if [[ ! -d "$src" ]]; then
-            warn "Local skill source missing: ${src}"
-            continue
+    # Install local skills from this repo (all directories in skills/)
+    local skill src dest
+    for src in "${SCRIPT_DIR}/skills"/*/; do
+        [[ -d "$src" ]] || continue
+        skill="$(basename "$src")"
+        dest="${HOME}/.copilot/skills/${skill}"
+        # Remove existing symlink (e.g., from superpowers) so repo version wins
+        if [[ -L "$dest" ]]; then
+            run rm "$dest"
         fi
         run mkdir -p "$dest"
         run cp -R "${src}/." "$dest/"
@@ -174,9 +165,11 @@ verify_copilot_skills() {
         fail "Default model is not Anthropic in settings.json"
     fi
 
-    # Check local skills (always expected if copilot_skills was ever run)
-    local skill
-    for skill in "${SKILLS_LOCAL[@]}"; do
+    # Check local skills (all directories in skills/ should be installed)
+    local skill src
+    for src in "${SCRIPT_DIR}/skills"/*/; do
+        [[ -d "$src" ]] || continue
+        skill="$(basename "$src")"
         [[ -f "${skills_dir}/${skill}/SKILL.md" ]] \
             && pass "Local skill installed: ${skill}" \
             || fail "Local skill missing: ${skill}"
