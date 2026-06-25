@@ -66,19 +66,8 @@ sys.exit(1)
     fi
 
     # Install local skills from this repo (all directories in skills/)
-    local skill src dest
-    for src in "${SCRIPT_DIR}/skills"/*/; do
-        [[ -d "$src" ]] || continue
-        skill="$(basename "$src")"
-        dest="${HOME}/.copilot/skills/${skill}"
-        # Remove existing symlink (e.g., from superpowers) so repo version wins
-        if [[ -L "$dest" ]]; then
-            run rm "$dest"
-        fi
-        run mkdir -p "$dest"
-        run cp -R "${src}/." "$dest/"
-        ok "Installed local skill: ${skill}"
-    done
+    _install_local_skills "$HOME/.copilot/skills"
+    ok "All local skills installed to ~/.copilot/skills/"
 
     if ! command_exists gh && [[ "$DRY_RUN" != "true" ]]; then
         warn "gh CLI not found. Install GitHub CLI first: https://cli.github.com/"
