@@ -24,7 +24,7 @@ def classify_track_grounded(
 
     Pipeline:
     1. Last.fm track tags
-    2. Genius lyrics (first ~500 chars)
+    2. Genius lyrics (full text)
     3. LLM synthesis with all context
 
     Returns the classification dict or None on failure.
@@ -51,7 +51,7 @@ def classify_track_grounded(
     if genius_ok():
         lyrics = get_lyrics(title, artist)
         if lyrics:
-            context_parts.append(f"Lyrics excerpt:\n{lyrics[:300]}")
+            context_parts.append(f"Lyrics:\n{lyrics}")
 
     # If no search results at all, still provide artist context
     if not context_parts and not artist_genres:

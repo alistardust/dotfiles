@@ -66,8 +66,7 @@ def search_song(title: str, artist: str) -> str | None:
 def get_lyrics(title: str, artist: str) -> str | None:
     """Get lyrics for a track by searching Genius and scraping the page.
 
-    Returns the first ~500 chars of lyrics (enough for LLM context).
-    """
+    Returns the full lyrics text."""
     url = search_song(title, artist)
     if not url:
         return None
@@ -95,8 +94,7 @@ def get_lyrics(title: str, artist: str) -> str | None:
         text = text.replace("&#x27;", "'").replace("&quot;", '"')
         text = text.strip()
 
-        # Return first ~500 chars (enough context for LLM)
-        return text[:500] if text else None
+        return text if text else None
 
     except (OSError, ValueError):
         return None
