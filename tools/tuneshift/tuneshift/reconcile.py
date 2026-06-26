@@ -51,14 +51,28 @@ def _strategy_album_lookup(track, client) -> list[TrackResult]:
 
 
 def _strategy_album_tracklist(track, client) -> list[TrackResult]:
-    """Search for album, then fetch its tracklist for title matching."""
+    """Search for album by artist, then fetch its tracklist for title matching."""
     if not track.album:
         return []
     try:
-        # Search for the album on platform
-        albums: list[AlbumResult] = client.search_album(track.album, limit=5)
+        # Include artist in search to avoid matching wrong artist's album
+        query = f"{track.album} {track.artist}"
+        albums: list[AlbumResult] = client.search_album(query, limit=5)
+        if not albums:
+            # Fallback: album name only
+            albums = client.search_album(track.album, limit=5)
         if not albums:
             return []
+
+        # Filter to albums by the correct artist (if possible)
+        from tuneshift.matching import normalize_artist
+        target_artist = normalize_artist(track.artist)
+        artist_albums = [
+            a for a in albums
+            if normalize_artist(a.artist) == target_artist
+        ]
+        if artist_albums:
+            albums = artist_albums
 
         # Sort by edition preference (prefer standard editions)
         albums = sorted(albums, key=lambda a: _edition_score(a.title))
@@ -194,8 +208,9 @@ def reconcile_track(
                 all_candidates.append(c)
                 candidate_strategies[c.platform_id] = strategy_name
 
-        # Short-circuit check
-        if threshold is not None and all_candidates:
+        # Short-circuit: only on ISRC match (score 100). Never short-circuit
+        # on text matches because a later strategy might find a better version.
+        if threshold is not None and threshold >= 100 and all_candidates:
             top_score = _quick_top_score(track, all_candidates)
             if top_score >= threshold:
                 break
@@ -205,7 +220,7 @@ def reconcile_track(
 
     # Score all candidates uniformly
     all_durations = [r.duration_seconds for r in all_candidates if r.duration_seconds]
-    scored: list[tuple[int, TrackResult]] = []
+    scored: list[tuple[int, int, TrackResult]] = []  # (score, edition_penalty, result)
     for r in all_candidates:
         s = score_match_with_version(
             track.title, track.artist, track.album,
@@ -215,16 +230,18 @@ def reconcile_track(
             all_durations=all_durations,
         )
         s = min(100, s + duration_proximity_bonus(r.duration_seconds, track.duration_seconds))
-        scored.append((s, r))
+        ed = _edition_score(r.album or "")
+        scored.append((s, ed, r))
 
-    scored.sort(key=lambda x: x[0], reverse=True)
-    scores = [s for s, _ in scored]
+    # Sort by score descending, then by edition preference (standard preferred)
+    scored.sort(key=lambda x: (-x[0], x[1]))
+    scores = [s for s, _, _ in scored]
     confidence = classify_results(scores)
 
     if confidence == "not_found":
-        return ReconcileResult(confidence="not_found", alternatives=[r for _, r in scored[:3]])
+        return ReconcileResult(confidence="not_found", alternatives=[r for _, _, r in scored[:3]])
 
-    best_score, best_result = scored[0]
+    best_score, _, best_result = scored[0]
     is_div = _check_divergence(track.album, best_result.album)
     div_note = f"Version differs: {best_result.album}" if is_div else None
 
@@ -265,7 +282,7 @@ def reconcile_track(
         confidence=confidence,
         is_divergent=is_div,
         divergence_note=div_note,
-        alternatives=[r for _, r in scored[1:4]],
+        alternatives=[r for _, _, r in scored[1:4]],
         match_type=match_type,
     )
 
