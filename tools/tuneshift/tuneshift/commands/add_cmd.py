@@ -68,7 +68,8 @@ def handle_add(args, db: Database) -> int:
 
     print(f"Added \"{args.title}\" by {args.artist} to \"{args.playlist}\" at position {position}")
 
-
+    # Auto-enrich: classify track and artist if not already done
+    _auto_enrich(db, track_id, args.artist)
 
     # Sync to linked platforms
     had_failures = _sync_add_to_platforms(db, playlist_id, track_id, args.title, args.artist)
@@ -112,3 +113,99 @@ def _sync_add_to_platforms(db: Database, playlist_id: int, track_id: int, title:
             print(f"  {platform_name}: could not find \"{title}\" by {artist}")
 
     return failures
+
+
+def _auto_enrich(db: Database, track_id: int, artist_name: str) -> None:
+    """Auto-classify track and enrich artist on add.
+
+    Runs silently. Failures are non-fatal (enrichment is best-effort).
+    """
+    from tuneshift.sequencer.classifier import TrackClassifier
+
+    classifier = TrackClassifier()
+    if not classifier.available:
+        return
+
+    track = db.get_track(track_id)
+    if not track:
+        return
+
+    # Classify track if missing vibes/themes
+    metadata = track.metadata or {}
+    if not metadata.get("vibes") and not metadata.get("narrator_stance"):
+        results = classifier.classify([{"title": track.title, "artist": track.artist}])
+        if results:
+            result = results[0]
+            metadata.update(result)
+            db.conn.execute(
+                "UPDATE tracks SET metadata = ? WHERE id = ?",
+                (__import__("json").dumps(metadata), track_id),
+            )
+            db.conn.commit()
+
+    # Enrich artist if not already done (genres + identity)
+    artist = db.get_artist_by_name(artist_name)
+    if artist and not artist.genres and not artist.enriched_at:
+        _enrich_artist_via_llm(db, artist, classifier)
+
+
+def _enrich_artist_via_llm(db: Database, artist, classifier) -> None:
+    """Enrich artist using MusicBrainz lookup for genres, LLM only as fallback."""
+    import json
+    import musicbrainzngs
+
+    musicbrainzngs.set_useragent("tuneshift", "1.0", "https://github.com/alistardust/dotfiles")
+
+    genres: list[str] = []
+    mb_artist_id: str | None = None
+
+    # Try MusicBrainz first (real data, not hallucinated)
+    try:
+        results = musicbrainzngs.search_artists(artist=artist.name, limit=3)
+        artists_found = results.get("artist-list", [])
+        if artists_found:
+            best = artists_found[0]
+            mb_artist_id = best.get("id")
+            # Get tags (genres) from MB
+            mb_tags = best.get("tag-list", [])
+            genres = [t["name"] for t in mb_tags if int(t.get("count", 0)) > 0]
+
+            # If no tags on search result, fetch full artist for tags
+            if not genres and mb_artist_id:
+                full = musicbrainzngs.get_artist_by_id(mb_artist_id, includes=["tags"])
+                mb_tags = full.get("artist", {}).get("tag-list", [])
+                genres = [t["name"] for t in mb_tags if int(t.get("count", 0)) > 0]
+    except (musicbrainzngs.MusicBrainzError, OSError, KeyError):
+        pass
+
+    update_fields: dict = {
+        "enrichment_sources": ["musicbrainz"] if genres else [],
+        "enriched_at": "auto",
+    }
+
+    if genres:
+        update_fields["genres"] = genres
+    if mb_artist_id:
+        update_fields["mb_artist_id"] = mb_artist_id
+
+    # If MusicBrainz didn't return genres, fall back to LLM (less reliable)
+    if not genres and classifier and classifier.available:
+        prompt = (
+            f'What genre(s) is the musical artist "{artist.name}"? '
+            f'Return ONLY a JSON array of genre strings. Be specific. '
+            f'Example: ["pop", "boyband", "teen pop"] or ["country", "country pop"]. '
+            f'If unsure, return ["unknown"].'
+        )
+        try:
+            response = classifier._backend.complete(prompt, classifier._model, max_tokens=100)
+            response = response.strip()
+            if response.startswith("```"):
+                response = response.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+            parsed = json.loads(response)
+            if isinstance(parsed, list) and parsed and parsed != ["unknown"]:
+                update_fields["genres"] = parsed
+                update_fields["enrichment_sources"] = ["llm_fallback"]
+        except (json.JSONDecodeError, OSError, RuntimeError, ValueError):
+            pass
+
+    db.update_artist(artist.id, **update_fields)
