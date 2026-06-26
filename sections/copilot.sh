@@ -126,4 +126,6 @@ verify_copilot() {
                                         && pass "gstack installed for Copilot"                  || fail "gstack not installed for Copilot"
     [[ -e "$HOME/.copilot/extensions/prompt-injection-guard/extension.mjs" ]] \
                                         && pass "prompt-injection-guard extension installed"    || fail "prompt-injection-guard extension missing"
+    [[ -e "$HOME/.copilot/extensions/confirmation-gate/extension.mjs" ]] \
+                                        && pass "confirmation-gate extension installed"         || fail "confirmation-gate extension missing"
 }
