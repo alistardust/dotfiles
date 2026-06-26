@@ -258,6 +258,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_merge.add_argument("--plan", action="store_true", help="Generate plan (no changes)")
     p_merge.add_argument("--delete-sources", action="store_true", help="Delete source playlists after merge")
 
+    # audit
+    p_audit = sub.add_parser("audit", help="Full playlist health audit (all checks)")
+    p_audit.add_argument("playlist", nargs="?", help="Playlist name (omit for all)")
+    p_audit.add_argument("--matching-only", action="store_true", help="Only check platform mapping quality")
+    p_audit.add_argument("--vibes-only", action="store_true", help="Only check vibe outliers")
+    p_audit.add_argument("--concept-only", action="store_true", help="Only check concept rules")
+    p_audit.add_argument("--fix", action="store_true", help="Generate batch plan from findings")
+
     # Shell completions via shtab
     try:
         import shtab
@@ -458,6 +466,9 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "merge":
             from tuneshift.commands.batch_cmd import handle_merge
             return handle_merge(args, db)
+        elif args.command == "audit":
+            from tuneshift.commands.audit_cmd import handle_audit
+            return handle_audit(args, db)
         else:
             parser.print_help()
             return 1
