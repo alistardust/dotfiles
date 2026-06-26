@@ -125,7 +125,8 @@ section_alacritty() {
 # shellcheck disable=SC2015  # A && B || C pattern is safe here (pass/fail always succeed)
 
 verify_alacritty() {
-    command_exists alacritty           && pass "alacritty installed"                           || fail "alacritty not installed"
+    { command_exists alacritty || [[ -d "/Applications/Alacritty.app" ]]; } \
+                                        && pass "alacritty installed"                           || fail "alacritty not installed"
     local cfg="$HOME/.config/alacritty/alacritty.toml"
     [[ -L "$cfg" ]]                    && pass "alacritty.toml symlinked"                      || fail "alacritty.toml not symlinked"
     local target; target="$(readlink "$cfg" 2>/dev/null || true)"
