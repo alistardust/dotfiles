@@ -64,16 +64,21 @@ def handle_enrich(args, db: Database) -> int:
     # LLM classification for narrative fields
     if getattr(args, "classify", False) or not platform_name:
         model = getattr(args, "model", None)
-        classified = _run_classification(db, tracks, playlist.name, model=model, playlist_id=playlist.id)
+        reclassify = getattr(args, "reclassify", False)
+        classified = _run_classification(
+            db, tracks, playlist.name, model=model, playlist_id=playlist.id,
+            force=reclassify,
+        )
         if classified < 0:
             return 1
 
     return 0
 
 
-def _run_classification(db: Database, tracks: list, playlist_name: str, model: str | None = None, playlist_id: int | None = None) -> int:
+def _run_classification(db: Database, tracks: list, playlist_name: str, model: str | None = None, playlist_id: int | None = None, force: bool = False) -> int:
     """Run LLM classification on tracks missing narrative metadata.
 
+    If force=True, re-classifies all tracks regardless of existing metadata.
     Returns number of tracks classified, or -1 on backend error.
     """
     from tuneshift.sequencer.classifier import TrackClassifier
@@ -95,15 +100,15 @@ def _run_classification(db: Database, tracks: list, playlist_name: str, model: s
     if narrative:
         print(f"  Using playlist narrative as classification context")
 
-    # Only classify tracks missing narrative fields
+    # Only classify tracks missing narrative fields (unless --reclassify)
     to_classify = []
     for track in tracks:
         meta = track.metadata or {}
-        if meta.get("narrator_stance") is None or meta.get("emotional_intensity") is None:
+        if force or meta.get("narrator_stance") is None or meta.get("emotional_intensity") is None:
             to_classify.append({"title": track.title, "artist": track.artist, "id": track.id})
 
     if not to_classify:
-        print(f"  All tracks already classified.")
+        print(f"  All tracks already classified. Use --reclassify to force.")
         return 0
 
     def progress(done: int, total: int) -> None:

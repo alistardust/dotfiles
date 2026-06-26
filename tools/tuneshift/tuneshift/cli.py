@@ -111,6 +111,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_enrich.add_argument("playlist", help="Playlist name")
     p_enrich.add_argument("--platform", default=None, help="Source platform for audio metadata (BPM, key)")
     p_enrich.add_argument("--classify", action="store_true", help="Run LLM classification for narrative fields")
+    p_enrich.add_argument("--reclassify", action="store_true", help="Force re-classify all tracks (overwrites existing)")
     p_enrich.add_argument("--model", help="Override LLM model for classification")
 
     # narrative

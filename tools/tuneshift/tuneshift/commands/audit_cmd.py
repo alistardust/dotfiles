@@ -124,7 +124,7 @@ def _audit_mappings(db: Database, playlist) -> list[str]:
 
 
 def _audit_concept(db: Database, playlist) -> list[str]:
-    """Check concept rule compliance."""
+    """Check concept rule compliance. Reports unverifiable tracks separately."""
     from tuneshift.commands.compose_cmd import _get_concept, _build_artist_lookup
     from tuneshift.composer.reviewer import review_playlist
     from tuneshift.sequencer.metadata import track_to_metadata
@@ -133,17 +133,27 @@ def _audit_concept(db: Database, playlist) -> list[str]:
     if not concept:
         return []
 
-    tracks = [track_to_metadata(t) for t in db.get_playlist_tracks(playlist.id)]
+    tracks_raw = db.get_playlist_tracks(playlist.id)
+    tracks = [track_to_metadata(t) for t in tracks_raw]
     artist_lookup = _build_artist_lookup(db, playlist.id)
 
     review_findings = review_playlist(tracks, concept=concept, artist_lookup=artist_lookup)
 
     findings: list[str] = []
+    unverifiable = 0
     for f in review_findings:
         if f.severity >= 0.8:
             findings.append(f"[CONCEPT] VIOLATION: {f.description}")
         elif f.severity >= 0.5:
             findings.append(f"[VIBE] {f.description}")
+        elif f.severity <= 0.3 and "cannot verify" in f.description:
+            unverifiable += 1
+
+    if unverifiable:
+        findings.append(
+            f"[UNVERIFIED] {unverifiable} track(s) cannot be verified against concept rules "
+            f"(artists not enriched). Run: tuneshift enrich \"{playlist.name}\" --classify"
+        )
 
     return findings
 

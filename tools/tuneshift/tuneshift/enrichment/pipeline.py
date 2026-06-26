@@ -27,6 +27,7 @@ def classify_track_grounded(
     2. Genius lyrics (full text)
     3. LLM synthesis with all context
 
+    Each source is independently failable (graceful skip on error).
     Returns the classification dict or None on failure.
     """
     from tuneshift.enrichment.lastfm import get_track_tags, is_available as lastfm_ok
@@ -38,20 +39,26 @@ def classify_track_grounded(
     if artist_genres:
         context_parts.append(f"Artist genres: {', '.join(artist_genres)}")
 
-    # Last.fm track tags
+    # Last.fm track tags (graceful failure)
     track_tags: list[str] = []
     if lastfm_ok():
-        track_tags = get_track_tags(title, artist)
-        if track_tags:
-            context_parts.append(f"Last.fm tags: {', '.join(track_tags)}")
+        try:
+            track_tags = get_track_tags(title, artist)
+            if track_tags:
+                context_parts.append(f"Last.fm tags: {', '.join(track_tags)}")
+        except (OSError, ValueError):
+            pass
         time.sleep(0.2)
 
-    # Genius lyrics
+    # Genius lyrics (graceful failure)
     lyrics: str | None = None
     if genius_ok():
-        lyrics = get_lyrics(title, artist)
-        if lyrics:
-            context_parts.append(f"Lyrics:\n{lyrics}")
+        try:
+            lyrics = get_lyrics(title, artist)
+            if lyrics:
+                context_parts.append(f"Lyrics:\n{lyrics}")
+        except (OSError, ValueError):
+            pass
 
     # If no search results at all, still provide artist context
     if not context_parts and not artist_genres:
@@ -81,8 +88,9 @@ def classify_batch_grounded(
     """Classify a batch of tracks with search grounding.
 
     Each track is classified individually (search per track).
-    Respects rate limits between API calls.
+    Respects rate limits between API calls. Prints per-track progress.
     """
+    import sys
     import time
     results: list[dict | None] = []
     genres_map = artist_genres_map or {}
@@ -92,10 +100,15 @@ def classify_batch_grounded(
         artist = track["artist"]
         genres = genres_map.get(artist, [])
 
+        print(f"  [{i + 1}/{len(tracks)}] {title} - {artist}...", end="", flush=True, file=sys.stderr)
+
         result = classify_track_grounded(
             title, artist, artist_genres=genres, classifier=classifier,
         )
         results.append(result)
+
+        status = "ok" if result else "skip"
+        print(f" {status}", file=sys.stderr)
 
         if progress_callback and (i + 1) % 5 == 0:
             progress_callback(i + 1, len(tracks))

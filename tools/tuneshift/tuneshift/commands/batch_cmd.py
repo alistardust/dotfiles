@@ -573,6 +573,7 @@ def apply_plan(db: Database, plan: BatchPlan) -> tuple[int, int]:
             "previous_section": op.previous_section,
         })
 
+    failed_additions: list[str] = []
     for op in plan.additions:
         if not op.track_title:
             continue
@@ -580,8 +581,8 @@ def apply_plan(db: Database, plan: BatchPlan) -> tuple[int, int]:
         if tracks_found:
             track = tracks_found[0]
             existing = db.get_playlist_tracks(plan.playlist_id)
-            # Skip if already in playlist
             if any(t.id == track.id for t in existing):
+                failed_additions.append(f'"{op.track_title}" by {op.track_artist} (already in playlist)')
                 continue
             next_pos = len(existing)
             db.conn.execute(
@@ -596,6 +597,13 @@ def apply_plan(db: Database, plan: BatchPlan) -> tuple[int, int]:
                 "position": next_pos, "previous_position": None,
                 "previous_section": None,
             })
+        else:
+            failed_additions.append(f'"{op.track_title}" by {op.track_artist} (not found in library)')
+
+    if failed_additions:
+        print(f"  Failed additions ({len(failed_additions)}):")
+        for f in failed_additions:
+            print(f"    - {f}")
 
     # Handle split operations (create_playlist + move_to_playlist)
     new_playlist_id = None
