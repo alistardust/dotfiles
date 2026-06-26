@@ -113,50 +113,18 @@ def _enrich_tracks(db: Database, client: object, tracks: list[tuple[int, str]]) 
 
 
 def _auto_classify_batch(db: Database, track_ids_to_enrich: list[tuple[int, str]]) -> None:
-    """Classify new tracks and enrich their artists after ingest."""
+    """Classify new tracks and enrich their artists after ingest.
+
+    Uses the search-grounded pipeline (Last.fm + Genius + LLM synthesis).
+    """
     import json
     import sys
     from tuneshift.sequencer.classifier import TrackClassifier
+    from tuneshift.enrichment.pipeline import classify_track_grounded
 
     classifier = TrackClassifier()
-    if not classifier.available:
-        return
 
-    # Classify tracks
-    to_classify = []
-    for track_id, _ in track_ids_to_enrich:
-        track = db.get_track(track_id)
-        if track:
-            to_classify.append({"title": track.title, "artist": track.artist, "id": track_id})
-
-    if not to_classify:
-        return
-
-    results = classifier.classify_batched(
-        [{"title": t["title"], "artist": t["artist"]} for t in to_classify],
-        batch_size=20,
-    )
-
-    classified = 0
-    for i, result in enumerate(results):
-        if i >= len(to_classify):
-            break
-        track_id = to_classify[i]["id"]
-        track = db.get_track(track_id)
-        if track and result:
-            metadata = track.metadata or {}
-            metadata.update(result)
-            db.conn.execute(
-                "UPDATE tracks SET metadata = ? WHERE id = ?",
-                (json.dumps(metadata), track_id),
-            )
-            classified += 1
-
-    if classified:
-        db.conn.commit()
-        print(f"  Classified {classified}/{len(to_classify)} tracks", file=sys.stderr)
-
-    # Enrich artists that haven't been enriched yet
+    # Enrich artists first (so we have genre context)
     seen_artists: set[str] = set()
     from tuneshift.commands.add_cmd import _enrich_artist_via_llm
     for track_id, _ in track_ids_to_enrich:
@@ -168,9 +136,45 @@ def _auto_classify_batch(db: Database, track_ids_to_enrich: list[tuple[int, str]
         if artist and not artist.genres and not artist.enriched_at:
             _enrich_artist_via_llm(db, artist, classifier)
 
-    enriched_count = sum(
+    enriched_artists = sum(
         1 for a in seen_artists
         if (art := db.get_artist_by_name(a)) and art.enriched_at
     )
-    if enriched_count:
-        print(f"  Enriched {enriched_count} artist(s) with genre data", file=sys.stderr)
+    if enriched_artists:
+        print(f"  Enriched {enriched_artists} artist(s) with genre data", file=sys.stderr)
+
+    # Classify tracks with grounded pipeline
+    if not classifier.available:
+        return
+
+    classified = 0
+    for i, (track_id, _) in enumerate(track_ids_to_enrich):
+        track = db.get_track(track_id)
+        if not track:
+            continue
+        metadata = track.metadata or {}
+        if metadata.get("vibes"):
+            continue
+
+        artist = db.get_artist_by_name(track.artist)
+        artist_genres = artist.genres if artist else []
+
+        result = classify_track_grounded(
+            track.title, track.artist,
+            artist_genres=artist_genres,
+            classifier=classifier,
+        )
+        if result:
+            metadata.update(result)
+            db.conn.execute(
+                "UPDATE tracks SET metadata = ? WHERE id = ?",
+                (json.dumps(metadata), track_id),
+            )
+            classified += 1
+
+        if (i + 1) % 10 == 0:
+            print(f"  Classified {i + 1}/{len(track_ids_to_enrich)}...", end="\r", file=sys.stderr)
+
+    if classified:
+        db.conn.commit()
+        print(f"  Classified {classified}/{len(track_ids_to_enrich)} tracks (search-grounded)", file=sys.stderr)

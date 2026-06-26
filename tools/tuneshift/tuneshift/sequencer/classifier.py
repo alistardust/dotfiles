@@ -89,7 +89,7 @@ Rules:
 _DEFAULT_MODELS: dict[str, str] = {
     "anthropic": "claude-haiku-4-5-20241022",
     "openai": "gpt-4o-mini",
-    "ollama": "llama3.1:8b",
+    "ollama": "qwen2.5:32b",
     "openai-compatible": "gpt-4o-mini",
 }
 

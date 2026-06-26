@@ -301,11 +301,13 @@ def _handle_config(args) -> int:
         print()
         print("  To configure: tuneshift config anthropic-key <your-key>")
         print("                tuneshift config openai-key <your-key>")
+        print("                tuneshift config lastfm-key <your-key>")
         return 0
 
     key_map = {
         "anthropic-key": "anthropic",
         "openai-key": "openai",
+        "lastfm-key": "lastfm",
     }
 
     if args.key not in key_map:

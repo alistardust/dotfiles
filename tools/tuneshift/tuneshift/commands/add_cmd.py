@@ -118,35 +118,40 @@ def _sync_add_to_platforms(db: Database, playlist_id: int, track_id: int, title:
 def _auto_enrich(db: Database, track_id: int, artist_name: str) -> None:
     """Auto-classify track and enrich artist on add.
 
-    Runs silently. Failures are non-fatal (enrichment is best-effort).
+    Uses the search-grounded pipeline (Last.fm + Genius + LLM synthesis).
+    Runs silently. Failures are non-fatal.
     """
     from tuneshift.sequencer.classifier import TrackClassifier
+    from tuneshift.enrichment.pipeline import classify_track_grounded
 
     classifier = TrackClassifier()
-    if not classifier.available:
-        return
-
     track = db.get_track(track_id)
     if not track:
         return
 
-    # Classify track if missing vibes/themes
-    metadata = track.metadata or {}
-    if not metadata.get("vibes") and not metadata.get("narrator_stance"):
-        results = classifier.classify([{"title": track.title, "artist": track.artist}])
-        if results:
-            result = results[0]
-            metadata.update(result)
-            db.conn.execute(
-                "UPDATE tracks SET metadata = ? WHERE id = ?",
-                (__import__("json").dumps(metadata), track_id),
-            )
-            db.conn.commit()
-
-    # Enrich artist if not already done (genres + identity)
+    # Enrich artist first (so we have genre context for track classification)
     artist = db.get_artist_by_name(artist_name)
     if artist and not artist.genres and not artist.enriched_at:
         _enrich_artist_via_llm(db, artist, classifier)
+        artist = db.get_artist_by_name(artist_name)  # reload
+
+    # Classify track if missing vibes/themes (using grounded pipeline)
+    metadata = track.metadata or {}
+    if not metadata.get("vibes") and not metadata.get("narrator_stance"):
+        artist_genres = artist.genres if artist else []
+        result = classify_track_grounded(
+            track.title, track.artist,
+            artist_genres=artist_genres,
+            classifier=classifier if classifier.available else None,
+        )
+        if result:
+            metadata.update(result)
+            import json as _json
+            db.conn.execute(
+                "UPDATE tracks SET metadata = ? WHERE id = ?",
+                (_json.dumps(metadata), track_id),
+            )
+            db.conn.commit()
 
 
 def _enrich_artist_via_llm(db: Database, artist, classifier) -> None:
