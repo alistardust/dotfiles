@@ -6,16 +6,30 @@ from difflib import SequenceMatcher
 _EDITION_PARENS_RE = re.compile(
     r"\s*\("
     r"(?:\d{4}\s*)?"
-    r"(?:Remastered|Remaster|Deluxe Edition|Deluxe|Mono|Stereo|"
+    r"(?:Remastered|Remaster|Deluxe Edition|Deluxe Version|Deluxe|"
+    r"Digital Deluxe|Mono|Stereo|"
     r"Expanded Edition|Expanded|Anniversary Edition|Anniversary|"
-    r"Super Deluxe|Special Edition)[^)]*\)",
+    r"Super Deluxe|Special Edition|"
+    r"\d{4}\s+(?:Re)?[Mm]ix|Stereo Mix|Mono Mix|"
+    r"Taylor's Version)[^)]*\)",
     re.IGNORECASE,
 )
 _THE_PREFIX_RE = re.compile(r"^the\s+", re.IGNORECASE)
-_FEAT_RE = re.compile(
+_FEAT_PAREN_RE = re.compile(
     r"\s*[\(\[]\s*(?:feat\.?|ft\.?|featuring|with)\s+[^\)\]]+[\)\]]",
     re.IGNORECASE,
 )
+_FEAT_BARE_RE = re.compile(
+    r"\s+(?:feat\.?|ft\.?|featuring)\s+.+$",
+    re.IGNORECASE,
+)
+_PUNCT_NORMALIZE = str.maketrans({
+    "\u2018": "'", "\u2019": "'",
+    "\u201c": '"', "\u201d": '"',
+    "\u2026": "...",
+})
+_BOUNDARY_PUNCT_RE = re.compile(r"(?:^[^\w]+|[^\w]+$)")  # Leading/trailing non-word chars
+_STANDALONE_PUNCT_RE = re.compile(r"\s+[^\w\s]+\s+")  # Standalone punctuation between words
 
 
 def normalize_title(title: str) -> str:
@@ -23,20 +37,33 @@ def normalize_title(title: str) -> str:
     if not title:
         return ""
     title = unicodedata.normalize("NFC", title)
+    title = title.translate(_PUNCT_NORMALIZE)
     title = _EDITION_PARENS_RE.sub("", title)
-    title = _FEAT_RE.sub("", title)
+    title = _FEAT_PAREN_RE.sub("", title)
+    title = _FEAT_BARE_RE.sub("", title)
     return title.strip().casefold()
 
 
 def normalize_artist(artist: str) -> str:
-    """Normalize an artist name for comparison."""
+    """Normalize an artist name for comparison.
+
+    Strips feat text, punctuation, articles, and casefolds so that
+    legitimate variants (P!nk/Pink, feat. suffix) become identical.
+    """
     if not artist:
         return ""
     artist = unicodedata.normalize("NFC", artist)
+    artist = artist.translate(_PUNCT_NORMALIZE)
+    artist = _FEAT_PAREN_RE.sub("", artist)
+    artist = _FEAT_BARE_RE.sub("", artist)
     artist = artist.strip()
     artist = _THE_PREFIX_RE.sub("", artist)
     artist = artist.replace("&", "and")
-    return artist.casefold()
+    artist = artist.replace(",", "")
+    # Strip boundary punctuation but preserve mid-word chars (P!nk stays as p!nk)
+    artist = _BOUNDARY_PUNCT_RE.sub("", artist)
+    artist = _STANDALONE_PUNCT_RE.sub(" ", artist)
+    return artist.casefold().strip()
 
 
 def is_remaster(album: str) -> bool:
@@ -99,12 +126,16 @@ def score_match(
             score += 30
         else:
             ratio = SequenceMatcher(None, norm_src_artist, norm_res_artist).ratio()
-            if ratio > 0.80:
-                score += 20
-            elif ratio < 0.4:
-                # Completely different artist: heavy penalty
-                # "Britney Spears" vs "The Marias" should never match
-                score -= 30
+            if ratio > 0.85:
+                score += 25
+            elif ratio > 0.70:
+                score += 15
+            elif ratio > 0.50:
+                # Ambiguous zone: moderate penalty (probably different artist)
+                score -= 15
+            else:
+                # Different artist: heavy penalty proportional to dissimilarity
+                score -= int(30 * (1.0 - ratio * 2))
 
     if source_album:
         norm_src_album = normalize_title(source_album)
@@ -132,8 +163,8 @@ _LIVE_RE = re.compile(
     re.IGNORECASE,
 )
 _REMIX_RE = re.compile(
-    r"\b(remix|remixed|mix(?:ed)?|performance mix|extended mix|"
-    r"extended version|instrumental|dub mix|club mix|12[\"'] mix|"
+    r"\b(remix|remixed|performance mix|extended mix|"
+    r"extended version|dub mix|club mix|12[\"'] mix|"
     r"12 inch|maxi)\b",
     re.IGNORECASE,
 )
@@ -155,31 +186,50 @@ _COMPILATION_RE = re.compile(
 _TRIBUTE_RE = re.compile(
     r"\b(tribute|reimagin|covers?|revamp)\b", re.IGNORECASE
 )
+_KARAOKE_RE = re.compile(
+    r"\b(karaoke)\b", re.IGNORECASE
+)
+_INSTRUMENTAL_RE = re.compile(
+    r"\b(instrumental)\b", re.IGNORECASE
+)
 _ACOUSTIC_RE = re.compile(
     r"\b(acoustic|stripped)\b", re.IGNORECASE
+)
+_RADIO_EDIT_RE = re.compile(
+    r"\b(radio edit|radio version|single edit|single version)\b",
+    re.IGNORECASE,
 )
 
 
 def version_penalty(title: str, album: str) -> int:
-    """Return a 0-30 penalty for undesirable track versions.
+    """Return a penalty for undesirable track versions.
 
-    Penalties (cumulative, capped at 30):
+    Penalties (cumulative):
+    - Karaoke: 50 (always rejected)
+    - Instrumental: 50 (always rejected)
     - Live: 20
     - Remix: 20
-    - Tribute/reimagining: 20
-    - Compilation/various artists: 15
+    - Tribute/cover: 20
+    - Radio edit: 20
+    - Compilation: 15
+    - Acoustic/stripped: 10
     - Remaster: 10
     - Deluxe edition: 5
-    - Acoustic/stripped: 10
     """
     combined = f"{title} {album}"
     penalty = 0
 
+    if _KARAOKE_RE.search(combined):
+        penalty += 50
+    if _INSTRUMENTAL_RE.search(combined):
+        penalty += 50
     if _LIVE_RE.search(combined):
         penalty += 20
     if _REMIX_RE.search(combined):
         penalty += 20
     if _TRIBUTE_RE.search(combined):
+        penalty += 20
+    if _RADIO_EDIT_RE.search(combined):
         penalty += 20
     if _COMPILATION_RE.search(combined):
         penalty += 15
@@ -190,7 +240,7 @@ def version_penalty(title: str, album: str) -> int:
     if _DELUXE_RE.search(combined):
         penalty += 5
 
-    return min(30, penalty)
+    return penalty
 
 
 def duration_penalty(
@@ -198,13 +248,9 @@ def duration_penalty(
     reference_duration: int | None = None,
     all_durations: list[int] | None = None,
 ) -> int:
-    """Penalize tracks significantly longer than expected.
+    """Penalize tracks significantly longer OR shorter than expected.
 
-    Uses the shortest available version as reference if no explicit reference
-    is given. Returns 0-20 penalty.
-
-    Heuristic: if a track is >60% longer than the reference, it's likely an
-    extended/performance mix even if not labelled as such.
+    Returns 0-20 penalty.
     """
     if candidate_duration is None:
         return 0
@@ -218,12 +264,23 @@ def duration_penalty(
         return 0
 
     ratio = candidate_duration / reference_duration
+
+    # Too long
     if ratio > 2.0:
         return 20
     if ratio > 1.6:
         return 15
     if ratio > 1.4:
         return 10
+
+    # Too short
+    if ratio < 0.5:
+        return 20
+    if ratio < 0.65:
+        return 15
+    if ratio < 0.75:
+        return 10
+
     return 0
 
 
