@@ -117,22 +117,55 @@ def _folders_list(db: Database) -> int:
     if not client:
         return 1
 
-    root = client._session.user.folder()
-    items = root.items()
+    import requests
+    session = client._session
+    headers = {"Authorization": f"Bearer {session.access_token}"}
+    params = {
+        "folderId": "root",
+        "countryCode": session.country_code,
+        "limit": "50",
+        "offset": "0",
+        "order": "NAME",
+        "includeOnly": "",
+    }
+
+    resp = requests.get(
+        "https://api.tidal.com/v2/my-collection/playlists/folders",
+        headers=headers, params=params,
+    )
+    if resp.status_code != 200:
+        print(f"Tidal API error: {resp.status_code}", file=sys.stderr)
+        return 1
+
+    data = resp.json()
+    items = data.get("items", [])
 
     print("Tidal folders:")
+    root_playlists = []
     for item in items:
-        if hasattr(item, "name") and hasattr(item, "items"):
-            # It's a folder
-            folder_items = item.items()
-            print(f"\n  [{item.name}] ({item.total_number_of_items} items)")
-            db.cache_tidal_folder(item.trn, item.name, None)
-            for sub in folder_items:
-                if hasattr(sub, "name"):
-                    print(f"    - {sub.name}")
-        elif hasattr(item, "name"):
-            # Playlist in root
-            print(f"  (root) {item.name}")
+        trn = item.get("trn", "")
+        name = item.get("name", "?")
+        if "folder" in trn:
+            db.cache_tidal_folder(trn, name)
+            # Fetch folder contents
+            sub_resp = requests.get(
+                "https://api.tidal.com/v2/my-collection/playlists/folders",
+                headers=headers,
+                params={**params, "folderId": trn.replace("trn:folder:", "")},
+            )
+            sub_items = sub_resp.json().get("items", []) if sub_resp.status_code == 200 else []
+            print(f"\n  [{name}] ({len(sub_items)} items)")
+            for s in sub_items:
+                print(f"    - {s.get('name', '?')}")
+        else:
+            root_playlists.append(name)
+
+    if root_playlists:
+        print(f"\n  (root) ({len(root_playlists)} playlists)")
+        for p in root_playlists[:10]:
+            print(f"    - {p}")
+        if len(root_playlists) > 10:
+            print(f"    ... +{len(root_playlists) - 10} more")
 
     return 0
 
@@ -143,43 +176,70 @@ def _folders_import(db: Database) -> int:
     if not client:
         return 1
 
-    root = client._session.user.folder()
-    items = root.items()
+    import requests
+    session = client._session
+    headers = {"Authorization": f"Bearer {session.access_token}"}
+    params = {
+        "folderId": "root",
+        "countryCode": session.country_code,
+        "limit": "50",
+        "offset": "0",
+        "order": "NAME",
+        "includeOnly": "",
+    }
+
+    resp = requests.get(
+        "https://api.tidal.com/v2/my-collection/playlists/folders",
+        headers=headers, params=params,
+    )
+    if resp.status_code != 200:
+        print(f"Tidal API error: {resp.status_code}", file=sys.stderr)
+        return 1
+
+    data = resp.json()
+    items = data.get("items", [])
 
     imported_folders = 0
     assigned_playlists = 0
 
     for item in items:
-        if not (hasattr(item, "trn") and hasattr(item, "items")):
+        trn = item.get("trn", "")
+        name = item.get("name", "?")
+        if "folder" not in trn:
             continue
 
-        folder_name = item.name
-        folder_id = item.trn
-        db.cache_tidal_folder(folder_id, folder_name, None)
+        db.cache_tidal_folder(trn, name)
         imported_folders += 1
-        print(f"  Folder: {folder_name} ({folder_id})")
+        print(f"  Folder: {name} ({trn})")
 
-        folder_items = item.items()
-        for sub in folder_items:
-            if not hasattr(sub, "name"):
+        # Fetch folder contents
+        sub_resp = requests.get(
+            "https://api.tidal.com/v2/my-collection/playlists/folders",
+            headers=headers,
+            params={**params, "folderId": trn.replace("trn:folder:", "")},
+        )
+        if sub_resp.status_code != 200:
+            continue
+
+        sub_items = sub_resp.json().get("items", [])
+        for s in sub_items:
+            s_name = s.get("name", "")
+            if not s_name:
                 continue
-            # Try to match to local playlist
-            local = db.find_playlist_by_name(sub.name)
+            local = db.find_playlist_by_name(s_name)
             if local:
-                db.set_playlist_tidal_folder(local.id, folder_id)
+                db.set_playlist_tidal_folder(local.id, trn)
                 assigned_playlists += 1
-                print(f"    -> {sub.name} (linked)")
+                print(f"    -> {s_name} (linked)")
             else:
-                print(f"    -> {sub.name} (no local match)")
+                print(f"    -> {s_name} (no local match)")
 
     print(f"\nImported {imported_folders} folders, linked {assigned_playlists} playlists")
 
-    # Offer to create collections
     create = input("Create local collections matching folder names? [y/N] ").strip().lower()
     if create in ("y", "yes"):
         for folder in db.get_cached_tidal_folders():
-            col_id = db.create_collection(folder["name"])
-            # Tag playlists in this folder with the collection
+            db.create_collection(folder["name"])
             for p in db.get_playlists_by_tidal_folder(folder["tidal_id"]):
                 db.tag_playlist(p.id, folder["name"])
         print("Collections created and playlists tagged.")
@@ -193,7 +253,7 @@ def _folders_create(db: Database, name: str) -> int:
     if not client:
         return 1
 
-    root = client._session.user.folder()
+    root = client._session.user.folder
     # tidalapi creates folders by adding items; we need to use the API directly
     # The folder API requires creating via the session
     try:
@@ -311,11 +371,22 @@ def _folders_sync(db: Database) -> int:
     if not client:
         return 1
 
+    import requests
+    session = client._session
+    headers = {"Authorization": f"Bearer {session.access_token}"}
+
     # Refresh folder cache
-    root = client._session.user.folder()
-    for item in root.items():
-        if hasattr(item, "trn") and hasattr(item, "items"):
-            db.cache_tidal_folder(item.trn, item.name, None)
+    resp = requests.get(
+        "https://api.tidal.com/v2/my-collection/playlists/folders",
+        headers=headers,
+        params={"folderId": "root", "countryCode": session.country_code,
+                "limit": "50", "offset": "0", "order": "NAME", "includeOnly": ""},
+    )
+    if resp.status_code == 200:
+        for item in resp.json().get("items", []):
+            trn = item.get("trn", "")
+            if "folder" in trn:
+                db.cache_tidal_folder(trn, item.get("name", ""))
 
     # Get all playlists with folder assignments
     all_playlists = db.list_playlists()
@@ -326,15 +397,12 @@ def _folders_sync(db: Database) -> int:
         if not playlist.tidal_folder_id:
             continue
 
-        # Get platform playlist ID
         platform_id = db.get_platform_playlist_id(playlist.id, "tidal")
         if not platform_id:
             continue
 
         try:
-            # Get the target folder
-            target_folder = client._session.folder(playlist.tidal_folder_id)
-            # Build the TRN for the playlist
+            target_folder = session.folder(playlist.tidal_folder_id)
             playlist_trn = f"trn:playlist:{platform_id}"
             target_folder.add_items([playlist_trn])
             moved += 1
@@ -358,25 +426,53 @@ def _folders_pull(db: Database) -> int:
     if not client:
         return 1
 
-    root = client._session.user.folder()
-    items = root.items()
+    import requests
+    session = client._session
+    headers = {"Authorization": f"Bearer {session.access_token}"}
+    params = {
+        "folderId": "root",
+        "countryCode": session.country_code,
+        "limit": "50",
+        "offset": "0",
+        "order": "NAME",
+        "includeOnly": "",
+    }
+
+    resp = requests.get(
+        "https://api.tidal.com/v2/my-collection/playlists/folders",
+        headers=headers, params=params,
+    )
+    if resp.status_code != 200:
+        print(f"Tidal API error: {resp.status_code}", file=sys.stderr)
+        return 1
+
+    # Clear all local assignments
+    db.conn.execute("UPDATE playlists SET tidal_folder_id = NULL")
     updated = 0
 
-    # Clear all local assignments first
-    db.conn.execute("UPDATE playlists SET tidal_folder_id = NULL")
-
-    for item in items:
-        if not (hasattr(item, "trn") and hasattr(item, "items")):
+    for item in resp.json().get("items", []):
+        trn = item.get("trn", "")
+        name = item.get("name", "")
+        if "folder" not in trn:
             continue
 
-        folder_id = item.trn
-        db.cache_tidal_folder(folder_id, item.name, None)
+        db.cache_tidal_folder(trn, name)
 
-        for sub in item.items():
-            if hasattr(sub, "name"):
-                local = db.find_playlist_by_name(sub.name)
+        # Fetch folder contents
+        sub_resp = requests.get(
+            "https://api.tidal.com/v2/my-collection/playlists/folders",
+            headers=headers,
+            params={**params, "folderId": trn.replace("trn:folder:", "")},
+        )
+        if sub_resp.status_code != 200:
+            continue
+
+        for s in sub_resp.json().get("items", []):
+            s_name = s.get("name", "")
+            if s_name:
+                local = db.find_playlist_by_name(s_name)
                 if local:
-                    db.set_playlist_tidal_folder(local.id, folder_id)
+                    db.set_playlist_tidal_folder(local.id, trn)
                     updated += 1
 
     db.conn.commit()
