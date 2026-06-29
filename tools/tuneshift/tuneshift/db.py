@@ -1572,13 +1572,11 @@ class Database:
 
     def create_collection(self, name: str, description: str | None = None) -> int:
         """Create a collection. Returns the ID."""
-        cursor = self.conn.execute(
+        self.conn.execute(
             "INSERT OR IGNORE INTO collections (name, description) VALUES (?, ?)",
             (name, description),
         )
         self.conn.commit()
-        if cursor.lastrowid:
-            return cursor.lastrowid
         row = self.conn.execute("SELECT id FROM collections WHERE name = ?", (name,)).fetchone()
         return row[0]
 
