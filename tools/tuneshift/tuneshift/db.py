@@ -8,7 +8,7 @@ from pathlib import Path
 
 from tuneshift.models import Album, Artist, PlatformMapping, Playlist, PlaylistPin, Track
 
-_SCHEMA_VERSION = 9
+_SCHEMA_VERSION = 10
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS tracks (
@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS playlists (
     preferences TEXT,
     auto_reorder INTEGER NOT NULL DEFAULT 0,
     reorder_arc TEXT NOT NULL DEFAULT 'wave',
+    tidal_folder_id TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -202,6 +203,27 @@ CREATE TABLE IF NOT EXISTS batch_history (
     reverted_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_batch_history_playlist ON batch_history(playlist_id);
+
+CREATE TABLE IF NOT EXISTS collections (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS playlist_collections (
+    playlist_id INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+    collection_id INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+    PRIMARY KEY (playlist_id, collection_id)
+);
+
+CREATE TABLE IF NOT EXISTS tidal_folders (
+    id INTEGER PRIMARY KEY,
+    tidal_id TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    parent_tidal_id TEXT,
+    last_synced_at TEXT DEFAULT (datetime('now'))
+);
 """
 
 _REMIX_RE = re.compile(r"\s*\((?:remaster(?:ed)?|deluxe edition)[^)]*\)\s*", re.IGNORECASE)
@@ -551,6 +573,37 @@ class Database:
                     "ON batch_history(playlist_id)"
                 )
 
+            if current_version < 10:
+                self.conn.execute("""
+                    CREATE TABLE IF NOT EXISTS collections (
+                        id INTEGER PRIMARY KEY,
+                        name TEXT NOT NULL UNIQUE,
+                        description TEXT,
+                        created_at TEXT DEFAULT (datetime('now'))
+                    )
+                """)
+                self.conn.execute("""
+                    CREATE TABLE IF NOT EXISTS playlist_collections (
+                        playlist_id INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+                        collection_id INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+                        PRIMARY KEY (playlist_id, collection_id)
+                    )
+                """)
+                self.conn.execute("""
+                    CREATE TABLE IF NOT EXISTS tidal_folders (
+                        id INTEGER PRIMARY KEY,
+                        tidal_id TEXT NOT NULL UNIQUE,
+                        name TEXT NOT NULL,
+                        parent_tidal_id TEXT,
+                        last_synced_at TEXT DEFAULT (datetime('now'))
+                    )
+                """)
+                playlist_cols = {
+                    r[1] for r in self.conn.execute("PRAGMA table_info(playlists)").fetchall()
+                }
+                if "tidal_folder_id" not in playlist_cols:
+                    self.conn.execute("ALTER TABLE playlists ADD COLUMN tidal_folder_id TEXT")
+
             self.conn.execute(
                 "UPDATE schema_meta SET value = ? WHERE key = 'version'",
                 (str(_SCHEMA_VERSION),),
@@ -850,16 +903,21 @@ class Database:
     def list_playlists(self) -> list[Playlist]:
         """List all playlists."""
         rows = self.conn.execute("SELECT * FROM playlists ORDER BY name").fetchall()
-        return [
-            Playlist(
-                id=row["id"],
-                name=row["name"],
-                description=row["description"],
-                auto_reorder=bool(row["auto_reorder"]),
-                reorder_arc=row["reorder_arc"],
-            )
-            for row in rows
-        ]
+        return [self._row_to_playlist(row) for row in rows]
+
+    def _row_to_playlist(self, row) -> Playlist:
+        """Convert a DB row to a Playlist object."""
+        # row is a sqlite3.Row, can check keys directly
+        keys = row.keys() if hasattr(row, "keys") else []
+        tidal_folder = row["tidal_folder_id"] if "tidal_folder_id" in keys else None
+        return Playlist(
+            id=row["id"],
+            name=row["name"],
+            description=row["description"],
+            auto_reorder=bool(row["auto_reorder"]),
+            reorder_arc=row["reorder_arc"],
+            tidal_folder_id=tidal_folder,
+        )
 
     def set_auto_reorder(self, playlist_id: int, enabled: bool, arc: str = "wave") -> None:
         """Enable or disable auto-reorder for a playlist."""
@@ -1242,13 +1300,7 @@ class Database:
         ).fetchone()
         if row is None:
             return None
-        return Playlist(
-            id=row["id"],
-            name=row["name"],
-            description=row["description"],
-            auto_reorder=bool(row["auto_reorder"]),
-            reorder_arc=row["reorder_arc"],
-        )
+        return self._row_to_playlist(row)
 
     def set_goal(self, playlist_id: int, goal: str | None) -> None:
         """Set the goal for a playlist."""
@@ -1515,3 +1567,136 @@ class Database:
             (history_id,),
         )
         self.conn.commit()
+
+    # ---- Collection methods ----
+
+    def create_collection(self, name: str, description: str | None = None) -> int:
+        """Create a collection. Returns the ID."""
+        cursor = self.conn.execute(
+            "INSERT OR IGNORE INTO collections (name, description) VALUES (?, ?)",
+            (name, description),
+        )
+        self.conn.commit()
+        if cursor.lastrowid:
+            return cursor.lastrowid
+        row = self.conn.execute("SELECT id FROM collections WHERE name = ?", (name,)).fetchone()
+        return row[0]
+
+    def delete_collection(self, name: str) -> bool:
+        """Delete a collection and all its playlist associations."""
+        row = self.conn.execute("SELECT id FROM collections WHERE name = ?", (name,)).fetchone()
+        if not row:
+            return False
+        self.conn.execute("DELETE FROM playlist_collections WHERE collection_id = ?", (row[0],))
+        self.conn.execute("DELETE FROM collections WHERE id = ?", (row[0],))
+        self.conn.commit()
+        return True
+
+    def tag_playlist(self, playlist_id: int, collection_name: str) -> None:
+        """Add a collection tag to a playlist."""
+        col_id = self.create_collection(collection_name)
+        self.conn.execute(
+            "INSERT OR IGNORE INTO playlist_collections (playlist_id, collection_id) VALUES (?, ?)",
+            (playlist_id, col_id),
+        )
+        self.conn.commit()
+
+    def untag_playlist(self, playlist_id: int, collection_name: str) -> bool:
+        """Remove a collection tag from a playlist."""
+        row = self.conn.execute("SELECT id FROM collections WHERE name = ?", (collection_name,)).fetchone()
+        if not row:
+            return False
+        cursor = self.conn.execute(
+            "DELETE FROM playlist_collections WHERE playlist_id = ? AND collection_id = ?",
+            (playlist_id, row[0]),
+        )
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def get_playlist_collections(self, playlist_id: int) -> list[str]:
+        """Get all collection names for a playlist."""
+        rows = self.conn.execute(
+            "SELECT c.name FROM collections c "
+            "JOIN playlist_collections pc ON pc.collection_id = c.id "
+            "WHERE pc.playlist_id = ? ORDER BY c.name",
+            (playlist_id,),
+        ).fetchall()
+        return [r[0] for r in rows]
+
+    def get_collection_playlists(self, collection_name: str) -> list:
+        """Get all playlists in a collection."""
+        rows = self.conn.execute(
+            "SELECT p.* FROM playlists p "
+            "JOIN playlist_collections pc ON pc.playlist_id = p.id "
+            "JOIN collections c ON c.id = pc.collection_id "
+            "WHERE c.name = ? ORDER BY p.name",
+            (collection_name,),
+        ).fetchall()
+        return [self._row_to_playlist(r) for r in rows]
+
+    def list_collections_with_counts(self) -> list[tuple[str, int]]:
+        """List all collections with playlist counts."""
+        rows = self.conn.execute(
+            "SELECT c.name, COUNT(pc.playlist_id) FROM collections c "
+            "LEFT JOIN playlist_collections pc ON pc.collection_id = c.id "
+            "GROUP BY c.id ORDER BY c.name"
+        ).fetchall()
+        return [(r[0], r[1]) for r in rows]
+
+    # ---- Tidal Folder cache methods ----
+
+    def cache_tidal_folder(self, tidal_id: str, name: str, parent_tidal_id: str | None = None) -> None:
+        """Cache a Tidal folder's metadata."""
+        self.conn.execute(
+            "INSERT OR REPLACE INTO tidal_folders (tidal_id, name, parent_tidal_id, last_synced_at) "
+            "VALUES (?, ?, ?, datetime('now'))",
+            (tidal_id, name, parent_tidal_id),
+        )
+        self.conn.commit()
+
+    def get_tidal_folder_by_name(self, name: str) -> dict | None:
+        """Look up a cached Tidal folder by name."""
+        row = self.conn.execute(
+            "SELECT tidal_id, name, parent_tidal_id FROM tidal_folders WHERE name = ?",
+            (name,),
+        ).fetchone()
+        if not row:
+            return None
+        return {"tidal_id": row[0], "name": row[1], "parent_tidal_id": row[2]}
+
+    def get_cached_tidal_folders(self) -> list[dict]:
+        """Get all cached Tidal folders."""
+        rows = self.conn.execute(
+            "SELECT tidal_id, name, parent_tidal_id FROM tidal_folders ORDER BY name"
+        ).fetchall()
+        return [{"tidal_id": r[0], "name": r[1], "parent_tidal_id": r[2]} for r in rows]
+
+    def remove_tidal_folder_cache(self, tidal_id: str) -> None:
+        """Remove a folder from the cache."""
+        self.conn.execute("DELETE FROM tidal_folders WHERE tidal_id = ?", (tidal_id,))
+        self.conn.commit()
+
+    def set_playlist_tidal_folder(self, playlist_id: int, tidal_folder_id: str | None) -> None:
+        """Set or clear the Tidal folder assignment for a playlist."""
+        self.conn.execute(
+            "UPDATE playlists SET tidal_folder_id = ? WHERE id = ?",
+            (tidal_folder_id, playlist_id),
+        )
+        self.conn.commit()
+
+    def get_playlists_by_tidal_folder(self, tidal_folder_id: str) -> list:
+        """Get all playlists assigned to a Tidal folder."""
+        rows = self.conn.execute(
+            "SELECT * FROM playlists WHERE tidal_folder_id = ? ORDER BY name",
+            (tidal_folder_id,),
+        ).fetchall()
+        return [self._row_to_playlist(r) for r in rows]
+
+    def clear_tidal_folder_assignments(self, tidal_folder_id: str) -> int:
+        """Clear folder assignments for all playlists in a folder. Returns count."""
+        cursor = self.conn.execute(
+            "UPDATE playlists SET tidal_folder_id = NULL WHERE tidal_folder_id = ?",
+            (tidal_folder_id,),
+        )
+        self.conn.commit()
+        return cursor.rowcount

@@ -267,6 +267,42 @@ def build_parser() -> argparse.ArgumentParser:
     p_audit.add_argument("--concept-only", action="store_true", help="Only check concept rules")
     p_audit.add_argument("--fix", action="store_true", help="Generate batch plan from findings")
 
+    # tag / untag
+    p_tag = sub.add_parser("tag", help="Tag a playlist with a collection")
+    p_tag.add_argument("playlist", help="Playlist name")
+    p_tag.add_argument("collection", help="Collection name")
+
+    p_untag = sub.add_parser("untag", help="Remove a collection tag from a playlist")
+    p_untag.add_argument("playlist", help="Playlist name")
+    p_untag.add_argument("collection", help="Collection name")
+
+    # collections
+    p_collections = sub.add_parser("collections", help="List or manage collections")
+    p_collections.add_argument("collection", nargs="?", help="Show playlists in this collection")
+    p_collections.add_argument("--create", dest="create_name", help="Create a collection")
+    p_collections.add_argument("--delete", dest="delete_name", help="Delete a collection")
+
+    # folders
+    p_folders = sub.add_parser("folders", help="Manage Tidal folders")
+    p_folders_sub = p_folders.add_subparsers(dest="action")
+    p_folders_sub.add_parser("list", help="List Tidal folders")
+    p_folders_sub.add_parser("import", help="Import existing Tidal structure")
+    p_fc = p_folders_sub.add_parser("create", help="Create folder on Tidal")
+    p_fc.add_argument("name", help="Folder name")
+    p_fr = p_folders_sub.add_parser("rename", help="Rename folder on Tidal")
+    p_fr.add_argument("old_name", help="Current name")
+    p_fr.add_argument("new_name", help="New name")
+    p_fd = p_folders_sub.add_parser("delete", help="Delete folder on Tidal")
+    p_fd.add_argument("name", help="Folder name")
+    p_fm = p_folders_sub.add_parser("move", help="Assign playlist to folder")
+    p_fm.add_argument("playlist", help="Playlist name")
+    p_fm.add_argument("--to", required=True, help="Target folder name")
+    p_fu = p_folders_sub.add_parser("unassign", help="Remove folder assignment")
+    p_fu.add_argument("playlist", help="Playlist name")
+    p_folders_sub.add_parser("sync", help="Push folder assignments to Tidal")
+    p_folders_sub.add_parser("pull", help="Update local from Tidal state")
+    p_folders_sub.add_parser("status", help="Show folder assignment status")
+
     # Shell completions via shtab
     try:
         import shtab
@@ -472,6 +508,18 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "audit":
             from tuneshift.commands.audit_cmd import handle_audit
             return handle_audit(args, db)
+        elif args.command == "tag":
+            from tuneshift.commands.folders_cmd import handle_tag
+            return handle_tag(args, db)
+        elif args.command == "untag":
+            from tuneshift.commands.folders_cmd import handle_untag
+            return handle_untag(args, db)
+        elif args.command == "collections":
+            from tuneshift.commands.folders_cmd import handle_collections
+            return handle_collections(args, db)
+        elif args.command == "folders":
+            from tuneshift.commands.folders_cmd import handle_folders
+            return handle_folders(args, db)
         else:
             parser.print_help()
             return 1

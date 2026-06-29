@@ -48,6 +48,7 @@ class Playlist:
     description: str | None = None
     auto_reorder: bool = False
     reorder_arc: str = "wave"
+    tidal_folder_id: str | None = None
 
 
 @dataclass
