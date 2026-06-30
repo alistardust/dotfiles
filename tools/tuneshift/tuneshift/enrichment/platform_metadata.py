@@ -6,6 +6,10 @@ import json
 import sys
 
 from tuneshift.db import Database
+from tuneshift.platforms.rate_limiter import RateLimiter
+
+# Tidal rate limiter: adaptive mode, start at 2 req/sec, adjusts from headers
+_tidal_limiter = RateLimiter(max_per_second=2.0, adaptive=True)
 
 
 def enrich_playlist_from_tidal(
@@ -44,7 +48,8 @@ def enrich_playlist_from_tidal(
                 skipped += 1
                 continue
 
-        # Fetch from Tidal
+        # Fetch from Tidal (rate-limited)
+        _tidal_limiter.wait()
         try:
             meta = _fetch_tidal_track_metadata(client, mapping.platform_track_id)
             if meta:
@@ -59,8 +64,15 @@ def enrich_playlist_from_tidal(
                 print(" no data")
                 skipped += 1
         except (OSError, RuntimeError, ValueError) as exc:
-            print(f" error ({exc})")
-            skipped += 1
+            if "429" in str(exc) or "Too Many Requests" in str(exc):
+                wait = _tidal_limiter.handle_429({})
+                print(f" rate limited, waiting {wait:.0f}s...")
+                import time
+                time.sleep(wait)
+                skipped += 1
+            else:
+                print(f" error ({exc})")
+                skipped += 1
 
     return enriched, skipped
 
