@@ -55,7 +55,7 @@ json.dump(d,open(p,'w'),indent=2)
         if [[ "$DRY_RUN" == "true" ]]; then
             printf '\e[2;37m  [dry] write Copilot settings to %s\e[0m\n' "$settings_file"
         else
-            printf '{"model":"claude-opus-4.8","memory":{"enabled":true}}\n' > "$settings_file"
+            printf '{"model":"claude-sonnet-4.6","memory":{"enabled":true}}\n' > "$settings_file"
         fi
         ok "Copilot settings written to ${settings_file}."
     fi

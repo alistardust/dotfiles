@@ -37,7 +37,7 @@ section_copilot_skills() {
     # Ensure ~/.copilot/settings.json exists with required defaults
     # Model selection: work=sonnet (balanced cost/quality), home=haiku (cheapest interface)
     local settings_file="${HOME}/.copilot/settings.json"
-    local default_model="claude-opus-4.8"
+    local default_model="claude-sonnet-4.5"
     if [[ "${SKILLS_PROFILE[home]}" == "true" && "${SKILLS_PROFILE[work]}" != "true" ]]; then
         default_model="claude-haiku-4.5"
     fi
