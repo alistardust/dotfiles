@@ -71,6 +71,9 @@ def handle_add(args, db: Database) -> int:
     # Auto-enrich: classify track and artist if not already done
     _auto_enrich(db, track_id, args.artist)
 
+    # Auto-reorder if enabled
+    _auto_reorder(db, playlist_id)
+
     # Sync to linked platforms
     had_failures = _sync_add_to_platforms(db, playlist_id, track_id, args.title, args.artist)
     return 1 if had_failures else 0
@@ -214,3 +217,15 @@ def _enrich_artist_via_llm(db: Database, artist, classifier) -> None:
             pass
 
     db.update_artist(artist.id, **update_fields)
+
+
+def _auto_reorder(db: Database, playlist_id: int) -> None:
+    """Trigger auto-reorder if the playlist has it enabled."""
+    row = db.conn.execute(
+        "SELECT auto_reorder, reorder_arc FROM playlists WHERE id = ?",
+        (playlist_id,),
+    ).fetchone()
+    if row and row[0]:
+        from tuneshift.sequencer.optimizer import sequence_playlist
+        arc = row[1] or "wave"
+        sequence_playlist(db, playlist_id, arc=arc)

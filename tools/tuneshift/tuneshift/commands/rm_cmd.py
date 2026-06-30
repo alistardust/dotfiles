@@ -62,6 +62,16 @@ def _remove_and_sync(db: Database, playlist, track, position: int) -> bool:
     db.remove_track_from_playlist(playlist.id, track.id)
     print(f"Removed \"{track.title} - {track.artist}\" (position {position}) from \"{playlist.name}\"")
 
+    # Auto-reorder if enabled
+    row = db.conn.execute(
+        "SELECT auto_reorder, reorder_arc FROM playlists WHERE id = ?",
+        (playlist.id,),
+    ).fetchone()
+    if row and row[0]:
+        from tuneshift.sequencer.optimizer import sequence_playlist
+        arc = row[1] or "wave"
+        sequence_playlist(db, playlist.id, arc=arc)
+
     # Sync removal to linked platforms
     failures = False
     platforms = db.get_linked_platforms(playlist.id)
