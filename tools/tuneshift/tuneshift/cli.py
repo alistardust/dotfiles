@@ -267,14 +267,35 @@ def build_parser() -> argparse.ArgumentParser:
     p_audit.add_argument("--concept-only", action="store_true", help="Only check concept rules")
     p_audit.add_argument("--fix", action="store_true", help="Generate batch plan from findings")
 
-    # tag / untag
-    p_tag = sub.add_parser("tag", help="Tag a playlist with a collection")
-    p_tag.add_argument("playlist", help="Playlist name")
-    p_tag.add_argument("collection", help="Collection name")
+    # tag / untag (playlist collections + track tags)
+    p_tag = sub.add_parser("tag", help="Tag playlists or tracks")
+    p_tag_sub = p_tag.add_subparsers(dest="tag_action")
+    # Default: tag playlist with collection (backward compat via positional args)
+    p_tag.add_argument("target", nargs="?", help="Playlist name (or 'track'/'query'/'derive'/'list-tags')")
+    p_tag.add_argument("value", nargs="?", help="Collection name (for playlist tagging)")
+    # Track subcommand
+    p_tag_track = p_tag_sub.add_parser("track", help="Tag a track")
+    p_tag_track.add_argument("title", help="Track title")
+    p_tag_track.add_argument("artist", help="Artist name")
+    p_tag_track.add_argument("--add", nargs="+", help="Tags to add")
+    p_tag_track.add_argument("--rm", nargs="+", help="Tags to remove")
+    # Query subcommand
+    p_tag_query = p_tag_sub.add_parser("query", help="Find tracks by tags")
+    p_tag_query.add_argument("--filter", action="append", required=True, help="Tag to filter by (AND)")
+    # Derive subcommand
+    p_tag_derive = p_tag_sub.add_parser("derive", help="Auto-derive tags from metadata")
+    p_tag_derive.add_argument("playlist", nargs="?", help="Playlist name (or --all)")
+    p_tag_derive.add_argument("--all", action="store_true", help="Derive for all tracks")
+    # List-tags subcommand
+    p_tag_sub.add_parser("list-tags", help="List all tags with counts")
 
     p_untag = sub.add_parser("untag", help="Remove a collection tag from a playlist")
     p_untag.add_argument("playlist", help="Playlist name")
     p_untag.add_argument("collection", help="Collection name")
+
+    # analyze
+    p_analyze = sub.add_parser("analyze", help="Analyze playlist metadata")
+    p_analyze.add_argument("playlist", help="Playlist name")
 
     # collections
     p_collections = sub.add_parser("collections", help="List or manage collections")
@@ -364,6 +385,115 @@ def _handle_config(args) -> int:
     name, backend = detect_backend()
     if name:
         print(f"Backend now active: {name}")
+    return 0
+
+
+def _handle_tag_dispatch(args, db) -> int:
+    """Route tag command to playlist tagging or track tagging."""
+    import sys
+    tag_action = getattr(args, "tag_action", None)
+
+    if tag_action == "track":
+        track = db.find_track(args.title, args.artist, None)
+        if not track:
+            tracks = db.find_tracks_by_title_artist(args.title, args.artist)
+            if not tracks:
+                print(f"Track not found: {args.title} by {args.artist}", file=sys.stderr)
+                return 1
+            track = tracks[0]
+        if getattr(args, "add", None):
+            for tag in args.add:
+                db.add_track_tag(track.id, tag)
+            print(f'Tagged "{track.title}" by {track.artist}: +{", ".join(args.add)}')
+        if getattr(args, "rm", None):
+            for tag in args.rm:
+                db.remove_track_tag(track.id, tag)
+            print(f'Untagged "{track.title}": -{", ".join(args.rm)}')
+        if not getattr(args, "add", None) and not getattr(args, "rm", None):
+            tags = db.get_track_tags(track.id)
+            print(f'Tags for "{track.title}": {tags or "(none)"}')
+        return 0
+
+    elif tag_action == "query":
+        filters = getattr(args, "filter", [])
+        tracks = db.find_tracks_by_tag(*filters)
+        print(f"Tracks matching [{', '.join(filters)}]: {len(tracks)}")
+        for t in tracks[:20]:
+            print(f"  - {t.title} - {t.artist}")
+        if len(tracks) > 20:
+            print(f"  ... +{len(tracks) - 20} more")
+        return 0
+
+    elif tag_action == "derive":
+        from tuneshift.enrichment.platform_metadata import derive_tags
+        if getattr(args, "all", False):
+            all_tracks = db.conn.execute("SELECT id FROM tracks").fetchall()
+            track_ids = [r[0] for r in all_tracks]
+        elif getattr(args, "playlist", None):
+            playlist = db.find_playlist_by_name(args.playlist)
+            if not playlist:
+                print(f"Playlist not found: {args.playlist}", file=sys.stderr)
+                return 1
+            track_ids = [t.id for t in db.get_playlist_tracks(playlist.id)]
+        else:
+            print("Usage: tuneshift tag derive <playlist> or --all", file=sys.stderr)
+            return 1
+        total_tags = 0
+        for tid in track_ids:
+            tags = derive_tags(db, tid)
+            total_tags += len(tags)
+        print(f"Derived {total_tags} tags across {len(track_ids)} tracks")
+        return 0
+
+    elif tag_action == "list-tags":
+        tags = db.list_all_track_tags()
+        if not tags:
+            print("No track tags.")
+            return 0
+        print("Track tags:")
+        for tag, count in tags:
+            print(f"  {tag}: {count} tracks")
+        return 0
+
+    else:
+        # Default: playlist collection tagging (backward compat)
+        target = getattr(args, "target", None)
+        value = getattr(args, "value", None)
+        if target and value:
+            from tuneshift.commands.folders_cmd import handle_tag
+            # Reconstruct args for the old handler
+            args.playlist = target
+            args.collection = value
+            return handle_tag(args, db)
+        print("Usage: tuneshift tag <playlist> <collection>", file=sys.stderr)
+        print("       tuneshift tag track <title> <artist> --add/--rm", file=sys.stderr)
+        return 1
+
+
+def _handle_analyze(args, db) -> int:
+    """Handle the analyze command."""
+    import sys
+    from tuneshift.enrichment.platform_metadata import analyze_playlist
+
+    playlist = db.find_playlist_by_name(args.playlist)
+    if not playlist:
+        print(f"Playlist not found: {args.playlist}", file=sys.stderr)
+        return 1
+
+    result = analyze_playlist(db, playlist.id)
+
+    print(f"=== {playlist.name} ({result['total_tracks']} tracks) ===")
+    print(f"  Enriched: {result['enriched_tracks']}/{result['total_tracks']} tracks have platform metadata")
+    if result["era"]:
+        print(f"  Era: {result['era']}")
+    if result["top_genres"]:
+        genre_str = ", ".join(f"{g} ({c})" for g, c in result["top_genres"])
+        print(f"  Genres: {genre_str}")
+    print(f"  Quality: {result['atmos_pct']:.0f}% Atmos, {result['lossless_pct']:.0f}% lossless")
+    if result["top_tags"]:
+        tag_str = ", ".join(f"{t} ({c})" for t, c in result["top_tags"][:5])
+        print(f"  Tags: {tag_str}")
+
     return 0
 
 
@@ -509,11 +639,12 @@ def main(argv: list[str] | None = None) -> int:
             from tuneshift.commands.audit_cmd import handle_audit
             return handle_audit(args, db)
         elif args.command == "tag":
-            from tuneshift.commands.folders_cmd import handle_tag
-            return handle_tag(args, db)
+            return _handle_tag_dispatch(args, db)
         elif args.command == "untag":
             from tuneshift.commands.folders_cmd import handle_untag
             return handle_untag(args, db)
+        elif args.command == "analyze":
+            return _handle_analyze(args, db)
         elif args.command == "collections":
             from tuneshift.commands.folders_cmd import handle_collections
             return handle_collections(args, db)

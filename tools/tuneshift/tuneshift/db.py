@@ -8,7 +8,7 @@ from pathlib import Path
 
 from tuneshift.models import Album, Artist, PlatformMapping, Playlist, PlaylistPin, Track
 
-_SCHEMA_VERSION = 10
+_SCHEMA_VERSION = 11
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS tracks (
@@ -224,6 +224,34 @@ CREATE TABLE IF NOT EXISTS tidal_folders (
     parent_tidal_id TEXT,
     last_synced_at TEXT DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS track_platform_metadata (
+    id INTEGER PRIMARY KEY,
+    track_id INTEGER NOT NULL REFERENCES tracks(id),
+    platform TEXT NOT NULL,
+    platform_track_id TEXT NOT NULL,
+    release_year INTEGER,
+    release_date TEXT,
+    genres TEXT,
+    audio_qualities TEXT,
+    album_name TEXT,
+    album_type TEXT,
+    explicit INTEGER,
+    duration_ms INTEGER,
+    popularity INTEGER,
+    raw_metadata TEXT,
+    fetched_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(track_id, platform)
+);
+
+CREATE TABLE IF NOT EXISTS track_tags (
+    track_id INTEGER NOT NULL REFERENCES tracks(id),
+    tag TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'manual',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (track_id, tag)
+);
+CREATE INDEX IF NOT EXISTS idx_track_tags_tag ON track_tags(tag);
 """
 
 _REMIX_RE = re.compile(r"\s*\((?:remaster(?:ed)?|deluxe edition)[^)]*\)\s*", re.IGNORECASE)
@@ -603,6 +631,40 @@ class Database:
                 }
                 if "tidal_folder_id" not in playlist_cols:
                     self.conn.execute("ALTER TABLE playlists ADD COLUMN tidal_folder_id TEXT")
+
+            if current_version < 11:
+                self.conn.execute("""
+                    CREATE TABLE IF NOT EXISTS track_platform_metadata (
+                        id INTEGER PRIMARY KEY,
+                        track_id INTEGER NOT NULL REFERENCES tracks(id),
+                        platform TEXT NOT NULL,
+                        platform_track_id TEXT NOT NULL,
+                        release_year INTEGER,
+                        release_date TEXT,
+                        genres TEXT,
+                        audio_qualities TEXT,
+                        album_name TEXT,
+                        album_type TEXT,
+                        explicit INTEGER,
+                        duration_ms INTEGER,
+                        popularity INTEGER,
+                        raw_metadata TEXT,
+                        fetched_at TEXT NOT NULL DEFAULT (datetime('now')),
+                        UNIQUE(track_id, platform)
+                    )
+                """)
+                self.conn.execute("""
+                    CREATE TABLE IF NOT EXISTS track_tags (
+                        track_id INTEGER NOT NULL REFERENCES tracks(id),
+                        tag TEXT NOT NULL,
+                        source TEXT NOT NULL DEFAULT 'manual',
+                        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                        PRIMARY KEY (track_id, tag)
+                    )
+                """)
+                self.conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_track_tags_tag ON track_tags(tag)"
+                )
 
             self.conn.execute(
                 "UPDATE schema_meta SET value = ? WHERE key = 'version'",
@@ -1698,3 +1760,101 @@ class Database:
         )
         self.conn.commit()
         return cursor.rowcount
+
+    # ---- Platform Metadata methods ----
+
+    def upsert_track_platform_metadata(self, track_id: int, platform: str,
+                                        platform_track_id: str, **fields) -> None:
+        """Insert or update platform metadata for a track."""
+        import json as _json
+        # Serialize JSON fields
+        for key in ("genres", "audio_qualities", "raw_metadata"):
+            if key in fields and not isinstance(fields[key], str):
+                fields[key] = _json.dumps(fields[key])
+
+        existing = self.conn.execute(
+            "SELECT id FROM track_platform_metadata WHERE track_id = ? AND platform = ?",
+            (track_id, platform),
+        ).fetchone()
+
+        if existing:
+            sets = ", ".join(f"{k} = ?" for k in fields)
+            vals = list(fields.values()) + [track_id, platform]
+            self.conn.execute(
+                f"UPDATE track_platform_metadata SET {sets}, fetched_at = datetime('now') "
+                f"WHERE track_id = ? AND platform = ?", vals,
+            )
+        else:
+            cols = ["track_id", "platform", "platform_track_id"] + list(fields.keys())
+            placeholders = ", ".join("?" * len(cols))
+            vals = [track_id, platform, platform_track_id] + list(fields.values())
+            self.conn.execute(
+                f"INSERT INTO track_platform_metadata ({', '.join(cols)}) VALUES ({placeholders})",
+                vals,
+            )
+        self.conn.commit()
+
+    def get_track_platform_metadata(self, track_id: int, platform: str) -> dict | None:
+        """Get platform metadata for a track."""
+        import json as _json
+        row = self.conn.execute(
+            "SELECT * FROM track_platform_metadata WHERE track_id = ? AND platform = ?",
+            (track_id, platform),
+        ).fetchone()
+        if not row:
+            return None
+        cols = [d[1] for d in self.conn.execute("PRAGMA table_info(track_platform_metadata)").fetchall()]
+        result = dict(zip(cols, row))
+        for key in ("genres", "audio_qualities", "raw_metadata"):
+            if result.get(key) and isinstance(result[key], str):
+                try:
+                    result[key] = _json.loads(result[key])
+                except _json.JSONDecodeError:
+                    pass
+        return result
+
+    # ---- Track Tag methods ----
+
+    def add_track_tag(self, track_id: int, tag: str, source: str = "manual") -> None:
+        """Add a tag to a track."""
+        self.conn.execute(
+            "INSERT OR IGNORE INTO track_tags (track_id, tag, source) VALUES (?, ?, ?)",
+            (track_id, tag, source),
+        )
+        self.conn.commit()
+
+    def remove_track_tag(self, track_id: int, tag: str) -> bool:
+        """Remove a tag from a track."""
+        cursor = self.conn.execute(
+            "DELETE FROM track_tags WHERE track_id = ? AND tag = ?",
+            (track_id, tag),
+        )
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def get_track_tags(self, track_id: int) -> list[str]:
+        """Get all tags for a track."""
+        rows = self.conn.execute(
+            "SELECT tag FROM track_tags WHERE track_id = ? ORDER BY tag",
+            (track_id,),
+        ).fetchall()
+        return [r[0] for r in rows]
+
+    def find_tracks_by_tag(self, *tags: str) -> list:
+        """Find tracks matching ALL given tags."""
+        if not tags:
+            return []
+        placeholders = ", ".join("?" * len(tags))
+        rows = self.conn.execute(
+            f"SELECT t.* FROM tracks t "
+            f"WHERE (SELECT COUNT(*) FROM track_tags tt WHERE tt.track_id = t.id AND tt.tag IN ({placeholders})) = ?",
+            list(tags) + [len(tags)],
+        ).fetchall()
+        return [self._row_to_track(r) for r in rows]
+
+    def list_all_track_tags(self) -> list[tuple[str, int]]:
+        """List all tags with usage counts."""
+        rows = self.conn.execute(
+            "SELECT tag, COUNT(*) FROM track_tags GROUP BY tag ORDER BY COUNT(*) DESC"
+        ).fetchall()
+        return [(r[0], r[1]) for r in rows]
