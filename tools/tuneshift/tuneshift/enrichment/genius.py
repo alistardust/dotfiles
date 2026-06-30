@@ -8,8 +8,15 @@ import urllib.request
 import urllib.parse
 from pathlib import Path
 
+from tuneshift.enrichment.retry import RetryConfig, RetryStats, retry_api_call
+from tuneshift.platforms.rate_limiter import RateLimiter
+
 _TOKEN_DIR = Path.home() / ".local" / "share" / "tuneshift"
 _BASE_URL = "https://api.genius.com"
+
+# Genius provides X-RateLimit-* headers. Adaptive mode reads them and paces
+# accordingly. Baseline 1 req/s (community best practice: 0.5-2s between calls).
+_genius_limiter = RateLimiter(max_per_second=1.0, adaptive=True)
 
 
 def _load_access_token() -> str | None:
@@ -25,8 +32,21 @@ def _load_access_token() -> str | None:
     return None
 
 
-def _request(path: str, params: dict | None = None) -> dict:
-    """Make a Genius API request."""
+def _raw_get(req: urllib.request.Request, *, decode_json: bool = True):
+    """Perform a single HTTP GET, feeding rate limit headers to the limiter."""
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        headers = dict(resp.headers)
+        _genius_limiter.update_from_headers(headers)
+        body = resp.read()
+    if decode_json:
+        return json.loads(body)
+    return body.decode("utf-8", errors="replace")
+
+
+def _request(path: str, params: dict | None = None, *,
+             stats: RetryStats | None = None,
+             config: RetryConfig | None = None) -> dict:
+    """Make a rate-limited, retrying Genius API request."""
     token = _load_access_token()
     if not token:
         raise ValueError("No Genius access token configured.")
@@ -39,14 +59,14 @@ def _request(path: str, params: dict | None = None) -> dict:
         "Authorization": f"Bearer {token}",
         "User-Agent": "tuneshift/1.0",
     })
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        return json.loads(resp.read())
+    _genius_limiter.wait()
+    return retry_api_call(_raw_get, req, config=config, stats=stats)
 
 
-def search_song(title: str, artist: str) -> str | None:
+def search_song(title: str, artist: str, *, stats: RetryStats | None = None) -> str | None:
     """Search for a song and return its Genius URL (for lyrics scraping)."""
     try:
-        data = _request("/search", {"q": f"{title} {artist}"})
+        data = _request("/search", {"q": f"{title} {artist}"}, stats=stats)
         hits = data.get("response", {}).get("hits", [])
         if not hits:
             return None
@@ -63,18 +83,19 @@ def search_song(title: str, artist: str) -> str | None:
         return None
 
 
-def get_lyrics(title: str, artist: str) -> str | None:
+def get_lyrics(title: str, artist: str, *, stats: RetryStats | None = None) -> str | None:
     """Get lyrics for a track by searching Genius and scraping the page.
 
     Returns the full lyrics text."""
-    url = search_song(title, artist)
+    url = search_song(title, artist, stats=stats)
     if not url:
         return None
 
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "tuneshift/1.0"})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            html = resp.read().decode("utf-8", errors="replace")
+        # Page scraping is heavier than API calls: pace it too.
+        _genius_limiter.wait()
+        html = retry_api_call(_raw_get, req, decode_json=False, stats=stats)
 
         # Extract lyrics from Genius HTML
         # Genius stores lyrics in <div data-lyrics-container="true"> elements

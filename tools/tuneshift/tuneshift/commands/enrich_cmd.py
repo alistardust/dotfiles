@@ -11,6 +11,23 @@ def handle_enrich(args, db: Database) -> int:
     """Fetch BPM, key, and other audio metadata for tracks in a playlist."""
     from tuneshift.commands.ingest_cmd import _load_client
 
+    # Whole-DB enrichment: --all flag or no playlist name given
+    enrich_all = getattr(args, "all", False) or not getattr(args, "playlist", None)
+    if enrich_all:
+        from tuneshift.enrichment.platform_metadata import enrich_all_playlists
+
+        platform_name = getattr(args, "platform", None) or "tidal"
+        if platform_name != "tidal":
+            print(f"--all only supports Tidal metadata enrichment (got {platform_name})",
+                  file=sys.stderr)
+            return 1
+        return enrich_all_playlists(
+            db,
+            refresh=getattr(args, "refresh", False),
+            max_retries=getattr(args, "max_retries", 3),
+            dry_run=getattr(args, "dry_run", False),
+        )
+
     playlist = db.find_playlist_by_name(args.playlist)
     if not playlist:
         print(f"Playlist not found: {args.playlist}", file=sys.stderr)
@@ -25,7 +42,7 @@ def handle_enrich(args, db: Database) -> int:
     enriched = 0
     skipped = 0
 
-    # Platform audio metadata (BPM, key, energy, valence)
+    # Audio metadata (BPM, key, energy) via the platform's per-track endpoint
     if platform_name:
         client = _load_client(platform_name)
         if not client:
@@ -61,6 +78,22 @@ def handle_enrich(args, db: Database) -> int:
 
             print(f"Enriched \"{playlist.name}\": {enriched} tracks updated, {skipped} already had metadata")
 
+    # Catalog metadata (Atmos, release year, genres, quality tiers) from Tidal,
+    # retry-aware. Runs when --catalog is requested.
+    if getattr(args, "catalog", False):
+        from tuneshift.enrichment.platform_metadata import enrich_playlist_from_tidal
+
+        meta_enriched, meta_skipped, meta_failed = enrich_playlist_from_tidal(
+            db, playlist.id,
+            refresh=getattr(args, "refresh", False),
+            max_retries=getattr(args, "max_retries", 3),
+        )
+        msg = (f"Catalog metadata for \"{playlist.name}\": "
+               f"{meta_enriched} updated, {meta_skipped} skipped")
+        if meta_failed:
+            msg += f", {meta_failed} failed (retries exhausted)"
+        print(msg)
+
     # LLM classification for narrative fields
     if getattr(args, "classify", False) or not platform_name:
         model = getattr(args, "model", None)
@@ -86,9 +119,9 @@ def _run_classification(db: Database, tracks: list, playlist_name: str, model: s
     classifier = TrackClassifier(model=model)
     if not classifier.available:
         print(
-            f"No LLM backend available for classification. Set one of:\n"
-            f"  ANTHROPIC_API_KEY, OPENAI_API_KEY, TUNESHIFT_LLM_BASE_URL, or OLLAMA_HOST\n"
-            f"  (or TUNESHIFT_LLM_BACKEND to select explicitly)",
+            "No LLM backend available for classification. Set one of:\n"
+            "  ANTHROPIC_API_KEY, OPENAI_API_KEY, TUNESHIFT_LLM_BASE_URL, or OLLAMA_HOST\n"
+            "  (or TUNESHIFT_LLM_BACKEND to select explicitly)",
             file=sys.stderr,
         )
         return -1
@@ -98,7 +131,7 @@ def _run_classification(db: Database, tracks: list, playlist_name: str, model: s
     # Load playlist narrative for context
     narrative = db.get_narrative(playlist_id) if playlist_id else None
     if narrative:
-        print(f"  Using playlist narrative as classification context")
+        print("  Using playlist narrative as classification context")
 
     # Only classify tracks missing narrative fields (unless --reclassify)
     to_classify = []
@@ -108,7 +141,7 @@ def _run_classification(db: Database, tracks: list, playlist_name: str, model: s
             to_classify.append({"title": track.title, "artist": track.artist, "id": track.id})
 
     if not to_classify:
-        print(f"  All tracks already classified. Use --reclassify to force.")
+        print("  All tracks already classified. Use --reclassify to force.")
         return 0
 
     def progress(done: int, total: int) -> None:

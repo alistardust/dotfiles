@@ -162,14 +162,23 @@ def _enrich_artist_via_llm(db: Database, artist, classifier) -> None:
     import json
     import musicbrainzngs
 
+    from tuneshift.enrichment.retry import RetryConfig, retry_api_call
+
     musicbrainzngs.set_useragent("tuneshift", "1.0", "https://github.com/alistardust/dotfiles")
 
     genres: list[str] = []
     mb_artist_id: str | None = None
 
+    # Retry on 503/network errors. The musicbrainzngs library handles 1 req/s
+    # pacing internally; this adds backoff for sustained overload.
+    mb_config = RetryConfig(max_retries=3, base_delay=2.0)
+
     # Try MusicBrainz first (real data, not hallucinated)
     try:
-        results = musicbrainzngs.search_artists(artist=artist.name, limit=3)
+        results = retry_api_call(
+            musicbrainzngs.search_artists, artist=artist.name, limit=3,
+            config=mb_config,
+        )
         artists_found = results.get("artist-list", [])
         if artists_found:
             best = artists_found[0]
@@ -180,7 +189,10 @@ def _enrich_artist_via_llm(db: Database, artist, classifier) -> None:
 
             # If no tags on search result, fetch full artist for tags
             if not genres and mb_artist_id:
-                full = musicbrainzngs.get_artist_by_id(mb_artist_id, includes=["tags"])
+                full = retry_api_call(
+                    musicbrainzngs.get_artist_by_id, mb_artist_id, includes=["tags"],
+                    config=mb_config,
+                )
                 mb_tags = full.get("artist", {}).get("tag-list", [])
                 genres = [t["name"] for t in mb_tags if int(t.get("count", 0)) > 0]
     except (musicbrainzngs.MusicBrainzError, OSError, KeyError):

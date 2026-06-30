@@ -108,11 +108,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     # enrich
     p_enrich = sub.add_parser("enrich", help="Fetch audio metadata and/or classify tracks")
-    p_enrich.add_argument("playlist", help="Playlist name")
+    p_enrich.add_argument("playlist", nargs="?", default=None,
+                          help="Playlist name (omit with --all to enrich every playlist)")
+    p_enrich.add_argument("--all", action="store_true",
+                          help="Enrich Tidal catalog metadata for every playlist (slow, retries on rate limits)")
+    p_enrich.add_argument("--catalog", action="store_true",
+                          help="Fetch Tidal catalog metadata (Atmos, release year, genres, quality) with retry")
     p_enrich.add_argument("--platform", default=None, help="Source platform for audio metadata (BPM, key)")
     p_enrich.add_argument("--classify", action="store_true", help="Run LLM classification for narrative fields")
     p_enrich.add_argument("--reclassify", action="store_true", help="Force re-classify all tracks (overwrites existing)")
     p_enrich.add_argument("--model", help="Override LLM model for classification")
+    p_enrich.add_argument("--max-retries", type=int, default=3,
+                          help="Max retry attempts per track on rate limit/transient errors (default: 3, 0 = skip on error)")
+    p_enrich.add_argument("--refresh", action="store_true", help="Re-fetch even if metadata is cached")
+    p_enrich.add_argument("--dry-run", action="store_true",
+                          help="With --all: show what would be enriched without making API calls")
 
     # narrative
     p_narrative = sub.add_parser("narrative", help="Set or show the intended narrative arc for a playlist")

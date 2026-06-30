@@ -6,6 +6,13 @@ import json
 import sys
 
 from tuneshift.db import Database
+from tuneshift.enrichment.retry import (
+    PermanentAPIError,
+    RetryConfig,
+    RetryStats,
+    is_permanent,
+    retry_api_call,
+)
 from tuneshift.platforms.rate_limiter import RateLimiter
 
 # Tidal rate limiter: adaptive mode, start at 2 req/sec, adjusts from headers
@@ -13,30 +20,48 @@ _tidal_limiter = RateLimiter(max_per_second=2.0, adaptive=True)
 
 
 def enrich_playlist_from_tidal(
-    db: Database, playlist_id: int, refresh: bool = False, stale_days: int = 30
-) -> tuple[int, int]:
+    db: Database,
+    playlist_id: int,
+    refresh: bool = False,
+    stale_days: int = 30,
+    *,
+    max_retries: int = 3,
+    stats: RetryStats | None = None,
+    client: object | None = None,
+    quiet: bool = False,
+) -> tuple[int, int, int]:
     """Fetch Tidal metadata for all tracks on a playlist.
 
-    Returns (enriched_count, skipped_count).
+    Retries transient failures (429, 5xx, timeouts) per track with backoff;
+    permanent failures (track not found) are skipped immediately. Rate limits
+    never abort the run.
+
+    Returns (enriched_count, skipped_count, failed_count).
     """
     from tuneshift.platforms.tidal import TidalClient
 
-    client = TidalClient()
-    if not client.load_session():
-        print("Not logged in to Tidal. Run: tuneshift login tidal", file=sys.stderr)
-        return 0, 0
+    if client is None:
+        client = TidalClient()
+        if not client.load_session():
+            print("Not logged in to Tidal. Run: tuneshift login tidal", file=sys.stderr)
+            return 0, 0, 0
 
+    config = RetryConfig(max_retries=max_retries)
     tracks = db.get_playlist_tracks(playlist_id)
     enriched = 0
     skipped = 0
+    failed = 0
 
     for i, track in enumerate(tracks):
-        print(f"  [{i + 1}/{len(tracks)}] {track.title} - {track.artist}...", end="", flush=True)
+        if not quiet:
+            print(f"  [{i + 1}/{len(tracks)}] {track.title} - {track.artist}...",
+                  end="", flush=True)
 
         # Get platform mapping
         mapping = db.get_platform_mapping(track.id, "tidal")
         if not mapping or not mapping.platform_track_id:
-            print(" skip (no Tidal mapping)")
+            if not quiet:
+                print(" skip (no Tidal mapping)")
             skipped += 1
             continue
 
@@ -44,96 +69,180 @@ def enrich_playlist_from_tidal(
         if not refresh:
             existing = db.get_track_platform_metadata(track.id, "tidal")
             if existing:
-                print(" skip (cached)")
+                if not quiet:
+                    print(" skip (cached)")
                 skipped += 1
                 continue
 
-        # Fetch from Tidal (rate-limited)
-        _tidal_limiter.wait()
+        # Fetch from Tidal with retry. The rate limiter wait happens inside
+        # the retried callable so each attempt is paced.
+        def _do_fetch(track_id=mapping.platform_track_id):
+            _tidal_limiter.wait()
+            return _fetch_tidal_track_metadata(client, track_id)
+
         try:
-            meta = _fetch_tidal_track_metadata(client, mapping.platform_track_id)
+            meta = retry_api_call(_do_fetch, config=config, stats=stats)
             if meta:
                 db.upsert_track_platform_metadata(
                     track.id, "tidal", mapping.platform_track_id, **meta
                 )
                 enriched += 1
                 qualities = meta.get("audio_qualities", [])
-                atmos = "ATMOS" if "DOLBY_ATMOS" in (qualities if isinstance(qualities, list) else []) else ""
-                print(f" ok ({meta.get('release_year', '?')}) {atmos}")
+                atmos = "ATMOS" if "DOLBY_ATMOS" in (
+                    qualities if isinstance(qualities, list) else []) else ""
+                if not quiet:
+                    print(f" ok ({meta.get('release_year', '?')}) {atmos}")
             else:
-                print(" no data")
+                if not quiet:
+                    print(" no data")
                 skipped += 1
-        except (OSError, RuntimeError, ValueError) as exc:
-            if "429" in str(exc) or "Too Many Requests" in str(exc):
-                wait = _tidal_limiter.handle_429({})
-                print(f" rate limited, waiting {wait:.0f}s...")
-                import time
-                time.sleep(wait)
+        except PermanentAPIError as exc:
+            if not quiet:
+                print(f" skip (not found: {exc})")
+            skipped += 1
+        except Exception as exc:  # noqa: BLE001 - report and continue the run
+            if is_permanent(exc):
+                if not quiet:
+                    print(" skip (not found)")
                 skipped += 1
             else:
-                print(f" error ({exc})")
-                skipped += 1
+                if not quiet:
+                    print(f" failed after retries ({exc})")
+                failed += 1
 
-    return enriched, skipped
+    return enriched, skipped, failed
+
+
+def enrich_all_playlists(
+    db: Database,
+    refresh: bool = False,
+    stale_days: int = 30,
+    *,
+    max_retries: int = 3,
+    dry_run: bool = False,
+) -> int:
+    """Enrich Tidal platform metadata for every playlist sequentially.
+
+    Rate limits cause wait-and-retry within each track's timeout budget; the
+    run never aborts entirely. Prints a summary at the end.
+
+    Returns a process exit code (0 on success).
+    """
+    from tuneshift.platforms.tidal import TidalClient
+
+    playlists = db.list_playlists()
+
+    if dry_run:
+        total_tracks = 0
+        to_fetch = 0
+        for playlist in playlists:
+            tracks = db.get_playlist_tracks(playlist.id)
+            total_tracks += len(tracks)
+            for track in tracks:
+                mapping = db.get_platform_mapping(track.id, "tidal")
+                if not mapping or not mapping.platform_track_id:
+                    continue
+                if not refresh and db.get_track_platform_metadata(track.id, "tidal"):
+                    continue
+                to_fetch += 1
+        print(f"Dry run: {len(playlists)} playlists, {total_tracks} tracks total.")
+        print(f"Would fetch metadata for {to_fetch} tracks "
+              f"(~{to_fetch} Tidal API calls).")
+        return 0
+
+    client = TidalClient()
+    if not client.load_session():
+        print("Not logged in to Tidal. Run: tuneshift login tidal", file=sys.stderr)
+        return 1
+
+    stats = RetryStats()
+    total_enriched = 0
+    total_skipped = 0
+    total_failed = 0
+
+    for playlist in playlists:
+        print(f"\n{playlist.name}:")
+        enriched, skipped, failed = enrich_playlist_from_tidal(
+            db, playlist.id, refresh=refresh, stale_days=stale_days,
+            max_retries=max_retries, stats=stats, client=client,
+        )
+        total_enriched += enriched
+        total_skipped += skipped
+        total_failed += failed
+
+    print("\n" + "=" * 50)
+    print(f"Enriched {total_enriched} tracks, "
+          f"skipped {total_skipped} (cached/no mapping), "
+          f"failed {total_failed} (retries exhausted)")
+    print(f"Rate limit handling: {stats.summary()}")
+    return 0
 
 
 def _fetch_tidal_track_metadata(client, platform_track_id: str) -> dict | None:
-    """Fetch metadata for a single track from Tidal."""
+    """Fetch metadata for a single track from Tidal.
+
+    The primary track fetch propagates transient errors (429, 5xx, timeouts)
+    and permanent errors (ObjectNotFound) so the caller's retry logic can react.
+    Secondary album/artist lookups are best-effort and never propagate.
+    """
     try:
-        track = client._session.track(int(platform_track_id))
-        if not track:
-            return None
+        track_id_int = int(platform_track_id)
+    except (ValueError, TypeError) as exc:
+        raise PermanentAPIError(f"Invalid Tidal track id: {platform_track_id}") from exc
 
-        # Audio qualities
-        audio_qualities = []
-        if hasattr(track, "audio_quality"):
-            audio_qualities.append(track.audio_quality)
-        if hasattr(track, "audio_modes") and track.audio_modes:
-            audio_qualities.extend(track.audio_modes)
-
-        # Album info (need full album for release date)
-        album = track.album if hasattr(track, "album") else None
-        release_year = None
-        release_date = None
-        album_name = None
-        if album:
-            album_name = album.name
-            try:
-                full_album = client._session.album(album.id)
-                if full_album.release_date:
-                    release_date = str(full_album.release_date.date())
-                    release_year = full_album.release_date.year
-            except (OSError, RuntimeError, AttributeError):
-                pass
-
-        # Artist genres (fetch from artist if available)
-        genres = []
-        if hasattr(track, "artist") and track.artist:
-            try:
-                artist_obj = client._session.artist(track.artist.id)
-                if hasattr(artist_obj, "roles") and artist_obj.roles:
-                    genres = [r.category for r in artist_obj.roles if hasattr(r, "category")]
-            except (OSError, RuntimeError, AttributeError):
-                pass
-
-        return {
-            "release_year": release_year,
-            "release_date": release_date,
-            "genres": genres,
-            "audio_qualities": audio_qualities,
-            "album_name": album_name,
-            "album_type": None,  # Would need separate album endpoint
-            "explicit": getattr(track, "explicit", None),
-            "duration_ms": getattr(track, "duration", None) * 1000 if getattr(track, "duration", None) else None,
-            "popularity": getattr(track, "popularity", None),
-            "raw_metadata": json.dumps({
-                "id": platform_track_id,
-                "audio_quality": getattr(track, "audio_quality", None),
-                "audio_modes": getattr(track, "audio_modes", None),
-            }),
-        }
-    except (OSError, RuntimeError, ValueError, TypeError) as exc:
+    # Primary fetch: let transient/permanent errors propagate to retry_api_call
+    track = client._session.track(track_id_int)
+    if not track:
         return None
+
+    # Audio qualities
+    audio_qualities = []
+    if hasattr(track, "audio_quality"):
+        audio_qualities.append(track.audio_quality)
+    if hasattr(track, "audio_modes") and track.audio_modes:
+        audio_qualities.extend(track.audio_modes)
+
+    # Album info (need full album for release date) - best effort
+    album = track.album if hasattr(track, "album") else None
+    release_year = None
+    release_date = None
+    album_name = None
+    if album:
+        album_name = album.name
+        try:
+            full_album = client._session.album(album.id)
+            if full_album.release_date:
+                release_date = str(full_album.release_date.date())
+                release_year = full_album.release_date.year
+        except (OSError, RuntimeError, AttributeError):
+            pass
+
+    # Artist genres (fetch from artist if available) - best effort
+    genres = []
+    if hasattr(track, "artist") and track.artist:
+        try:
+            artist_obj = client._session.artist(track.artist.id)
+            if hasattr(artist_obj, "roles") and artist_obj.roles:
+                genres = [r.category for r in artist_obj.roles if hasattr(r, "category")]
+        except (OSError, RuntimeError, AttributeError):
+            pass
+
+    return {
+        "release_year": release_year,
+        "release_date": release_date,
+        "genres": genres,
+        "audio_qualities": audio_qualities,
+        "album_name": album_name,
+        "album_type": None,  # Would need separate album endpoint
+        "explicit": getattr(track, "explicit", None),
+        "duration_ms": getattr(track, "duration", None) * 1000 if getattr(track, "duration", None) else None,
+        "popularity": getattr(track, "popularity", None),
+        "raw_metadata": json.dumps({
+            "id": platform_track_id,
+            "audio_quality": getattr(track, "audio_quality", None),
+            "audio_modes": getattr(track, "audio_modes", None),
+        }),
+    }
 
 
 def derive_tags(db: Database, track_id: int) -> list[str]:
