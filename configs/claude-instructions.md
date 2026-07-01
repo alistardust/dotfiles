@@ -242,6 +242,46 @@ When proposing edits for approval:
 - Use bullets and discrete rules, not prose paragraphs — LLMs comply more reliably with explicit lists.
 - Provide positive AND negative code examples for non-obvious rules.
 - State the *why* for non-obvious constraints.
-- Keep repo-level instruction files under ~2,000 words — longer files get deprioritized.
+- Keep repo-level instruction files under ~2,000 words -- longer files get deprioritized.
 - Global rules (these) belong in user-level config (~/.claude/CLAUDE.md). Project-specific rules belong in the project's CLAUDE.md.
 - Never put secrets, PII, or project-sensitive content in instruction files.
+
+
+## tmux Auto-Rename
+
+On every session start, if inside tmux (`$TMUX` is set), automatically rename
+the current window and pane to reflect what this session is about. Do this
+silently at the beginning of the session without announcing it.
+
+**How to rename:**
+```bash
+# Check for manual override first
+WINDOW_ID=$(tmux display-message -p '#{window_id}' 2>/dev/null)
+MANUAL=$(tmux show-environment -g "@manual_name_${WINDOW_ID}" 2>/dev/null)
+if [ "${MANUAL##*=}" = "1" ]; then exit 0; fi
+
+# Derive name from CWD + git context
+TOPLEVEL=$(git rev-parse --show-toplevel 2>/dev/null)
+if [ -n "$TOPLEVEL" ]; then
+  REPO=$(basename "$TOPLEVEL")
+  BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null)
+  TICKET=$(echo "$BRANCH" | grep -oE '[A-Z]{2,10}-[0-9]+' | head -1)
+  if [ -n "$TICKET" ]; then
+    NAME="${REPO}:${TICKET}"
+  else
+    NAME="$REPO"
+  fi
+else
+  NAME=$(basename "$PWD")
+fi
+tmux rename-window "$NAME" 2>/dev/null
+printf '\033]2;%s\033\\' "claude" 2>/dev/null
+```
+
+**Rules:**
+- Run this once at session start, silently (no output to user)
+- If the work has an obvious theme (ticket, project), use that as the name
+- Set the pane title to "claude" so it is distinguishable from other panes
+- Do not rename if a manual override is set: check
+  `tmux show-environment -g "@manual_name_$(tmux display-message -p '#{window_id}')" 2>/dev/null`
+  and skip if it returns a value ending in `=1`
