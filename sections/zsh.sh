@@ -206,6 +206,36 @@ _zsh_set_default_editor() {
     fi
 }
 
+_zsh_install_tmux_rename_hook() {
+    local zshrc="$1"
+    local hook_dir="$HOME/.config/zsh/hooks"
+    local hook_file="${hook_dir}/tmux-rename.zsh"
+    local hook_src="${SCRIPT_DIR}/scripts/tmux-rename.zsh"
+
+    run mkdir -p "$hook_dir"
+
+    if [[ -f "$hook_src" ]]; then
+        run cp "$hook_src" "$hook_file"
+    else
+        warn "tmux-rename.zsh source not found at ${hook_src}; skipping hook install"
+        return
+    fi
+
+    # Ensure .zshrc sources the hook
+    if ! grep -q "tmux-rename.zsh" "$zshrc" 2>/dev/null; then
+        if [[ "$DRY_RUN" == "true" ]]; then
+            printf '\e[2;37m  [dry] add tmux-rename hook source to %s\e[0m\n' "$zshrc"
+        else
+            cat >> "$zshrc" << 'TMUX_RENAME_HOOK'
+
+# tmux smart window/pane naming
+[ -f "$HOME/.config/zsh/hooks/tmux-rename.zsh" ] && source "$HOME/.config/zsh/hooks/tmux-rename.zsh"
+TMUX_RENAME_HOOK
+        fi
+    fi
+    ok "tmux-rename hook installed."
+}
+
 section_zsh() {
     local zshrc="$HOME/.zshrc"
 
@@ -216,6 +246,7 @@ section_zsh() {
     _zsh_patch_theme_and_plugins "$zshrc"
     _zsh_fix_legacy "$zshrc"
     _zsh_append_customizations "$zshrc"
+    _zsh_install_tmux_rename_hook "$zshrc"
     _zsh_set_default_shell
     _zsh_set_default_editor
 
@@ -237,4 +268,6 @@ verify_zsh() {
     grep -q "^aws()"    "$zshrc"  && pass "aws() focus-events wrapper present"   || fail "aws() focus-events wrapper missing"
     grep -q "WORKON_HOME" "$zshrc" && pass "WORKON_HOME set in .zshrc"           || fail "WORKON_HOME not set in .zshrc"
     grep -q 'uv-virtualenvwrapper.sh' "$zshrc" && pass "uv-virtualenvwrapper sourced in .zshrc" || fail "uv-virtualenvwrapper not sourced in .zshrc"
+    [[ -f "$HOME/.config/zsh/hooks/tmux-rename.zsh" ]] && pass "tmux-rename hook installed"    || fail "tmux-rename hook not installed"
+    grep -q "tmux-rename.zsh" "$zshrc"  && pass "tmux-rename hook sourced in .zshrc"           || fail "tmux-rename hook not sourced in .zshrc"
 }
