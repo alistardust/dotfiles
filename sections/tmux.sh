@@ -84,6 +84,28 @@ bind F run-shell "tmux set focus-events $(tmux show -gv focus-events | grep -q o
 TMUX_BINDINGS
         fi
     fi
+
+    # Enable pane border titles (works with tmux-rename hook for pane context)
+    if grep -q 'tmux_conf_theme_pane_border_title=' "$conf" 2>/dev/null; then
+        # Fork detected: use the framework variable
+        if grep -q '^tmux_conf_theme_pane_border_title="disabled"' "$conf"; then
+            run sed -i 's/^tmux_conf_theme_pane_border_title="disabled"$/tmux_conf_theme_pane_border_title="top"/' "$conf"
+        fi
+    else
+        # Upstream Oh my tmux!: append raw tmux settings
+        if ! grep -q "pane-border-format" "$conf"; then
+            if [[ "$DRY_RUN" == "true" ]]; then
+                printf '\e[2;37m  [dry] append pane border config to %s\e[0m\n' "$conf"
+            else
+                cat >> "$conf" << 'TMUX_PANE_BORDERS'
+
+# pane border titles (shows pane title above each pane)
+set -g pane-border-format " #{pane_title} " #!important
+set -g pane-border-status top #!important
+TMUX_PANE_BORDERS
+            fi
+        fi
+    fi
     ok "tmux configured."
 }
 
@@ -103,4 +125,6 @@ verify_tmux() {
     grep -q "^bind n next-window" "$conf" 2>/dev/null && pass "bind n next-window set"          || fail "bind n next-window not set"
     grep -q "^bind F "            "$conf" 2>/dev/null && pass "bind F focus-events toggle set"  || fail "bind F focus-events toggle not set"
     grep -q "^set -g mouse on"    "$conf" 2>/dev/null && pass "mouse mode enabled"              || fail "mouse mode not enabled"
+    { grep -q "pane-border-format" "$conf" || grep -q 'pane_border_title="top"' "$conf"; } \
+        2>/dev/null && pass "pane border titles configured" || fail "pane border titles not configured"
 }
