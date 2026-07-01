@@ -95,7 +95,12 @@ section_chatgpt() {
     local codex_src="${SCRIPT_DIR}/configs/codex-instructions.md"
     install_instructions "$agents_dir" "$agents_file" "$codex_src" "Codex"
 
-    # gstack — register skills with Codex (clone first if not yet present)
+    # Install local skills from this repo
+    local codex_skills_dir="${agents_dir}/skills"
+    _install_local_skills "$codex_skills_dir"
+    ok "All local skills installed to ~/.codex/skills/"
+
+    # gstack - register skills with Codex (clone first if not yet present)
     local gstack_dir="$HOME/.claude/skills/gstack"
     if [[ -d "$gstack_dir" ]]; then
         log "Registering gstack with Codex..."
