@@ -1056,6 +1056,78 @@ class Database:
                 (to_track_id, playlist_id, from_track_id),
             )
 
+    def merge_tracks(self, keep_id: int, merge_ids: list[int]) -> None:
+        """Merge duplicate track rows into a canonical row.
+
+        For each id in ``merge_ids``: reassign its playlist memberships and pins
+        to ``keep_id`` (deduplicating within a playlist), delete its auxiliary
+        rows (metadata, tags), then delete the track row itself. Runs in a
+        single transaction so a failure leaves the database unchanged.
+
+        Playlist positions are rewritten contiguously; the offset technique
+        avoids transient UNIQUE(playlist_id, position) collisions during
+        reassignment.
+        """
+        conn = self.conn
+        with conn:
+            for mid in merge_ids:
+                if mid == keep_id:
+                    continue
+                playlists = [
+                    r[0] for r in conn.execute(
+                        "SELECT DISTINCT playlist_id FROM playlist_tracks WHERE track_id = ?",
+                        (mid,),
+                    ).fetchall()
+                ]
+                for pid in playlists:
+                    # Transfer pins where possible; UNIQUE conflicts (keep already
+                    # pinned) are ignored and cleaned up by the cascade below.
+                    conn.execute(
+                        "UPDATE OR IGNORE playlist_pins SET track_id = ? "
+                        "WHERE playlist_id = ? AND track_id = ?",
+                        (keep_id, pid, mid),
+                    )
+                    keep_present = conn.execute(
+                        "SELECT 1 FROM playlist_tracks WHERE playlist_id = ? "
+                        "AND track_id = ? LIMIT 1",
+                        (pid, keep_id),
+                    ).fetchone()
+                    if keep_present:
+                        # Avoid a duplicate membership: drop the merge rows.
+                        conn.execute(
+                            "DELETE FROM playlist_tracks WHERE playlist_id = ? "
+                            "AND track_id = ?",
+                            (pid, mid),
+                        )
+                    else:
+                        conn.execute(
+                            "UPDATE playlist_tracks SET track_id = ? "
+                            "WHERE playlist_id = ? AND track_id = ?",
+                            (keep_id, pid, mid),
+                        )
+                    # Reindex positions contiguously without PK collisions.
+                    conn.execute(
+                        "UPDATE playlist_tracks SET position = position + 1000000 "
+                        "WHERE playlist_id = ?",
+                        (pid,),
+                    )
+                    rows = conn.execute(
+                        "SELECT rowid FROM playlist_tracks WHERE playlist_id = ? "
+                        "ORDER BY position",
+                        (pid,),
+                    ).fetchall()
+                    for idx, (rowid,) in enumerate(rows):
+                        conn.execute(
+                            "UPDATE playlist_tracks SET position = ? WHERE rowid = ?",
+                            (idx, rowid),
+                        )
+                # Remove auxiliary rows that lack ON DELETE CASCADE.
+                conn.execute("DELETE FROM track_platform_metadata WHERE track_id = ?", (mid,))
+                conn.execute("DELETE FROM track_tags WHERE track_id = ?", (mid,))
+                # Delete the track; cascade removes remaining platform_tracks,
+                # playlist_tracks, playlist_pins, and evidence rows.
+                conn.execute("DELETE FROM tracks WHERE id = ?", (mid,))
+
     def set_playlist_tracks(self, playlist_id: int, track_ids: list[int]) -> None:
         """Set the track order for a playlist, replacing existing rows."""
         self.conn.execute(

@@ -124,6 +124,29 @@ def build_parser() -> argparse.ArgumentParser:
     p_enrich.add_argument("--dry-run", action="store_true",
                           help="With --all: show what would be enriched without making API calls")
 
+    # doctor
+    p_doctor = sub.add_parser("doctor",
+                              help="Scan playlists for mapping issues and apply fixes")
+    p_doctor.add_argument("playlist", nargs="?", default=None,
+                          help="Playlist name (omit with --all to scan every playlist)")
+    p_doctor.add_argument("--all", action="store_true",
+                          help="Scan every playlist in the database")
+    p_doctor.add_argument("--apply", action="store_true",
+                          help="Apply the previously written plan instead of scanning")
+    p_doctor.add_argument("--only", type=int, action="append", metavar="ITEM_ID",
+                          help="With --apply: only apply the given plan item id(s)")
+    p_doctor.add_argument("--override", action="append", metavar="ITEM_ID=TIDAL_ID",
+                          help="With --apply: override an item's fix (remap id, or keep-track id for duplicates)")
+    p_doctor.add_argument("--no-sync", action="store_true",
+                          help="With --apply: skip the best-effort Tidal re-sync")
+    p_doctor.add_argument("--dry-run", action="store_true",
+                          help="With --apply: preview what would change without applying")
+    p_doctor.add_argument("--max-retries", type=int, default=3,
+                          help="Max retry attempts per track on rate limit/transient errors (default: 3)")
+    p_doctor.add_argument("-y", "--yes", action="store_true",
+                          help="With --apply: skip the confirmation prompt")
+    p_doctor.add_argument("--quiet", action="store_true", help="Suppress progress output")
+
     # narrative
     p_narrative = sub.add_parser("narrative", help="Set or show the intended narrative arc for a playlist")
     p_narrative.add_argument("playlist", help="Playlist name")
@@ -596,6 +619,9 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "enrich":
             from tuneshift.commands.enrich_cmd import handle_enrich
             return handle_enrich(args, db)
+        elif args.command == "doctor":
+            from tuneshift.commands.doctor_cmd import handle_doctor
+            return handle_doctor(args, db)
         elif args.command == "narrative":
             from tuneshift.commands.narrative_cmd import handle_narrative
             return handle_narrative(args, db)

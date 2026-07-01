@@ -1,3 +1,4 @@
 tuneshift.egg-info/
 .venv/
 __pycache__/
+.tuneshift/

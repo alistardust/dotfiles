@@ -112,3 +112,65 @@ def test_catalog_enrichment_exhausted_marks_failed(tmp_path: Path, monkeypatch):
     )
     assert enriched == 0
     assert failed == 1
+
+
+def test_album_too_many_requests_does_not_break_track_metadata():
+    """Fix 1: a TooManyRequests on the best-effort album lookup must be
+    swallowed so track-level metadata is still returned."""
+    from tidalapi.exceptions import TooManyRequests
+
+    track = MagicMock()
+    track.audio_quality = "LOSSLESS"
+    track.audio_modes = ["DOLBY_ATMOS"]
+    album = MagicMock()
+    album.name = "Lateralus"
+    album.id = 12345
+    track.album = album
+    track.artist = None  # skip artist branch for this test
+
+    session = MagicMock()
+    session.track.return_value = track
+    # tidalapi relabels the 429 message to "Album unavailable"
+    session.album.side_effect = TooManyRequests("Album unavailable")
+
+    client = MagicMock()
+    client._session = session
+
+    meta = platform_metadata._fetch_tidal_track_metadata(client, "999")
+
+    assert meta is not None
+    assert meta["album_name"] == "Lateralus"
+    assert "DOLBY_ATMOS" in meta["audio_qualities"]
+    # release info could not be fetched, but that's non-fatal
+    assert meta["release_year"] is None
+
+
+def test_asset_not_available_album_flagged_stale():
+    """Fix 3: AssetNotAvailable (delisted album) must set album_stale, not be
+    swallowed as a generic best-effort error."""
+    from tidalapi.exceptions import AssetNotAvailable
+
+    track = MagicMock()
+    track.audio_quality = "LOSSLESS"
+    track.audio_modes = []
+    album = MagicMock()
+    album.name = "Delisted Album"
+    album.id = 777
+    track.album = album
+    track.artist = None
+    track.duration = 200
+    track.name = "Song"
+    track.available = True
+
+    session = MagicMock()
+    session.track.return_value = track
+    session.album.side_effect = AssetNotAvailable("asset not available")
+
+    client = MagicMock()
+    client._session = session
+
+    report = platform_metadata.fetch_track_report(client, "999")
+
+    assert report["album_stale"] is True
+    assert report["available"] is True
+    assert report["metadata"]["album_name"] == "Delisted Album"

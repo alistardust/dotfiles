@@ -68,6 +68,30 @@ def test_musicbrainz_network_error_by_type_name():
     assert is_transient(NetworkError("connection failed"))
 
 
+def test_tidal_too_many_requests_transient_despite_message():
+    """tidalapi relabels 429 TooManyRequests as 'Album unavailable' (album.py).
+
+    The classifier must recognize it as transient by type name, not message.
+    """
+    class TooManyRequests(Exception):
+        pass
+
+    exc = TooManyRequests("Album unavailable")
+    assert is_transient(exc)
+    assert not is_permanent(exc)
+
+
+def test_tidal_too_many_requests_not_permanent_even_with_notfound_message():
+    """A rate limit must never be classified permanent, even if its message
+    happens to contain NotFound-like text."""
+    class TooManyRequests(Exception):
+        pass
+
+    exc = TooManyRequests("resource NotFound while rate limited")
+    assert not is_permanent(exc)
+    assert is_transient(exc)
+
+
 # --- Retry behavior ---
 
 

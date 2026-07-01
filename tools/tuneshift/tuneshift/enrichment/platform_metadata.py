@@ -15,6 +15,33 @@ from tuneshift.enrichment.retry import (
 )
 from tuneshift.platforms.rate_limiter import RateLimiter
 
+# tidalapi's exception taxonomy is unreliable for best-effort sub-fetches:
+# it re-labels TooManyRequests (429) as "Album unavailable" and raises
+# ObjectNotFound/AssetNotAvailable for delisted albums. Catch the common base
+# so best-effort album/artist lookups never propagate. Fall back to a private
+# subclass if tidalapi is unavailable so the except clause always compiles.
+try:
+    from tidalapi.exceptions import ObjectNotFound as _TidalObjectNotFound
+    from tidalapi.exceptions import TidalAPIError as _TidalAPIError
+    try:
+        from tidalapi.exceptions import AssetNotAvailable as _TidalAssetNotAvailable
+    except Exception:  # pragma: no cover - older tidalapi lacks this class
+        _TidalAssetNotAvailable = _TidalObjectNotFound
+except Exception:  # pragma: no cover - tidalapi is always present in prod
+    class _TidalAPIError(Exception):
+        pass
+
+    class _TidalObjectNotFound(_TidalAPIError):
+        pass
+
+    class _TidalAssetNotAvailable(_TidalAPIError):
+        pass
+
+# A delisted album surfaces as either ObjectNotFound or AssetNotAvailable; both
+# are the "stale_album" signal and must be caught before the best-effort swallow.
+_STALE_ALBUM_ERRORS = (_TidalObjectNotFound, _TidalAssetNotAvailable)
+_BEST_EFFORT_ERRORS = (OSError, RuntimeError, AttributeError, _TidalAPIError)
+
 # Tidal rate limiter: adaptive mode, start at 2 req/sec, adjusts from headers
 _tidal_limiter = RateLimiter(max_per_second=2.0, adaptive=True)
 
@@ -178,12 +205,22 @@ def enrich_all_playlists(
     return 0
 
 
-def _fetch_tidal_track_metadata(client, platform_track_id: str) -> dict | None:
-    """Fetch metadata for a single track from Tidal.
+def fetch_track_report(client, platform_track_id: str) -> dict:
+    """Fetch a track from Tidal and return a structured validation report.
 
-    The primary track fetch propagates transient errors (429, 5xx, timeouts)
-    and permanent errors (ObjectNotFound) so the caller's retry logic can react.
-    Secondary album/artist lookups are best-effort and never propagate.
+    Used by both enrichment (for the metadata payload) and the doctor scanner
+    (for issue classification). The primary track fetch propagates transient
+    errors (429, 5xx, timeouts) and permanent errors (ObjectNotFound) so the
+    caller's retry logic can react. Secondary album/artist lookups are
+    best-effort: a delisted album (ObjectNotFound) is reported as
+    ``album_stale``; other album/artist errors are swallowed.
+
+    Returns a dict with keys:
+        available (bool), duration_seconds (int|None), title (str),
+        album_id (str|None), album_stale (bool), metadata (dict|None).
+
+    Raises PermanentAPIError for an unparseable id; propagates tidalapi
+    ObjectNotFound / TooManyRequests / network errors from the track fetch.
     """
     try:
         track_id_int = int(platform_track_id)
@@ -193,7 +230,14 @@ def _fetch_tidal_track_metadata(client, platform_track_id: str) -> dict | None:
     # Primary fetch: let transient/permanent errors propagate to retry_api_call
     track = client._session.track(track_id_int)
     if not track:
-        return None
+        return {
+            "available": False,
+            "duration_seconds": None,
+            "title": "",
+            "album_id": None,
+            "album_stale": False,
+            "metadata": None,
+        }
 
     # Audio qualities
     audio_qualities = []
@@ -202,19 +246,25 @@ def _fetch_tidal_track_metadata(client, platform_track_id: str) -> dict | None:
     if hasattr(track, "audio_modes") and track.audio_modes:
         audio_qualities.extend(track.audio_modes)
 
-    # Album info (need full album for release date) - best effort
+    # Album info (need full album for release date) - best effort, but a
+    # delisted album (ObjectNotFound) is a reportable "stale_album" signal.
     album = track.album if hasattr(track, "album") else None
     release_year = None
     release_date = None
     album_name = None
+    album_id = None
+    album_stale = False
     if album:
         album_name = album.name
+        album_id = str(album.id) if getattr(album, "id", None) is not None else None
         try:
             full_album = client._session.album(album.id)
             if full_album.release_date:
                 release_date = str(full_album.release_date.date())
                 release_year = full_album.release_date.year
-        except (OSError, RuntimeError, AttributeError):
+        except _STALE_ALBUM_ERRORS:
+            album_stale = True
+        except _BEST_EFFORT_ERRORS:
             pass
 
     # Artist genres (fetch from artist if available) - best effort
@@ -224,10 +274,11 @@ def _fetch_tidal_track_metadata(client, platform_track_id: str) -> dict | None:
             artist_obj = client._session.artist(track.artist.id)
             if hasattr(artist_obj, "roles") and artist_obj.roles:
                 genres = [r.category for r in artist_obj.roles if hasattr(r, "category")]
-        except (OSError, RuntimeError, AttributeError):
+        except _BEST_EFFORT_ERRORS:
             pass
 
-    return {
+    duration_s = getattr(track, "duration", None)
+    metadata = {
         "release_year": release_year,
         "release_date": release_date,
         "genres": genres,
@@ -235,7 +286,7 @@ def _fetch_tidal_track_metadata(client, platform_track_id: str) -> dict | None:
         "album_name": album_name,
         "album_type": None,  # Would need separate album endpoint
         "explicit": getattr(track, "explicit", None),
-        "duration_ms": getattr(track, "duration", None) * 1000 if getattr(track, "duration", None) else None,
+        "duration_ms": duration_s * 1000 if duration_s else None,
         "popularity": getattr(track, "popularity", None),
         "raw_metadata": json.dumps({
             "id": platform_track_id,
@@ -243,6 +294,25 @@ def _fetch_tidal_track_metadata(client, platform_track_id: str) -> dict | None:
             "audio_modes": getattr(track, "audio_modes", None),
         }),
     }
+
+    return {
+        "available": bool(getattr(track, "available", True)),
+        "duration_seconds": int(duration_s) if duration_s else None,
+        "title": getattr(track, "name", "") or "",
+        "album_id": album_id,
+        "album_stale": album_stale,
+        "metadata": metadata,
+    }
+
+
+def _fetch_tidal_track_metadata(client, platform_track_id: str) -> dict | None:
+    """Fetch just the metadata payload for a track (enrichment path).
+
+    Thin wrapper over :func:`fetch_track_report` preserving the historical
+    return contract (metadata dict, or None when the track is missing).
+    """
+    report = fetch_track_report(client, platform_track_id)
+    return report["metadata"]
 
 
 def derive_tags(db: Database, track_id: int) -> list[str]:

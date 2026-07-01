@@ -85,9 +85,14 @@ def is_transient(exc: Exception) -> bool:
         return exc.code in _TRANSIENT_CODES
     if isinstance(exc, (URLError, OSError, TimeoutError, ConnectionError)):
         return True
+    # tidalapi raises TooManyRequests (a 429) but rewrites its message to
+    # "Album unavailable" in album.py, so string matching alone misses it.
+    # Match by type name to stay robust to the message text.
+    type_name = type(exc).__name__
+    if "TooManyRequests" in type_name:
+        return True
     # musicbrainzngs raises NetworkError (connection issues) and ResponseError
     # (wraps HTTP errors including 503)
-    type_name = type(exc).__name__
     if "NetworkError" in type_name:
         return True
     # musicbrainzngs raises ResponseError with 503
@@ -105,8 +110,12 @@ def is_permanent(exc: Exception) -> bool:
         return True
     if isinstance(exc, HTTPError):
         return exc.code in _PERMANENT_CODES
-    # tidalapi ObjectNotFound
+    # A rate limit is never permanent, even though tidalapi mislabels the
+    # message as "Album unavailable". Check before any name-based matching.
     type_name = type(exc).__name__
+    if "TooManyRequests" in type_name:
+        return False
+    # tidalapi ObjectNotFound
     if "ObjectNotFound" in type_name or "NotFound" in type_name:
         return True
     return False
