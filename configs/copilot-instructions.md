@@ -262,3 +262,43 @@ explicitly verify no never-commit files are staged. If any are found, unstage th
 (`git reset HEAD <path>`) and report before proceeding. This auto-unstage is a safety
 guardrail that prevents accidental commits and never removes data from the worktree.
 
+
+## tmux Auto-Rename
+
+On every session start, if inside tmux (`$TMUX` is set), automatically rename
+the current window and pane to reflect what this session is about. Do this
+silently at the beginning of the session without announcing it.
+
+**How to rename:**
+```bash
+# Check for manual override first
+WINDOW_ID=$(tmux display-message -p '#{window_id}' 2>/dev/null)
+MANUAL=$(tmux show-environment -g "@manual_name_${WINDOW_ID}" 2>/dev/null)
+if [ "${MANUAL##*=}" = "1" ]; then exit 0; fi
+
+# Derive name from CWD + git context
+TOPLEVEL=$(git rev-parse --show-toplevel 2>/dev/null)
+if [ -n "$TOPLEVEL" ]; then
+  REPO=$(basename "$TOPLEVEL")
+  BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null)
+  TICKET=$(echo "$BRANCH" | grep -oE '[A-Z]{2,10}-[0-9]+' | head -1)
+  if [ -n "$TICKET" ]; then
+    NAME="${REPO}:${TICKET}"
+  else
+    NAME="$REPO"
+  fi
+else
+  NAME=$(basename "$PWD")
+fi
+tmux rename-window "$NAME" 2>/dev/null
+printf '\033]2;%s\033\\' "copilot" 2>/dev/null
+```
+
+**Rules:**
+- Run this once at session start, silently (no output to user)
+- If the work has an obvious theme (ticket, project), use that as the name
+- Set the pane title to "copilot" so it is distinguishable from other panes
+- Do not rename if a manual override is set: check
+  `tmux show-environment -g "@manual_name_$(tmux display-message -p '#{window_id}')" 2>/dev/null`
+  and skip if it returns a value ending in `=1`
+
