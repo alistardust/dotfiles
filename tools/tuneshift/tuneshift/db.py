@@ -1554,12 +1554,27 @@ class Database:
         """, (playlist_id,)).fetchall()
         return [self._row_to_artist(row) for row in rows]
 
+    _UPDATABLE_ARTIST_COLUMNS = frozenset({
+        "name", "norm_name", "sort_name", "bio", "identity", "tags",
+        "identity_confidence", "genres", "origin", "active_start", "active_end",
+        "mb_artist_id", "tidal_artist_id", "spotify_artist_uri", "lastfm_url",
+        "wikipedia_url", "enrichment_sources", "verified", "enriched_at",
+        "verified_at",
+    })
+
     def update_artist(self, artist_id: int, **fields: Any) -> None:
-        """Update artist fields by keyword arguments."""
+        """Update artist fields by keyword arguments.
+
+        Field names are validated against an allowlist of updatable columns
+        before being interpolated as SQL identifiers, preventing SQL-identifier
+        injection via caller-supplied keys.
+        """
         json_fields = {"identity", "tags", "genres", "enrichment_sources"}
         sets: list[str] = []
         values: list[Any] = []
         for key, value in fields.items():
+            if key not in self._UPDATABLE_ARTIST_COLUMNS:
+                raise ValueError(f"Not an updatable artist column: {key!r}")
             sets.append(f"{key} = ?")
             if key in json_fields and not isinstance(value, str):
                 values.append(json.dumps(value))
