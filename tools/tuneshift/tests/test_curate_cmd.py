@@ -58,7 +58,7 @@ class TestHandleCurate:
         assert result == 1
 
     def test_empty_playlist_returns_error(self, db: Database) -> None:
-        pid = db.create_playlist("Empty Playlist")
+        db.create_playlist("Empty Playlist")
         args = SimpleNamespace(
             playlist="Empty Playlist",
             mode="analyze",
