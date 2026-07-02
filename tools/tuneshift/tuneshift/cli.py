@@ -164,11 +164,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     # map
     p_map = sub.add_parser("map", help="Manually map a track to a platform ID")
-    p_map.add_argument("playlist", help="Playlist name")
-    p_map.add_argument("title", help="Track title (substring match)")
+    p_map.add_argument("playlist", nargs="?", help="Playlist name (omit when using --track-id)")
+    p_map.add_argument("title", nargs="?", help="Track title, substring match (omit when using --track-id)")
+    p_map.add_argument("--track-id", type=int, help="Canonical track id (maps without playlist/title)")
     p_map.add_argument("--tidal", help="Tidal track ID")
     p_map.add_argument("--ytmusic", help="YouTube Music video ID")
     p_map.add_argument("--verify", action="store_true", help="Verify ID exists on platform")
+    p_map.add_argument("--dry-run", action="store_true", help="Show the intended mapping without writing")
 
     # unmap
     p_unmap = sub.add_parser("unmap", help="Remove a manual platform mapping")
