@@ -2,6 +2,25 @@
 import sys
 
 
+def _session_is_valid(client) -> bool:
+    """Return True only if a loaded session is actually usable.
+
+    ``load_session()`` can succeed on a structurally-valid but expired/revoked
+    token. Concrete clients expose ``_ensure_session()``, which performs the
+    real validity check (e.g. ``check_login()``) and raises ``RuntimeError``
+    when the session is not usable. If a client has no such check, we cannot
+    prove validity, so treat it as valid to preserve existing behaviour.
+    """
+    ensure = getattr(client, "_ensure_session", None)
+    if ensure is None:
+        return True
+    try:
+        ensure()
+    except RuntimeError:
+        return False
+    return True
+
+
 def handle_login(args, db) -> int:
     """Authenticate with a streaming platform."""
     from tuneshift.commands.ingest_cmd import _load_client
@@ -11,10 +30,14 @@ def handle_login(args, db) -> int:
         print(f"Unknown platform: {args.platform}", file=sys.stderr)
         return 1
 
-    # Check if already logged in
+    # Check if already logged in — load_session() only confirms a token file
+    # loads structurally, so validate the session is actually usable before
+    # short-circuiting. An expired/revoked session falls through to re-auth.
     if client.load_session():
-        print(f"Already authenticated with {args.platform}.")
-        return 0
+        if _session_is_valid(client):
+            print(f"Already authenticated with {args.platform}.")
+            return 0
+        print(f"Saved {args.platform} session is expired; re-authenticating...")
 
     print(f"Logging in to {args.platform}...")
 
