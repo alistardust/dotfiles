@@ -95,10 +95,18 @@ class AlbumResult:
 
 @dataclass
 class ArtistResult:
-    """An artist search result from any platform."""
+    """An artist search result from any platform.
+
+    Enrichment fields (``popularity``, ``genres``, ``followers``) are optional:
+    platforms populate what they expose and leave the rest ``None``/empty. The
+    artist scorer treats missing enrichment as neutral, never as a mismatch.
+    """
 
     platform_id: str
     name: str
+    popularity: int | None = None
+    genres: list[str] = field(default_factory=list)
+    followers: int | None = None
 
 
 @dataclass

@@ -12,6 +12,16 @@ Later chunks add ``similarity``, ``penalties``, ``engine``, ``confidence``,
 ``preferences``, ``album``, ``artist``, ``version``, ``identity`` and
 ``audit`` modules; they will be re-exported from here as they land.
 """
+from tuneshift.matching.album import (
+    ALBUM_THRESHOLDS,
+    classify_album_results,
+    score_album_match,
+)
+from tuneshift.matching.artist import (
+    ARTIST_THRESHOLDS,
+    classify_artist_results,
+    score_artist_match,
+)
 from tuneshift.matching.normalize import (
     is_remaster,
     normalize_artist,
@@ -48,4 +58,10 @@ __all__ = [
     "VersionPreferences",
     "resolve_preferences",
     "preference_sort_bias",
+    "score_album_match",
+    "classify_album_results",
+    "ALBUM_THRESHOLDS",
+    "score_artist_match",
+    "classify_artist_results",
+    "ARTIST_THRESHOLDS",
 ]
