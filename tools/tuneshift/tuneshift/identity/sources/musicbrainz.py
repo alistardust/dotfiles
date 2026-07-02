@@ -130,10 +130,19 @@ class MusicBrainzSource:
             release_groups=release_groups,
         )
 
-    def _extract_artist_name(self, artist_credit: list[dict[str, Any]]) -> str:
-        """Build a display artist name from MusicBrainz artist-credit entries."""
+    def _extract_artist_name(self, artist_credit: list[dict[str, Any]] | str) -> str:
+        """Build a display artist name from MusicBrainz artist-credit entries.
+
+        MusicBrainz interleaves plain join-phrase strings between artist dicts
+        (and occasionally supplies a bare string), so tolerate both shapes.
+        """
+        if isinstance(artist_credit, str):
+            return artist_credit
         parts: list[str] = []
         for credit in artist_credit:
+            if isinstance(credit, str):
+                parts.append(credit)
+                continue
             artist = credit.get("artist", {})
             if artist.get("name"):
                 parts.append(artist["name"])
