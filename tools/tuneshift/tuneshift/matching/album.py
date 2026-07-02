@@ -73,9 +73,18 @@ def _artist_signal(source_artist: str, candidate_artist: str) -> SignalPenalty:
     return SignalPenalty("album:artist", _signed_points(penalty, _W_ARTIST), penalty, _W_ARTIST)
 
 
+def edition_cost(album_name: str) -> int:
+    """Total edition-penalty cost for an album title (0 for a standard edition).
+
+    Centralizes edition knowledge that used to be duplicated across the
+    reconcile tiebreak and album-name heuristics.
+    """
+    lowered = (album_name or "").lower()
+    return sum(c for kw, c in _EDITION_COSTS if kw in lowered)
+
+
 def _edition_signal(candidate_album: str) -> SignalPenalty:
-    lowered = (candidate_album or "").lower()
-    cost = sum(c for kw, c in _EDITION_COSTS if kw in lowered)
+    cost = edition_cost(candidate_album)
     penalty = min(1.0, cost / 10.0)
     return SignalPenalty("album:edition", _signed_points(penalty, _W_EDITION), penalty, _W_EDITION)
 
@@ -142,4 +151,4 @@ def classify_album_results(distances: list[float]) -> str:
     }[action]
 
 
-__all__ = ["score_album_match", "classify_album_results", "ALBUM_THRESHOLDS"]
+__all__ = ["score_album_match", "classify_album_results", "edition_cost", "ALBUM_THRESHOLDS"]

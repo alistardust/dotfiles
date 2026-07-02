@@ -5,12 +5,17 @@ from difflib import SequenceMatcher
 
 from tuneshift.db import Database
 from tuneshift.matching import (
+    classify_album_results,
+    classify_artist_results,
     classify_results,
     duration_proximity_bonus,
+    edition_cost,
     is_remaster,
     normalize_title,
     preference_sort_bias,
     resolve_preferences,
+    score_album_match,
+    score_artist_match,
     score_match_with_version,
 )
 from tuneshift.models import AlbumResult, ArtistResult, PlatformMapping, TrackResult
@@ -44,19 +49,64 @@ class ReconcileResult:
     match_type: str = ""
 
 
+# --- Album/artist selection helpers (shared scorers, no blind [0]) ---
+
+
+def _rank_albums(track, albums: list[AlbumResult]) -> list[tuple[float, AlbumResult]]:
+    """Rank candidate albums by match distance (best/smallest first)."""
+    scored = [
+        (
+            score_album_match(
+                track.album, track.artist, album,
+                source_track_count=None, source_year=None,
+            ).total,
+            album,
+        )
+        for album in albums
+    ]
+    scored.sort(key=lambda pair: pair[0])
+    return scored
+
+
+def _acceptable_albums(track, albums: list[AlbumResult]) -> list[AlbumResult]:
+    """Return candidate albums whose best match is not classified not_found.
+
+    Preserves ranking order and drops the trailing candidates only once the
+    classifier rejects the whole pool (empty -> []).
+    """
+    ranked = _rank_albums(track, albums)
+    if not ranked:
+        return []
+    if classify_album_results([d for d, _ in ranked]) == "not_found":
+        return []
+    return [album for _, album in ranked]
+
+
+def _best_artist(track, artists: list[ArtistResult]) -> ArtistResult | None:
+    """Pick the best-matching artist, or None if none is acceptable."""
+    if not artists:
+        return None
+    scored = sorted(
+        ((score_artist_match(track.artist, a).total, a) for a in artists),
+        key=lambda pair: pair[0],
+    )
+    if classify_artist_results([d for d, _ in scored]) == "not_found":
+        return None
+    return scored[0][1]
+
+
 # --- Strategy functions ---
 
 
 def _strategy_album_lookup(track, client) -> list[TrackResult]:
-    """Search for the album, get its tracklist."""
+    """Search for the album, get tracklists of the best-matching candidates."""
     if not track.album:
         return []
     try:
         query = f"{track.album} {track.artist}"
         albums: list[AlbumResult] = client.search_album(query, limit=5)
-        albums = sorted(albums, key=lambda a: _edition_score(a.title))
         results: list[TrackResult] = []
-        for album in albums[:3]:
+        for album in _acceptable_albums(track, albums)[:3]:
             tracklist = client.get_album_tracks(album.platform_id)
             results.extend(tracklist)
         return results
@@ -66,37 +116,22 @@ def _strategy_album_lookup(track, client) -> list[TrackResult]:
 
 
 def _strategy_album_tracklist(track, client) -> list[TrackResult]:
-    """Search for album by artist, then fetch its tracklist for title matching."""
+    """Search for the album, then fetch the best candidate's tracklist."""
     if not track.album:
         return []
     try:
-        # Include artist in search to avoid matching wrong artist's album
         query = f"{track.album} {track.artist}"
         albums: list[AlbumResult] = client.search_album(query, limit=5)
         if not albums:
             # Fallback: album name only
             albums = client.search_album(track.album, limit=5)
-        if not albums:
+
+        acceptable = _acceptable_albums(track, albums)
+        if not acceptable:
             return []
 
-        # Filter to albums by the correct artist (if possible)
-        from tuneshift.matching import normalize_artist
-        target_artist = normalize_artist(track.artist)
-        artist_albums = [
-            a for a in albums
-            if normalize_artist(a.artist) == target_artist
-        ]
-        if artist_albums:
-            albums = artist_albums
-
-        # Sort by edition preference (prefer standard editions)
-        albums = sorted(albums, key=lambda a: _edition_score(a.title))
-
-        # Get tracklist from the best album
-        best_album = albums[0]
-        tracklist = client.get_album_tracks(best_album.platform_id)
-
-        return tracklist
+        best_album = acceptable[0]
+        return client.get_album_tracks(best_album.platform_id)
     except _PLATFORM_ERRORS as exc:
         logger.warning("album_tracklist strategy failed: %s", exc)
         return []
@@ -145,18 +180,19 @@ def _strategy_album_in_query(track, client) -> list[TrackResult]:
 
 
 def _strategy_artist_browse(track, client) -> list[TrackResult]:
-    """Browse artist discography for the right album."""
+    """Browse the best-matching artist's discography for the right album."""
     if not track.album:
         return []
     try:
         artists: list[ArtistResult] = client.search_artist(track.artist, limit=3)
-        if not artists:
+        artist = _best_artist(track, artists)
+        if artist is None:
             return []
-        albums: list[AlbumResult] = client.get_artist_albums(artists[0].platform_id, limit=20)
-        for album in albums:
-            if _album_name_matches(album.title, track.album):
-                return client.get_album_tracks(album.platform_id)
-        return []
+        albums: list[AlbumResult] = client.get_artist_albums(artist.platform_id, limit=20)
+        acceptable = _acceptable_albums(track, albums)
+        if not acceptable:
+            return []
+        return client.get_album_tracks(acceptable[0].platform_id)
     except _PLATFORM_ERRORS as exc:
         logger.warning("artist_browse strategy failed: %s", exc)
         return []
@@ -265,7 +301,7 @@ def reconcile_track(
             all_durations=all_durations,
         )
         s = min(100, s + duration_proximity_bonus(r.duration_seconds, track.duration_seconds))
-        ed = _edition_score(r.album or "")
+        ed = edition_cost(r.album or "")
         scored.append((s, ed, r))
 
     # Sort by score descending, then by edition preference (standard preferred).
@@ -344,34 +380,6 @@ def _quick_top_score(track, candidates: list[TrackResult]) -> int:
         if s > best:
             best = s
     return best
-
-
-def _edition_score(album_name: str) -> int:
-    """Lower score = preferred. Standard editions score 0."""
-    name_lower = album_name.lower()
-    score = 0
-    if "deluxe" in name_lower:
-        score += 10
-    if "expanded" in name_lower:
-        score += 10
-    if "anniversary" in name_lower:
-        score += 5
-    if "special edition" in name_lower:
-        score += 5
-    if "remaster" in name_lower:
-        score += 2
-    return score
-
-
-def _album_name_matches(platform_album: str, canonical_album: str) -> bool:
-    """Check if a platform album name matches the canonical album."""
-    norm_platform = normalize_title(platform_album)
-    norm_canonical = normalize_title(canonical_album)
-    if not norm_platform or not norm_canonical:
-        return False
-    if norm_platform == norm_canonical:
-        return True
-    return SequenceMatcher(None, norm_platform, norm_canonical).ratio() >= 0.75
 
 
 def _check_divergence(source_album: str | None, result_album: str) -> bool:

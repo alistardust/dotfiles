@@ -131,16 +131,20 @@ def _apply_stale_album(db: Database, client, item: PlanItem) -> None:
     except Exception as exc:  # noqa: BLE001 - surface as an apply failure
         raise ApplyError(f"album search failed: {exc}") from exc
 
-    from tuneshift.db import normalize_title
-    want = normalize_title(track.album)
+    from tuneshift.matching import classify_album_results, score_album_match
+
+    # Rank candidates by shared album-match distance (best/smallest first),
+    # then take the best acceptable candidate that carries a release year.
+    ranked = sorted(
+        (
+            (score_album_match(track.album, track.artist, res).total, res)
+            for res in results
+        ),
+        key=lambda pair: pair[0],
+    )
     match = None
-    for res in results:
-        if normalize_title(res.title) == want and res.release_year:
-            match = res
-            break
-    if match is None:
-        # Fall back to any result carrying a release year.
-        match = next((r for r in results if r.release_year), None)
+    if ranked and classify_album_results([d for d, _ in ranked]) != "not_found":
+        match = next((res for _, res in ranked if res.release_year), None)
     if match is None or not match.release_year:
         raise ApplyError("could not recover release year from album search")
 

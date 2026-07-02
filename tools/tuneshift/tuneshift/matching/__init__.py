@@ -15,6 +15,7 @@ Later chunks add ``similarity``, ``penalties``, ``engine``, ``confidence``,
 from tuneshift.matching.album import (
     ALBUM_THRESHOLDS,
     classify_album_results,
+    edition_cost,
     score_album_match,
 )
 from tuneshift.matching.artist import (
@@ -60,6 +61,7 @@ __all__ = [
     "preference_sort_bias",
     "score_album_match",
     "classify_album_results",
+    "edition_cost",
     "ALBUM_THRESHOLDS",
     "score_artist_match",
     "classify_artist_results",
