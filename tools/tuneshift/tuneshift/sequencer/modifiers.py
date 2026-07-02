@@ -1,8 +1,12 @@
 """Context-aware scoring modifiers for the sequence optimizer."""
 from collections import Counter
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from tuneshift.sequencer.metadata import TrackMetadata
+
+if TYPE_CHECKING:
+    from tuneshift.sequencer.intent import PlaylistIntent
 
 SCORE_FLOOR = 0.05
 

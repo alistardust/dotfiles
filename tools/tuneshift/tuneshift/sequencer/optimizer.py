@@ -1,6 +1,7 @@
 """Greedy nearest-neighbor plus 2-opt sequence optimizer."""
 import math
 import random
+from typing import TYPE_CHECKING
 
 from tuneshift.db import Database
 from tuneshift.sequencer.metadata import TrackMetadata, get_track_metadata_map
@@ -8,6 +9,9 @@ from tuneshift.sequencer.modifiers import SequenceContext, score_candidate
 from tuneshift.sequencer.narrative_parser import NarrativeSection
 from tuneshift.sequencer.profiles import get_profile
 from tuneshift.sequencer.scoring import score_pair
+
+if TYPE_CHECKING:
+    from tuneshift.sequencer.intent import PlaylistIntent
 
 
 def _target_energy(position_frac: float, arc: str) -> float | None:
