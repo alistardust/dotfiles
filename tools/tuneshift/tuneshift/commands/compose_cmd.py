@@ -162,9 +162,15 @@ def handle_compose(args, db: Database) -> int:
                 concept=concept,
                 exclude_ids=used_ids,
             )
-            for gap in gaps
+            for gap in result.gaps
             if gap.fill_spec is not None
         }
+        if not getattr(args, "analyze", False):
+            print(
+                "Note: --fill-gaps only suggests candidates, which are shown in "
+                "analysis mode. Re-run with --analyze to see them.",
+                file=sys.stderr,
+            )
 
     if getattr(args, "analyze", False):
         _render_analysis(result)
