@@ -179,6 +179,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_unmap.add_argument("--tidal", action="store_true", help="Remove Tidal mapping")
     p_unmap.add_argument("--ytmusic", action="store_true", help="Remove YouTube Music mapping")
 
+    # edit
+    p_edit = sub.add_parser("edit", help="Edit track metadata (title/artist/album)")
+    p_edit.add_argument("track_id", nargs="?", type=int, help="Canonical track id to edit")
+    p_edit.add_argument("--playlist", help="Playlist name (for batch --strip-album-from-title)")
+    p_edit.add_argument("--title", help="New track title")
+    p_edit.add_argument("--artist", help="New track artist")
+    p_edit.add_argument("--album", help="New track album")
+    p_edit.add_argument("--strip-album-from-title", action="store_true",
+                        help="Remove a trailing parenthetical that repeats the album name")
+    p_edit.add_argument("--dry-run", action="store_true", help="Show changes without writing")
+
     # goal
     p_goal = sub.add_parser("goal", help="Set or show playlist goal/theme")
     p_goal.add_argument("playlist", help="Playlist name")
@@ -636,6 +647,9 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "unmap":
             from tuneshift.commands.map_cmd import handle_unmap
             return handle_unmap(args, db)
+        elif args.command == "edit":
+            from tuneshift.commands.edit_cmd import handle_edit
+            return handle_edit(args, db)
         elif args.command == "goal":
             from tuneshift.commands.goal_cmd import handle_goal
             return handle_goal(args, db)

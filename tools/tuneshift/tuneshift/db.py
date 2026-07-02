@@ -11,6 +11,10 @@ from tuneshift.models import Album, Artist, PlatformMapping, Playlist, PlaylistP
 
 _SCHEMA_VERSION = 11
 
+# Columns editable via update_track. Constrains f-string interpolation in the
+# UPDATE statement to a fixed, safe set (no SQL identifier injection).
+_TRACK_EDITABLE_COLUMNS = frozenset({"title", "artist", "album"})
+
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS tracks (
     id INTEGER PRIMARY KEY,
@@ -204,6 +208,16 @@ CREATE TABLE IF NOT EXISTS batch_history (
     reverted_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_batch_history_playlist ON batch_history(playlist_id);
+
+CREATE TABLE IF NOT EXISTS track_edits (
+    id INTEGER PRIMARY KEY,
+    track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+    field TEXT NOT NULL,
+    old_value TEXT,
+    new_value TEXT,
+    edited_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_track_edits_track ON track_edits(track_id);
 
 CREATE TABLE IF NOT EXISTS collections (
     id INTEGER PRIMARY KEY,
@@ -703,6 +717,67 @@ class Database:
     def add_track(self, track: Track) -> int:
         """Insert a track and return its ID."""
         return self.insert_track(track)
+
+    def update_track(self, track_id: int, **fields: str | None) -> int:
+        """Update editable identity fields, recomputing normalized columns.
+
+        Only ``title``, ``artist`` and ``album`` may be edited. Normalized
+        lookup columns are recomputed for every changed field so identity
+        matching stays consistent, and each change is recorded in
+        ``track_edits`` for an audit trail. Returns the number of fields
+        that actually changed.
+        """
+        invalid = set(fields) - _TRACK_EDITABLE_COLUMNS
+        if invalid:
+            raise ValueError(f"Cannot edit track fields: {sorted(invalid)}")
+
+        track = self.get_track(track_id)
+        if track is None:
+            raise ValueError(f"Track id not found: {track_id}")
+
+        current = {"title": track.title, "artist": track.artist, "album": track.album}
+        changes = {k: v for k, v in fields.items() if v != current.get(k)}
+        if not changes:
+            return 0
+
+        set_clauses: list[str] = []
+        params: list[str | None] = []
+        for field, value in changes.items():
+            # field is constrained to the allowlist above, so interpolation is safe.
+            set_clauses.append(f"{field} = ?")
+            params.append(value)
+            if field == "title":
+                set_clauses.append("norm_title = ?")
+                params.append(normalize_title(value))
+            elif field == "artist":
+                set_clauses.append("norm_artist = ?")
+                params.append(normalize_artist(value) if value else None)
+            elif field == "album":
+                set_clauses.append("norm_album = ?")
+                params.append(normalize_title(value) if value else None)
+        set_clauses.append("updated_at = datetime('now')")
+
+        with self.conn:
+            self.conn.execute(
+                f"UPDATE tracks SET {', '.join(set_clauses)} WHERE id = ?",
+                (*params, track_id),
+            )
+            for field, value in changes.items():
+                self.conn.execute(
+                    "INSERT INTO track_edits (track_id, field, old_value, new_value) "
+                    "VALUES (?, ?, ?, ?)",
+                    (track_id, field, current.get(field), value),
+                )
+        return len(changes)
+
+    def get_track_edits(self, track_id: int) -> list[dict]:
+        """Return the recorded edit history for a track, newest first."""
+        rows = self.conn.execute(
+            "SELECT field, old_value, new_value, edited_at FROM track_edits "
+            "WHERE track_id = ? ORDER BY id DESC",
+            (track_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     def get_track(self, track_id: int) -> Track | None:
         """Fetch a track by ID."""
