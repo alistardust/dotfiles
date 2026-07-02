@@ -1,4 +1,5 @@
 """Track reconciliation: match canonical tracks to platform-specific IDs."""
+import logging
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 
@@ -11,6 +12,17 @@ from tuneshift.matching import (
     score_match_with_version,
 )
 from tuneshift.models import AlbumResult, ArtistResult, PlatformMapping, TrackResult
+
+logger = logging.getLogger(__name__)
+
+# Operational/platform errors that mean "this strategy could not produce
+# results" and should degrade to the next strategy. OSError covers
+# ConnectionError, TimeoutError, and requests.RequestException (which subclasses
+# IOError/OSError); RuntimeError covers not-logged-in and retry exhaustion;
+# ValueError covers response parsing failures. Programming errors
+# (AttributeError, TypeError, KeyError, IndexError, ...) are intentionally NOT
+# caught so genuine bugs propagate instead of silently becoming not_found.
+_PLATFORM_ERRORS = (RuntimeError, OSError, ValueError)
 
 
 @dataclass
@@ -46,7 +58,8 @@ def _strategy_album_lookup(track, client) -> list[TrackResult]:
             tracklist = client.get_album_tracks(album.platform_id)
             results.extend(tracklist)
         return results
-    except Exception:
+    except _PLATFORM_ERRORS as exc:
+        logger.warning("album_lookup strategy failed: %s", exc)
         return []
 
 
@@ -82,7 +95,8 @@ def _strategy_album_tracklist(track, client) -> list[TrackResult]:
         tracklist = client.get_album_tracks(best_album.platform_id)
 
         return tracklist
-    except Exception:
+    except _PLATFORM_ERRORS as exc:
+        logger.warning("album_tracklist strategy failed: %s", exc)
         return []
 
 
@@ -94,7 +108,8 @@ def _strategy_isrc(track, client) -> list[TrackResult]:
     try:
         result = client.search_isrc(track.isrc)
         return [result] if result else []
-    except Exception:
+    except _PLATFORM_ERRORS as exc:
+        logger.warning("isrc strategy failed: %s", exc)
         return []
 
 
@@ -102,7 +117,8 @@ def _strategy_title_artist(track, client) -> list[TrackResult]:
     """Standard title + artist text search."""
     try:
         return client.search_track(f"{track.title} {track.artist}", limit=10)
-    except Exception:
+    except _PLATFORM_ERRORS as exc:
+        logger.warning("title_artist strategy failed: %s", exc)
         return []
 
 
@@ -110,7 +126,8 @@ def _strategy_title_only(track, client) -> list[TrackResult]:
     """Broader title-only search."""
     try:
         return client.search_track(track.title, limit=10)
-    except Exception:
+    except _PLATFORM_ERRORS as exc:
+        logger.warning("title_only strategy failed: %s", exc)
         return []
 
 
@@ -120,7 +137,8 @@ def _strategy_album_in_query(track, client) -> list[TrackResult]:
         return []
     try:
         return client.search_track(f"{track.title} {track.album}", limit=10)
-    except Exception:
+    except _PLATFORM_ERRORS as exc:
+        logger.warning("album_in_query strategy failed: %s", exc)
         return []
 
 
@@ -137,7 +155,8 @@ def _strategy_artist_browse(track, client) -> list[TrackResult]:
             if _album_name_matches(album.title, track.album):
                 return client.get_album_tracks(album.platform_id)
         return []
-    except Exception:
+    except _PLATFORM_ERRORS as exc:
+        logger.warning("artist_browse strategy failed: %s", exc)
         return []
 
 
