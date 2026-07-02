@@ -71,8 +71,6 @@ def handle_collections(args, db: Database) -> int:
 
 def handle_folders(args, db: Database) -> int:
     """Manage Tidal folders."""
-    from tuneshift.commands.ingest_cmd import _load_client
-
     action = getattr(args, "action", None)
 
     if action == "list":
@@ -253,14 +251,13 @@ def _folders_create(db: Database, name: str) -> int:
     if not client:
         return 1
 
-    root = client._session.user.folder
     # tidalapi creates folders by adding items; we need to use the API directly
     # The folder API requires creating via the session
     try:
         import requests
         session = client._session
         resp = requests.put(
-            f"https://api.tidal.com/v2/my-collection/playlists/folders/create-folder",
+            "https://api.tidal.com/v2/my-collection/playlists/folders/create-folder",
             headers={"Authorization": f"Bearer {session.access_token}"},
             params={"folderId": "root", "name": name, "countryCode": session.country_code},
         )
@@ -483,7 +480,6 @@ def _folders_pull(db: Database) -> int:
 def _folders_status(db: Database) -> int:
     """Show local vs Tidal folder state."""
     all_playlists = db.list_playlists()
-    assigned = [(p, p.tidal_folder_id) for p in all_playlists if p.tidal_folder_id]
     unassigned = [p for p in all_playlists if not p.tidal_folder_id]
 
     folders = db.get_cached_tidal_folders()
