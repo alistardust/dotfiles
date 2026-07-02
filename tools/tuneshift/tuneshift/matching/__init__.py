@@ -23,6 +23,7 @@ from tuneshift.matching.track import (
     duration_proximity_bonus,
     score_match,
     score_match_with_version,
+    score_track_match,
     version_penalty,
 )
 
@@ -35,5 +36,6 @@ __all__ = [
     "duration_penalty",
     "duration_proximity_bonus",
     "score_match_with_version",
+    "score_track_match",
     "classify_results",
 ]

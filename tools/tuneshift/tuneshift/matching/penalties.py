@@ -153,18 +153,30 @@ def artist_signal(source_artist: str, result_artist: str, weights: Weights = DEF
     return SignalPenalty("artist", points, _bonus_penalty(points, budget), budget)
 
 
-def album_signal(source_album: str | None, result_album: str | None, weights: Weights = DEFAULT_WEIGHTS) -> SignalPenalty:
-    """Score album similarity. No signal unless a source album is present."""
+def album_signal(
+    source_album: str | None,
+    result_album: str | None,
+    weights: Weights = DEFAULT_WEIGHTS,
+    *,
+    source_present: bool = True,
+) -> SignalPenalty:
+    """Score album similarity.
+
+    ``source_present`` mirrors the legacy scorer's gate on the *raw* source
+    album being truthy: when False the signal is neutral (no source album to
+    compare). When True, inputs are expected already normalized and equal
+    strings score an exact match (including the empty/empty case, preserving
+    legacy behavior for albums whose names are pure edition tags).
+    """
     budget = weights.album_exact
-    if not source_album:
+    if not source_present:
         return SignalPenalty("album", 0, 0.0, budget)
-    src = source_album
+    src = source_album or ""
     res = result_album or ""
     if src == res:
         points = weights.album_exact
     elif src and res:
-        r = ratio(src, res)
-        points = weights.album_high if r >= weights.album_high_ratio else 0
+        points = weights.album_high if ratio(src, res) >= weights.album_high_ratio else 0
     else:
         points = 0
     return SignalPenalty("album", points, _bonus_penalty(points, budget), budget)

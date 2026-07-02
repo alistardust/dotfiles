@@ -1,25 +1,27 @@
 """Track scoring and confidence classification.
 
-Byte-parity note: this is the legacy scoring surface moved verbatim from the
-former ``matching.py``. The Distance engine (Chunk 2.3+) will back these
-functions while keeping the golden-parity snapshots green; until then the
-integer contributions here are the frozen ground truth.
+The public functions here are the historical scoring surface. They are now
+*backed by the shared matching engine* (`penalties`, `engine`, `confidence`)
+rather than carrying their own arithmetic, but they preserve byte-for-byte
+parity with the previous implementation — the golden-parity snapshots are the
+contract. ``score_track_match`` is the new engine-native entry point that
+returns a full :class:`~tuneshift.matching.engine.Distance` for callers that
+want the distance, breakdown and recommendation (not just an integer).
 """
-from difflib import SequenceMatcher
+from __future__ import annotations
 
-from tuneshift.matching.normalize import (
-    _ACOUSTIC_RE,
-    _COMPILATION_RE,
-    _DELUXE_RE,
-    _INSTRUMENTAL_RE,
-    _KARAOKE_RE,
-    _LIVE_RE,
-    _RADIO_EDIT_RE,
-    _REMASTER_RE,
-    _REMIX_RE,
-    _TRIBUTE_RE,
-    normalize_artist,
-    normalize_title,
+from tuneshift.matching.confidence import classify_scores
+from tuneshift.matching.engine import Distance
+from tuneshift.matching.normalize import normalize_artist, normalize_title
+from tuneshift.matching.penalties import (
+    DEFAULT_WEIGHTS,
+    Weights,
+    album_signal,
+    artist_signal,
+    duration_signal,
+    isrc_signal,
+    title_signal,
+    version_signals,
 )
 
 
@@ -30,8 +32,15 @@ def score_match(
     result_title: str | None = None,
     result_artist: str | None = None,
     result_album: str | None = None,
+    weights: Weights = DEFAULT_WEIGHTS,
 ) -> int:
-    """Score a search result against source metadata. Returns 0-100."""
+    """Score a search result against source metadata. Returns 0-100.
+
+    Accepts either six explicit fields or, when the three result fields are all
+    omitted, two track-like objects (``source_title`` = canonical,
+    ``source_artist`` = candidate); the object form additionally applies the
+    ISRC bonus.
+    """
     canonical = None
     candidate = None
     if result_title is None and result_artist is None and result_album is None:
@@ -55,138 +64,36 @@ def score_match(
     if result_title is None or result_artist is None or result_album is None:
         raise TypeError("score_match requires complete candidate metadata")
 
-    score = 0
-
-    norm_src_title = normalize_title(source_title)
-    norm_res_title = normalize_title(result_title)
-    if norm_src_title and norm_res_title:
-        if norm_src_title == norm_res_title:
-            score += 50
-        else:
-            ratio = SequenceMatcher(None, norm_src_title, norm_res_title).ratio()
-            if ratio > 0.85:
-                score += 30
-            elif ratio >= 0.70:
-                score += 15
-
-    norm_src_artist = normalize_artist(source_artist)
-    norm_res_artist = normalize_artist(result_artist)
-    if norm_src_artist and norm_res_artist:
-        if norm_src_artist == norm_res_artist:
-            score += 30
-        else:
-            ratio = SequenceMatcher(None, norm_src_artist, norm_res_artist).ratio()
-            if ratio > 0.85:
-                score += 25
-            elif ratio > 0.70:
-                score += 15
-            elif ratio > 0.50:
-                # Ambiguous zone: moderate penalty (probably different artist)
-                score -= 15
-            else:
-                # Different artist: heavy penalty proportional to dissimilarity
-                score -= int(30 * (1.0 - ratio * 2))
-
-    if source_album:
-        norm_src_album = normalize_title(source_album)
-        norm_res_album = normalize_title(result_album)
-        if norm_src_album == norm_res_album:
-            score += 20
-        elif norm_src_album and norm_res_album:
-            ratio = SequenceMatcher(None, norm_src_album, norm_res_album).ratio()
-            if ratio >= 0.75:
-                score += 10
+    title = title_signal(normalize_title(source_title), normalize_title(result_title), weights)
+    artist = artist_signal(normalize_artist(source_artist), normalize_artist(result_artist), weights)
+    album = album_signal(
+        normalize_title(source_album or ""),
+        normalize_title(result_album),
+        weights,
+        source_present=bool(source_album),
+    )
+    score = title.points + artist.points + album.points
 
     if canonical is not None and candidate is not None:
-        canonical_isrc = getattr(canonical, "isrc", None)
-        candidate_isrc = getattr(candidate, "isrc", None)
-        if canonical_isrc and candidate_isrc and canonical_isrc.upper() == candidate_isrc.upper():
-            score = min(100, score + 15)
+        isrc = isrc_signal(getattr(canonical, "isrc", None), getattr(candidate, "isrc", None), weights)
+        score = min(100, score + isrc.points)
 
     return min(100, score)
 
 
-def version_penalty(title: str, album: str) -> int:
-    """Return a penalty for undesirable track versions.
-
-    Penalties (cumulative):
-    - Karaoke: 50 (always rejected)
-    - Instrumental: 50 (always rejected)
-    - Live: 20
-    - Remix: 20
-    - Tribute/cover: 20
-    - Radio edit: 20
-    - Compilation: 15
-    - Acoustic/stripped: 10
-    - Remaster: 10
-    - Deluxe edition: 5
-    """
-    combined = f"{title} {album}"
-    penalty = 0
-
-    if _KARAOKE_RE.search(combined):
-        penalty += 50
-    if _INSTRUMENTAL_RE.search(combined):
-        penalty += 50
-    if _LIVE_RE.search(combined):
-        penalty += 20
-    if _REMIX_RE.search(combined):
-        penalty += 20
-    if _TRIBUTE_RE.search(combined):
-        penalty += 20
-    if _RADIO_EDIT_RE.search(combined):
-        penalty += 20
-    if _COMPILATION_RE.search(combined):
-        penalty += 15
-    if _ACOUSTIC_RE.search(combined):
-        penalty += 10
-    if _REMASTER_RE.search(combined):
-        penalty += 10
-    if _DELUXE_RE.search(combined):
-        penalty += 5
-
-    return penalty
+def version_penalty(title: str, album: str, weights: Weights = DEFAULT_WEIGHTS) -> int:
+    """Return the cumulative penalty for undesirable track versions (>= 0)."""
+    return -sum(s.points for s in version_signals(title, album, weights))
 
 
 def duration_penalty(
     candidate_duration: int | None,
     reference_duration: int | None = None,
     all_durations: list[int] | None = None,
+    weights: Weights = DEFAULT_WEIGHTS,
 ) -> int:
-    """Penalize tracks significantly longer OR shorter than expected.
-
-    Returns 0-20 penalty.
-    """
-    if candidate_duration is None:
-        return 0
-
-    if reference_duration is None and all_durations:
-        valid = [d for d in all_durations if d and d > 60]
-        if valid:
-            reference_duration = min(valid)
-
-    if reference_duration is None or reference_duration < 60:
-        return 0
-
-    ratio = candidate_duration / reference_duration
-
-    # Too long
-    if ratio > 2.0:
-        return 20
-    if ratio > 1.6:
-        return 15
-    if ratio > 1.4:
-        return 10
-
-    # Too short
-    if ratio < 0.5:
-        return 20
-    if ratio < 0.65:
-        return 15
-    if ratio < 0.75:
-        return 10
-
-    return 0
+    """Penalize tracks significantly longer OR shorter than expected (0-20)."""
+    return -duration_signal(candidate_duration, reference_duration, all_durations, weights).points
 
 
 def duration_proximity_bonus(
@@ -195,7 +102,9 @@ def duration_proximity_bonus(
 ) -> int:
     """Bonus 0-10 for duration proximity to canonical track.
 
-    Rewards candidates whose duration closely matches what we expect.
+    Rewards candidates whose duration closely matches what we expect. This is a
+    positive corroboration signal (not a penalty) applied by callers on top of
+    the base score, so it is kept distinct from the engine penalties.
     """
     if not candidate_duration or not canonical_duration:
         return 0
@@ -219,37 +128,81 @@ def score_match_with_version(
     result_duration: int | None = None,
     reference_duration: int | None = None,
     all_durations: list[int] | None = None,
+    weights: Weights = DEFAULT_WEIGHTS,
 ) -> int:
-    """Score a search result with version preference applied.
+    """Score a search result with version + duration preferences applied.
 
-    Combines similarity scoring from score_match with a penalty for
-    undesirable versions (live, remix, compilation, etc.) and a duration
-    penalty for extended mixes.
+    The base similarity score (with its 0-100 clamp) is computed first, then the
+    version and duration penalties are subtracted, matching the historical
+    staged clamping exactly.
     """
     base = score_match(
         source_title, source_artist, source_album,
         result_title, result_artist, result_album,
+        weights,
     )
-    penalty = version_penalty(result_title, result_album)
-    dur_pen = duration_penalty(result_duration, reference_duration, all_durations)
+    penalty = version_penalty(result_title, result_album, weights)
+    dur_pen = duration_penalty(result_duration, reference_duration, all_durations, weights)
     return max(0, min(100, base - penalty - dur_pen))
 
 
-def classify_results(scores: list[int]) -> str:
-    """Classify match confidence.
+def score_track_match(
+    source: object,
+    candidate: object,
+    *,
+    weights: Weights = DEFAULT_WEIGHTS,
+    all_durations: list[int] | None = None,
+) -> Distance:
+    """Engine-native track scorer: build the full Distance for one candidate.
 
-    Returns 'high', 'ambiguous', or 'not_found'.
-    High: top >= 80 AND second-best < 70 (clear gap).
-    Ambiguous: top >= 50 but no clear gap.
-    Not found: top < 50 or no results.
+    ``source`` and ``candidate`` are track-like objects exposing ``title``,
+    ``artist``, ``album``, ``isrc`` and ``duration_seconds``. Returns a
+    :class:`Distance` accumulating title/artist/album/isrc/version/duration
+    signals — callers derive ``.total`` (distance), ``.breakdown`` and a
+    recommendation. The legacy integer point sum is available via ``.points``.
     """
-    if not scores:
-        return "not_found"
-    top = max(scores)
-    if top < 50:
-        return "not_found"
-    sorted_desc = sorted(scores, reverse=True)
-    second = sorted_desc[1] if len(sorted_desc) > 1 else 0
-    if top >= 80 and second < 70:
-        return "high"
-    return "ambiguous"
+    src_album = getattr(source, "album", None)
+    cand_album = getattr(candidate, "album", None) or ""
+    distance = Distance()
+    distance.add(title_signal(
+        normalize_title(getattr(source, "title", "") or ""),
+        normalize_title(getattr(candidate, "title", "") or ""),
+        weights,
+    ))
+    distance.add(artist_signal(
+        normalize_artist(getattr(source, "artist", "") or ""),
+        normalize_artist(getattr(candidate, "artist", "") or ""),
+        weights,
+    ))
+    distance.add(album_signal(
+        normalize_title(src_album or ""),
+        normalize_title(cand_album),
+        weights,
+        source_present=bool(src_album),
+    ))
+    distance.add(isrc_signal(
+        getattr(source, "isrc", None),
+        getattr(candidate, "isrc", None),
+        weights,
+    ))
+    distance.extend(version_signals(
+        getattr(candidate, "title", "") or "",
+        cand_album,
+        weights,
+    ))
+    distance.add(duration_signal(
+        getattr(candidate, "duration_seconds", None),
+        getattr(source, "duration_seconds", None),
+        all_durations,
+        weights,
+    ))
+    return distance
+
+
+def classify_results(scores: list[int]) -> str:
+    """Classify match confidence. Returns 'high', 'ambiguous', or 'not_found'.
+
+    Delegates to :func:`tuneshift.matching.confidence.classify_scores` so there
+    is a single confidence implementation.
+    """
+    return classify_scores(scores)

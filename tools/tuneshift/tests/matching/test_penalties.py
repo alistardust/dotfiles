@@ -128,9 +128,18 @@ def test_album_miss():
 
 
 def test_album_no_source_no_signal():
-    s = pen.album_signal(None, "whatever")
+    s = pen.album_signal("", "whatever", source_present=False)
     assert s.points == 0
     assert s.penalty == 0.0  # absent source is neutral, not maximally bad
+
+
+def test_album_empty_source_present_matches_empty_result():
+    # Legacy quirk: raw source truthy but both normalize to "" -> exact bonus.
+    assert pen.album_signal("", "", source_present=True).points == 20
+
+
+def test_album_empty_source_present_nonempty_result():
+    assert pen.album_signal("", "some album", source_present=True).points == 0
 
 
 # --- isrc signal ---
