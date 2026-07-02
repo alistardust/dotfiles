@@ -5,6 +5,7 @@ import os
 import re
 import sqlite3
 from pathlib import Path
+from typing import Any
 
 from tuneshift.models import Album, Artist, PlatformMapping, Playlist, PlaylistPin, Track
 
