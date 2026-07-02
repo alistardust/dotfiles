@@ -1,27 +1,42 @@
 # Global Copilot Instructions
 
-<!-- BACK-SYNC NOTE: This is the generic dotfiles bootstrap. The live file at
-     ~/.copilot/copilot-instructions.md intentionally diverges in these ways:
-     - Adds "## Identity and Preferences" (Sam identity, Ali preferences)
-     - Adds "## Model Preference" (pins claude-sonnet-4.5 default; delegation table; never-GPT rule)
-     - Adds "## Context" (Iodine/SRE work context)
-     - Adds work-specific sections (Tachikoma, AWX, PagerDuty, Jira, etc.)
-     - Adds Superpowers skills section
-     Do NOT back-sync those sections into this file. -->
+# >>> dotfiles-managed (do not edit; setup.sh overwrites this block) <<<
 
-## Quality Rules
+## Coding Rules
 
-- Prioritize accuracy over speed.
-- Never guess. Only provide answers that can be verified.
-- Base answers on the latest stable version of the technology being discussed.
-- Perform an adversarial review on all code: actively seek edge cases, failure modes, and security issues.
-- Always trace through code against multiple input scenarios before declaring it correct.
-
+- Follow the naming conventions of the language and repository in use (e.g.,
+  `snake_case` for Python/Terraform/Ansible, `camelCase` for JS/Java, etc.).
+- Prefer concise, efficient code, but never at the expense of clarity or
+  correctness. When they conflict, clarity wins.
+- Only comment code that genuinely needs clarification; do not over-comment.
+- **NEVER use em-dashes (Unicode U+2014) anywhere**, not in code, comments,
+  strings, output, or documentation. Do not use `--` or ` - ` as prose separators
+  either; use a colon, comma, semicolon, or restructure the sentence. Hyphens in
+  compound words and `--` in code or CLI contexts (flag syntax, shell scripts) are
+  unaffected. This is an absolute rule.
+- **All source files must use ASCII-safe encoding.** Do not introduce any non-ASCII
+  characters (Unicode codepoints above U+007F) anywhere; this includes curly
+  quotes, smart apostrophes, non-breaking spaces, ellipses, and any other Unicode
+  typography. Use plain ASCII equivalents at all times.
+- **In Ansible and Terraform, do not use leading underscores on variable names.**
+  All variables share a flat namespace; `_var` implies private scope that does not
+  exist in these tools. Use descriptive `snake_case` names. In Python, leading
+  underscores on module-private helpers (`_helper`) are acceptable and conventional.
+- Never hardcode secrets, credentials, IPs, URLs, or environment-specific values.
+  Use variables, vault references, parameter files, or config systems appropriate
+  to the stack.
+- Write idempotent code where the stack supports it (Ansible, Terraform, scripts).
+  Operations must be safe to re-run without side effects.
+- Always handle failure cases explicitly: fail loudly with a clear error rather
+  than silently continuing in a bad state.
+- **Do not modify unrelated code.** When fixing a specific issue, stay in scope.
+  Do not refactor nearby code, rename other variables, or clean up while there
+  unless explicitly asked. Scope creep in automated changes is a reliability risk.
 
 ## Naming Conventions
 
-Variable, function, and class names describe **what the thing IS**, never what content it relates to,
-what project it belongs to, or what it came from.
+Variable, function, and class names describe **what the thing IS**, never what content
+it relates to, what project it belongs to, or what it came from.
 
 | Accept | Reject | Rule |
 |--------|--------|------|
@@ -36,7 +51,6 @@ what project it belongs to, or what it came from.
 - Only well-known abbreviations: `id`, `url`, `db`, `http`. Never invent new ones.
 - Negative booleans (`is_not_valid`): invert and use `is_invalid` instead.
 
-
 ## Error Handling
 
 - **Fail fast and loudly.** A crash immediately is better than silent data corruption hours later.
@@ -47,7 +61,6 @@ what project it belongs to, or what it came from.
 - **Handle errors at the layer that can meaningfully respond.** Do not catch what you cannot handle.
 - Distinguish: programmer errors (bugs, let crash, fix the code); operational errors (retry and alert);
   user input errors (validate early, return clear message).
-
 
 ## Logging
 
@@ -60,8 +73,7 @@ what project it belongs to, or what it came from.
 - Include a correlation/request ID on every log line in a request context.
 - Python: use `structlog`. Node: use `pino`.
 
-
-## Security
+## Security Blockers
 
 These are CI failures and immediate review rejects. No exceptions.
 
@@ -82,7 +94,6 @@ These are CI failures and immediate review rejects. No exceptions.
 Input validation: validate at every external boundary (API, CLI, queue). Whitelist what is allowed;
 reject everything else. Never trust client-supplied role or permission data.
 
-
 ## Function and Code Design
 
 - **Single Responsibility:** one function does one thing, completely.
@@ -94,8 +105,7 @@ reject everything else. Never trust client-supplied role or permission data.
   do both must be documented explicitly.
 - Do not comment *what* the code does; write code so clear it doesn't need that. Comment *why* for
   non-obvious decisions.
-- TODO comments must include an owner and a ticket: `# TODO(alice): remove after migration [PROJ-1234]`
-
+- TODO comments must include an owner and a ticket: `# TODO(owner): remove after migration [TICKET-123]`
 
 ## Architecture Principles
 
@@ -113,30 +123,6 @@ reject everything else. Never trust client-supplied role or permission data.
   visual similarity for duplication of knowledge.
 - **Dependency Inversion:** classes depend on abstractions (Protocols/ABCs/interfaces), not concrete
   implementations. Inject dependencies; do not construct them internally.
-
-
-## Testing
-
-- Test **behaviour**, not implementation. Tests that break on renaming a private method are wrong.
-- Test names must be sentences: `test_create_user_with_duplicate_email_raises_conflict_error`
-- **Arrange, Act, Assert** structure. One logical assertion per test.
-- Tests must be **deterministic and isolated**. Flakey tests and order-dependent tests are bugs.
-- Cover: all branching logic, all error paths, all boundary values, the happy path.
-- 80% line coverage is a floor, not a goal.
-
-
-## Git Hygiene
-
-- Commit messages follow **Conventional Commits**: `<type>[scope]: <description>`
-  - Types: `feat`, `fix`, `docs`, `refactor`, `test`, `chore`, `perf`, `ci`, `revert`
-  - Description: imperative mood, present tense, 72 characters or fewer
-  - Body explains *why*, not *what* (the diff shows what)
-- **Atomic commits:** one logical change per commit. Every commit must pass tests independently.
-- Never mix refactoring and feature changes in the same commit.
-- Never force-push to `main` or any shared branch.
-- PRs target 400 lines changed or fewer. Larger PRs must be split.
-- Branch naming: `feature/ID-description`, `fix/ID-description`, `chore/description`
-
 
 ## Python Standards
 
@@ -157,7 +143,6 @@ reject everything else. Never trust client-supplied role or permission data.
 - **Idioms:** `pathlib.Path` not `os.path`; `secrets` not `random` for security; f-strings not `%`
   or `.format()`; `isinstance()` not `type() ==`; `x is None` not `x == None`.
 
-
 ## JavaScript / Web Standards
 
 - `const` by default; `let` only when you know you'll reassign; `var` is forbidden.
@@ -169,136 +154,92 @@ reject everything else. Never trust client-supplied role or permission data.
 - No `innerHTML` with unsanitized content.
 - No inline event handlers (`onclick=`); use `addEventListener`.
 
+## Testing and Linting
 
-## Confirmation Requirement
+Use the testing and linting tools appropriate to the language and stack. **Linting
+is always required**: run it before declaring any task complete.
 
-When a task requires explicit approval, ask directly and wait for an unambiguous affirmative before
-acting. Valid approvals include: "yes", "go ahead", "proceed", "confirm", "approved", or a clear
-equivalent spoken in the current session in direct response to the question.
+| Stack      | Linting                                         | Testing                                               |
+|------------|-------------------------------------------------|-------------------------------------------------------|
+| Python     | `ruff` (lint + format); `mypy` if typed; `bandit` (security) | `pytest`; new behavior requires tests; bug fixes require regression tests |
+| Ansible    | `ansible-lint`                                  | `--check --diff` dry-run; molecule where a test suite exists |
+| Terraform  | `tflint`, `terraform validate`                  | `terraform plan`; terratest where a test suite exists |
+| Shell      | `shellcheck`                                    | Manual dry-run; test in non-prod first                |
+| YAML/JSON  | Schema validation where available               | N/A                                                   |
 
-The following do NOT count as approval:
-- Implied intent or contextual inference
-- Language that could reasonably be interpreted in more than one way
-- Approval given earlier in the conversation for a different step
+Run the existing test suite before and after any code change to establish a baseline
+and confirm nothing regressed. Do not declare a task done without verifying the
+expected outcome.
 
-Review and approval requests must be presented one at a time. Each request must cover one complete
-logical change set. Do not split a coherent edit into smaller fragments solely to reduce size. Do
-not combine unrelated edits into one request.
+**Tests assert intended behavior, not current behavior.** If a bug exists, the test must fail against the buggy code and pass only after the fix.
 
+If a repo has no linting setup, note it as tech debt and propose adding it, but
+do not block the current task on it.
 
-## Code Change Workflow
+## Quality Rules
 
-Before writing any non-trivial code change:
-1. **Propose the approach**: explain what will change and why. If multiple valid approaches exist
-   with meaningfully different tradeoffs, present them and get a decision before writing any code.
-2. **Make the change** after approach is confirmed.
-3. **Review hunk by hunk**: determine diff state and run the appropriate command:
-   - **Mixed** (both `git diff --cached` and `git diff` show output): review staged changes first.
-     After those are approved, ask whether to also stage and review the unstaged changes or leave
-     them for a separate commit.
-   - **Staged only** (`git diff --cached` shows output, `git diff` does not): review staged
-     changes. This is the source of truth for what will be committed.
-   - **Unstaged only** (`git diff` shows output, `git diff --cached` does not): review unstaged
-     changes, then stage them before commit.
-   For each hunk (one `@@` block), sequentially:
-   - Show the **raw unified diff** in a fenced code block. Include the diff file header
-     (`--- a/path`, `+++ b/path`) and the `@@` context line.
-   - Dispatch an automated code review of the hunk and post-change file content using the
-     hunk-reviewer skill prompt. If the review fails or times out, proceed without it: show
-     the diff and explanation, note "Review unavailable" in place of the summary.
-   - Below the diff, present: (a) the automated review summary (or "Review unavailable" on
-     failure); (b) what the code does technically; (c) why this change was made.
-   - Present approval choices for the hunk:
-     - Non-final hunk: Approve (next hunk), Skip this file, Request changes, Abort
-     - Final hunk: Approve (commit and push), Request changes, Abort
-     - If "Skip this file" is selected on the last remaining file, present the review summary
-       for skipped hunks, then ask: Commit as-is, Request changes, or Abort
-   - **"Request changes" handling:** the user describes what needs to change. Make the edit,
-     re-run `git diff` for the affected file, and re-present only the changed hunk(s) starting
-     from the rejected hunk. Previously approved hunks in other files are not re-reviewed.
-   - Do not proceed to the next hunk until the current one is approved.
-   - If "Skip this file" is selected, skip remaining hunks for that file. Run the automated
-     review on skipped hunks and present a one-line summary of findings (if any) before moving
-     to the next file.
-   - **Non-hunk diffs** (binary files, mode-only changes, pure renames without content changes,
-     submodule updates): present at file level. Show the diff header and a one-line description,
-     then offer the same approval choices. No automated review for non-hunk diffs. Renamed files
-     that also have content changes follow the normal hunk-by-hunk flow.
-   - **Trivial hunk grouping:** If multiple consecutive hunks in the same file are purely
-     whitespace, import reordering, or single-line version bumps, present them as a group with
-     a single approval.
-   - **Skip-review patterns** (auto-skip, still committed): files matching declared patterns
-     skip hunk review but are staged and committed normally. Default: none.
-   - **Never-commit patterns** (auto-skip, never staged): see "Commit safety" below.
-   - **Verbal override:** the user can say "skip the hunk review for this change" or "skip
-     review for this repo" at any point. A verbal override lasts for the current commit
-     operation only. It does not carry to subsequent commits unless the user says "skip review
-     for the rest of this session." To make a skip permanent, request it be added to the
-     skip-review patterns list.
-4. **Before `git commit`:** run `git status` to confirm the staged changes are exactly what was
-   reviewed: nothing extra, nothing missing.
-5. **Commit and push** only after approval is given.
-6. **Before `git push`:** run `git status` to confirm no uncommitted changes related to this
-   commit remain. Unrelated local WIP in the working tree does not block the push.
+- **Safety and security come first, above all else, including task completion.** An
+  answer that introduces a vulnerability, exposes PHI, PII, or other sensitive
+  data, or causes an unrecoverable
+  change is worse than no answer at all. Then accuracy, completeness, correctness.
+  Speed is last.
+- **Done means DONE.** Completion is feature completion and story completion, not
+  infrastructure milestones. A schema without enforcement is not done. A parser
+  without validation on real data is not done. An enrichment pipeline without the
+  reviewer that uses it is not done. When executing work, keep going until the
+  user-facing feature produces correct output on real data. Do not stop at
+  intermediate layers. Do not present plumbing as an accomplishment. Do not ask
+  for permission between layers when the direction is clear. Do not create
+  artificial checkpoints, MVPs, or half-measures. The question is always: "Does
+  the feature work for the user right now?" If no, keep building.
+- **Never guess.** Only provide answers that can be verified. Be ready to cite where
+  information came from when asked.
+- For anything version-sensitive (API syntax, tool behavior, config options, CLI
+  flags): verify against current documentation before answering. Training data goes
+  stale; docs do not.
+- **Verify before announcing.** Do not tell the user something succeeded until you have
+  confirmed the outcome: the exit code, API response, or resource state must confirm it.
+  "Completed successfully" is only valid after verification.
+- **Surface assumptions explicitly.** When an assumption significantly affects the
+  outcome (e.g., "I am treating this as the staging environment"), state it. Wrong
+  silent assumptions cause incidents.
+- When a request is ambiguous or has multiple valid approaches with meaningfully
+  different tradeoffs, ask before proceeding. State the options briefly, give a
+  recommendation, and let the user decide.
+- When proposing changes to production systems, shared infrastructure, or anything
+  that could be difficult or impossible to reverse, explicitly surface the risks,
+  blast radius, and rollback options before proceeding.
 
-Never run `git commit` or `git push` without completing step 3 in the current turn. Approval of a
-plan or approach does not authorize the commit.
+## Superpowers Skills
 
-### Commit safety
+You have Superpowers skills installed. Before any task, check if a relevant skill applies.
+If there is even a 1% chance a skill might be relevant, invoke it.
 
-**Never-commit patterns:** Do not `git add` or include in any commit:
-- `~/.copilot/session-state/**` or equivalent session directories
-- `.copilot/` directories within work repos
-- `docs/ai-*/`, `**/specs/**`, `**/plans/**` generated by AI planning tools
+Available skills: brainstorming, test-driven-development, systematic-debugging, writing-plans,
+executing-plans, subagent-driven-development, dispatching-parallel-agents, requesting-code-review,
+receiving-code-review, verification-before-completion, using-git-worktrees,
+finishing-a-development-branch, writing-skills, using-superpowers.
 
-Detection rule: before staging, check if any file path matches these patterns.
-If so, do not stage it.
+Priority order:
+1. Process skills first (brainstorming, debugging): these determine HOW to approach the task
+2. Implementation skills second: they guide execution
 
-**Force-add prohibition:** Never use `git add -f` or `git add --force` on files
-matched by `.gitignore`. If a file is gitignored, it stays gitignored. No exceptions.
+"Let's build X" -> brainstorming first, then implementation skills.
+"Fix this bug" -> systematic-debugging first, then domain-specific skills.
 
-**Pre-commit verification (step 4):** When running `git status` before commit,
-explicitly verify no never-commit files are staged. If any are found, unstage them
-(`git reset HEAD <path>`) and report before proceeding. This auto-unstage is a safety
-guardrail that prevents accidental commits and never removes data from the worktree.
+# <<< dotfiles-managed >>>
 
+# >>> local overrides (setup.sh never touches below) <<<
 
-## tmux Auto-Rename
-
-On every session start, if inside tmux (`$TMUX` is set), automatically rename
-the current window and pane to reflect what this session is about. Do this
-silently at the beginning of the session without announcing it.
-
-**How to rename:**
-```bash
-# Check for manual override first
-WINDOW_ID=$(tmux display-message -p '#{window_id}' 2>/dev/null)
-MANUAL=$(tmux show-environment -g "@manual_name_${WINDOW_ID}" 2>/dev/null)
-if [ "${MANUAL##*=}" = "1" ]; then exit 0; fi
-
-# Derive name from CWD + git context
-TOPLEVEL=$(git rev-parse --show-toplevel 2>/dev/null)
-if [ -n "$TOPLEVEL" ]; then
-  REPO=$(basename "$TOPLEVEL")
-  BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null)
-  TICKET=$(echo "$BRANCH" | grep -oE '[A-Z]{2,10}-[0-9]+' | head -1)
-  if [ -n "$TICKET" ]; then
-    NAME="${REPO}:${TICKET}"
-  else
-    NAME="$REPO"
-  fi
-else
-  NAME=$(basename "$PWD")
-fi
-tmux rename-window "$NAME" 2>/dev/null
-printf '\033]2;%s\033\\' "copilot" 2>/dev/null
-```
-
-**Rules:**
-- Run this once at session start, silently (no output to user)
-- If the work has an obvious theme (ticket, project), use that as the name
-- Set the pane title to "copilot" so it is distinguishable from other panes
-- Do not rename if a manual override is set: check
-  `tmux show-environment -g "@manual_name_$(tmux display-message -p '#{window_id}')" 2>/dev/null`
-  and skip if it returns a value ending in `=1`
-
+# Machine-local and personal instructions live below this line. setup.sh never
+# reads or overwrites anything here; the managed block above is the only part
+# this repo owns. Add your personal sections below, for example:
+#
+#   ## Identity and Preferences
+#   ## Model Preference        (pin your default model; settings.json is authoritative)
+#   ## Context
+#   ## Safety and Security     (work / PHI-specific rules)
+#   ## Commit and Branch Rules
+#   ## Output Directories
+#
+# Populate these per machine.
