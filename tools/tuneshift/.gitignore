@@ -2,3 +2,4 @@ tuneshift.egg-info/
 .venv/
 __pycache__/
 .tuneshift/
+tests/gold/BASELINE.json
