@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import shutil
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -12,7 +11,6 @@ from pathlib import Path
 from tuneshift.db import Database
 
 _PLAN_DIR = Path.home() / ".local" / "share" / "tuneshift" / "plans"
-_BACKUP_DIR = Path.home() / ".local" / "share" / "tuneshift" / "backups"
 
 # Regex for extracting featured artists from track titles
 _FEAT_EXTRACT_RE = None
@@ -164,30 +162,6 @@ class BatchPlan:
         return False
 
 
-def backup_db(db: Database) -> Path:
-    """Create a timestamped backup of the database before applying changes."""
-    _BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    backup_path = _BACKUP_DIR / f"tuneshift-{timestamp}.db"
-    src = Path(db.conn.execute("PRAGMA database_list").fetchone()[2])
-    shutil.copy2(src, backup_path)
-    return backup_path
-
-
-def restore_backup(db: Database) -> Path | None:
-    """Restore the most recent backup."""
-    if not _BACKUP_DIR.exists():
-        return None
-    backups = sorted(_BACKUP_DIR.glob("tuneshift-*.db"), reverse=True)
-    if not backups:
-        return None
-    latest = backups[0]
-    db_path = Path(db.conn.execute("PRAGMA database_list").fetchone()[2])
-    db.conn.close()
-    shutil.copy2(latest, db_path)
-    return latest
-
-
 def plan_dedupe(
     db: Database, playlist_id: int, cap: int
 ) -> list[PlanOperation]:
@@ -239,7 +213,7 @@ def plan_rm_artist(
         is_featured = any(f.lower() == target_lower for f in featured)
 
         if is_primary or is_featured:
-            credit = "primary artist" if is_primary else f"featured in title"
+            credit = "primary artist" if is_primary else "featured in title"
             ops.append(PlanOperation(
                 action="rm",
                 track_title=t.title,

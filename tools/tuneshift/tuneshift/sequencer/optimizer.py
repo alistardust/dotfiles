@@ -1,6 +1,7 @@
 """Greedy nearest-neighbor plus 2-opt sequence optimizer."""
 import math
 import random
+from typing import TYPE_CHECKING
 
 from tuneshift.db import Database
 from tuneshift.sequencer.metadata import TrackMetadata, get_track_metadata_map
@@ -8,6 +9,9 @@ from tuneshift.sequencer.modifiers import SequenceContext, score_candidate
 from tuneshift.sequencer.narrative_parser import NarrativeSection
 from tuneshift.sequencer.profiles import get_profile
 from tuneshift.sequencer.scoring import score_pair
+
+if TYPE_CHECKING:
+    from tuneshift.sequencer.intent import PlaylistIntent
 
 
 def _target_energy(position_frac: float, arc: str) -> float | None:
@@ -256,6 +260,67 @@ def _resolve_pins(
     return pinned_opener_id, pinned_closer_id, adjacency_groups, position_pins
 
 
+def _order_small_playlist(
+    tracks: list[TrackMetadata],
+    track_map: dict[int, TrackMetadata],
+    pinned_opener_id: int | None,
+    pinned_closer_id: int | None,
+    adjacency_groups: dict[str, list[int]],
+    position_pins: dict[int, int],
+) -> list[TrackMetadata]:
+    """Order a playlist of <=2 tracks while honoring pins.
+
+    A single track (or empty list) is returned unchanged. For two tracks the
+    resolution mirrors the >=3 path's precedence:
+
+    * position pins at the first/last index override opener/closer pins,
+    * an explicit opener/closer pin fixes that endpoint,
+    * otherwise a 2-track adjacency group's ``group_order`` sets the order,
+    * with no constraints, the input order is preserved.
+
+    Moment pins are a deliberate no-op at this size: ``_place_moments`` targets
+    the 55-75% climax region, which is empty for <=2 tracks. Conflicting pins
+    are never fatal.
+    """
+    track_count = len(tracks)
+    if track_count <= 1:
+        return list(tracks)
+
+    # Position pins at the endpoints override opener/closer, matching the
+    # precedence applied in the >=3 path.
+    if 0 in position_pins:
+        pinned_opener_id = position_pins.pop(0)
+    if (track_count - 1) in position_pins:
+        pinned_closer_id = position_pins.pop(track_count - 1)
+
+    # The same track pinned to both ends is impossible via the DB schema
+    # (UNIQUE + INSERT OR REPLACE); if it somehow occurs, keep it as the
+    # opener rather than raising.
+    if pinned_closer_id is not None and pinned_closer_id == pinned_opener_id:
+        pinned_closer_id = None
+
+    ids = [track.track_id for track in tracks]
+
+    # An endpoint pin fixes one slot; the other track takes the remaining one.
+    # Endpoint pins take precedence over adjacency here because a 2-track
+    # playlist has no interior region for an adjacency block to occupy.
+    if pinned_opener_id in track_map:
+        second = next(tid for tid in ids if tid != pinned_opener_id)
+        return [track_map[pinned_opener_id], track_map[second]]
+    if pinned_closer_id in track_map:
+        first = next(tid for tid in ids if tid != pinned_closer_id)
+        return [track_map[first], track_map[pinned_closer_id]]
+
+    # No endpoint pins: honor a 2-track adjacency group's ordering.
+    for group in adjacency_groups.values():
+        group_ids = [tid for tid in group if tid in track_map]
+        if len(group_ids) == 2 and set(group_ids) == set(ids):
+            return [track_map[group_ids[0]], track_map[group_ids[1]]]
+
+    # Nothing constrains the order: preserve the input order.
+    return list(tracks)
+
+
 def _select_endpoints(
     tracks: list[TrackMetadata],
     track_map: dict[int, TrackMetadata],
@@ -426,13 +491,20 @@ def optimize_sequence(
     narrative: str | None = None,
 ) -> list[TrackMetadata]:
     """Produce an optimized track sequence respecting pinned positions."""
-    if len(tracks) <= 2:
-        return list(tracks)
-
     track_count = len(tracks)
     track_map = {track.track_id: track for track in tracks}
 
     pinned_opener_id, pinned_closer_id, adjacency_groups, position_pins = _resolve_pins(pins, track_map)
+
+    # Playlists of <=2 tracks have no interior region to optimize, but pins
+    # must still be honored (opener/closer/position/adjacency). The greedy /
+    # 2-opt / distribute machinery below assumes >=3 tracks, so resolve the
+    # small case directly.
+    if track_count <= 2:
+        return _order_small_playlist(
+            tracks, track_map, pinned_opener_id, pinned_closer_id,
+            adjacency_groups, position_pins,
+        )
 
     # Narrative section-based sequencing: hard-place tracks into declared sections
     if arc == "narrative" and narrative:

@@ -19,14 +19,6 @@ def jaccard(set_a: list[str], set_b: list[str]) -> float:
     return intersection / union
 
 
-def theme_score(a: TrackMetadata, b: TrackMetadata) -> float:
-    """Score thematic or vibe similarity."""
-    themes_sim = jaccard(a.themes, b.themes)
-    vibes_sim = jaccard(a.vibes, b.vibes)
-    era_sim = jaccard(a.era_mood, b.era_mood)
-    return 0.40 * themes_sim + 0.40 * vibes_sim + 0.20 * era_sim
-
-
 def energy_score(a: TrackMetadata, b: TrackMetadata) -> float:
     """Score energy and valence continuity."""
     if a.energy is None or b.energy is None:
@@ -34,32 +26,6 @@ def energy_score(a: TrackMetadata, b: TrackMetadata) -> float:
     energy_delta = abs(a.energy - b.energy)
     valence_delta = abs((a.valence or 0.5) - (b.valence or 0.5))
     return max(0.0, 1.0 - 0.6 * energy_delta - 0.4 * valence_delta)
-
-
-def instrumentation_score(a: TrackMetadata, b: TrackMetadata) -> float:
-    """Score instrumentation and texture similarity."""
-    instrument_overlap = jaccard(a.instruments, b.instruments)
-
-    density_map = {"sparse": 0, "mid": 1, "dense": 2}
-    density_a = density_map.get(a.density or "mid", 1)
-    density_b = density_map.get(b.density or "mid", 1)
-    density_diff = abs(density_a - density_b)
-    if density_diff == 0:
-        density_score_value = 1.0
-    elif density_diff == 1:
-        density_score_value = 0.6
-    else:
-        density_score_value = 0.2
-
-    acousticness_a = a.acousticness if a.acousticness is not None else 0.5
-    acousticness_b = b.acousticness if b.acousticness is not None else 0.5
-    acousticness_score = 1.0 - abs(acousticness_a - acousticness_b)
-
-    return (
-        0.40 * instrument_overlap
-        + 0.35 * density_score_value
-        + 0.25 * acousticness_score
-    )
 
 
 def bpm_score(
@@ -80,49 +46,6 @@ def bpm_score(
     delta = abs(bpm_a - bpm_b)
     avg_bpm = (bpm_a + bpm_b) / 2
     return max(0.0, 1.0 - delta / (avg_bpm * tolerance))
-
-
-def mode_score(
-    mode_a: int | None,
-    mode_b: int | None,
-    valence_a: float | None = None,
-    valence_b: float | None = None,
-) -> float:
-    """Score mode compatibility."""
-    if mode_a is None or mode_b is None:
-        return 0.5
-    if mode_a == mode_b:
-        return 1.0
-    if mode_a == 0 and mode_b == 1:
-        if (valence_a or 0.5) < 0.4 and (valence_b or 0.5) < 0.4:
-            return 0.7
-    return 0.5
-
-
-def key_score(camelot_a: str | None, camelot_b: str | None) -> float:
-    """Score key compatibility via Camelot wheel."""
-    if not camelot_a or not camelot_b:
-        return 0.5
-    try:
-        num_a = int(camelot_a[:-1])
-        letter_a = camelot_a[-1]
-        num_b = int(camelot_b[:-1])
-        letter_b = camelot_b[-1]
-    except (ValueError, IndexError):
-        return 0.5
-
-    if num_a == num_b and letter_a == letter_b:
-        return 1.0
-    num_dist = min(abs(num_a - num_b), 12 - abs(num_a - num_b))
-    if num_dist == 1 and letter_a == letter_b:
-        return 1.0
-    if num_a == num_b and letter_a != letter_b:
-        return 1.0
-    if num_dist == 2:
-        return 0.7
-    if num_dist == 3:
-        return 0.4
-    return max(0.0, 1.0 - num_dist / 6.0)
 
 
 def duration_score(

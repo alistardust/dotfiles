@@ -15,7 +15,7 @@ from tuneshift.composer.models import (
     TransitionType,
 )
 from tuneshift.composer.parser import parse_enhanced_narrative
-from tuneshift.composer.reviewer import review_composition, review_playlist
+from tuneshift.composer.reviewer import review_composition
 from tuneshift.composer.sequencer import sequence_sections
 from tuneshift.models import Artist, PlaylistPin
 from tuneshift.sequencer.metadata import TrackMetadata

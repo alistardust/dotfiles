@@ -1,9 +1,8 @@
 """Tests for the share command."""
 from pathlib import Path
-from unittest.mock import patch
 import pytest
 from tuneshift.db import Database
-from tuneshift.commands.share_cmd import handle_share, PLATFORM_URL_TEMPLATES
+from tuneshift.commands.share_cmd import handle_share
 
 
 @pytest.fixture
@@ -51,9 +50,9 @@ class TestShareCommand:
         rc = handle_share(Args("Test Playlist", "urls"), db_with_links)
         assert rc == 0
         out = capsys.readouterr().out
-        lines = [l for l in out.strip().split("\n") if l]
+        lines = [line for line in out.strip().split("\n") if line]
         assert len(lines) == 3
-        assert all(l.startswith("https://") for l in lines)
+        assert all(line.startswith("https://") for line in lines)
 
     def test_not_found(self, db_with_links: Database, capsys) -> None:
         rc = handle_share(Args("Nonexistent"), db_with_links)
@@ -61,7 +60,7 @@ class TestShareCommand:
 
     def test_no_links(self, tmp_path: Path, capsys) -> None:
         db = Database(tmp_path / "test.db")
-        pid = db.create_playlist("Empty")
+        db.create_playlist("Empty")
         rc = handle_share(Args("Empty"), db)
         assert rc == 1
         assert "No platform links" in capsys.readouterr().out

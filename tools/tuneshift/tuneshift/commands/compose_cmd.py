@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from typing import TYPE_CHECKING
 
 from tuneshift.composer import compose_playlist
 from tuneshift.composer.candidate_finder import find_candidates
@@ -10,6 +11,9 @@ from tuneshift.composer.models import ComposeResult, PlaylistConcept
 from tuneshift.composer.parser import parse_enhanced_narrative
 from tuneshift.db import Database
 from tuneshift.sequencer.metadata import track_to_metadata
+
+if TYPE_CHECKING:
+    from tuneshift.models import Artist
 
 
 def _get_concept_store(db: Database, playlist_id: int) -> tuple[str, dict | None]:
@@ -123,7 +127,6 @@ def _render_composition(result: ComposeResult, sections: list) -> None:
 
 def _build_artist_lookup(db: Database, playlist_id: int) -> dict[str, "Artist"]:
     """Build a name->Artist lookup for all artists in a playlist."""
-    from tuneshift.models import Artist
     artists = db.get_artists_for_playlist(playlist_id)
     return {a.name.casefold(): a for a in artists}
 
@@ -162,9 +165,15 @@ def handle_compose(args, db: Database) -> int:
                 concept=concept,
                 exclude_ids=used_ids,
             )
-            for gap in gaps
+            for gap in result.gaps
             if gap.fill_spec is not None
         }
+        if not getattr(args, "analyze", False):
+            print(
+                "Note: --fill-gaps only suggests candidates, which are shown in "
+                "analysis mode. Re-run with --analyze to see them.",
+                file=sys.stderr,
+            )
 
     if getattr(args, "analyze", False):
         _render_analysis(result)

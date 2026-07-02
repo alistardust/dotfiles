@@ -1,5 +1,6 @@
 from tuneshift.composer.models import EnhancedSection, SectionAssignments, TransitionType
 from tuneshift.composer.sequencer import sequence_sections
+from tuneshift.models import PlaylistPin
 from tuneshift.sequencer.metadata import TrackMetadata
 
 
@@ -106,8 +107,6 @@ def test_sharp_cut_maximizes_contrast_at_boundary() -> None:
 
 
 # --- Pin support tests ---
-
-from tuneshift.models import PlaylistPin
 
 
 def test_opener_pin_moves_track_to_first() -> None:
