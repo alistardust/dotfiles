@@ -1428,6 +1428,27 @@ class Database:
         ).fetchone()
         return row["platform_playlist_id"] if row else None
 
+    def mark_playlist_synced(self, playlist_id: int, platform: str) -> None:
+        """Record that a playlist was successfully pushed to a platform.
+
+        Call this ONLY after the platform push has succeeded, so the stored
+        sync timestamp never claims a playlist is mirrored when the push failed.
+        """
+        self.conn.execute(
+            "UPDATE platform_playlists SET last_synced_at = datetime('now') "
+            "WHERE playlist_id = ? AND platform = ?",
+            (playlist_id, platform),
+        )
+        self.conn.commit()
+
+    def get_last_synced(self, playlist_id: int, platform: str) -> str | None:
+        """Return the last successful push timestamp, or None if never synced."""
+        row = self.conn.execute(
+            "SELECT last_synced_at FROM platform_playlists WHERE playlist_id = ? AND platform = ?",
+            (playlist_id, platform),
+        ).fetchone()
+        return row["last_synced_at"] if row else None
+
     def find_playlist_by_name(self, name: str) -> Playlist | None:
         """Find a playlist by exact name."""
         row = self.conn.execute(

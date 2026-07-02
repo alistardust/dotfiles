@@ -32,7 +32,11 @@ def _show_playlist_status(db, playlist) -> None:
     print(f"  {playlist.name}")
     print(f"    Tracks: {len(tracks)}")
     if platforms:
-        print(f"    Platforms: {', '.join(platforms)}")
+        print("    Platforms:")
+        for platform in platforms:
+            last_synced = db.get_last_synced(playlist.id, platform)
+            state = f"last synced {last_synced}" if last_synced else "push pending (never synced)"
+            print(f"      {platform}: {state}")
     else:
         print("    Platforms: (none linked)")
 

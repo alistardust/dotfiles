@@ -109,6 +109,7 @@ def _sync_add_to_platforms(db: Database, playlist_id: int, track_id: int, title:
             try:
                 client.add_tracks(platform_playlist_id, [result.platform_track_id])
                 print(f"  {platform_name}: added")
+                db.mark_playlist_synced(playlist_id, platform_name)
             except Exception as exc:
                 print(f"  {platform_name}: failed ({exc})", file=sys.stderr)
                 failures = True
