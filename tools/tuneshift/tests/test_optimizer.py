@@ -260,3 +260,66 @@ class TestOptimizeSequenceIntegration:
         idx_4 = ids.index(4)
         idx_5 = ids.index(5)
         assert idx_5 == idx_4 + 1
+
+
+class TestSmallPlaylistPins:
+    """<=2-track playlists must still honor pins (regression: the old early
+    return `if len(tracks) <= 2: return list(tracks)` bypassed pin logic)."""
+
+    def _pair(self):
+        return [_make_track(1), _make_track(2)]
+
+    def test_no_pins_preserves_input_order(self):
+        result = optimize_sequence(self._pair(), {})
+        assert [t.track_id for t in result] == [1, 2]
+
+    def test_opener_pin_moves_track_to_front(self):
+        result = optimize_sequence(self._pair(), {}, pins=[_make_pin(2, "opener")])
+        assert [t.track_id for t in result] == [2, 1]
+
+    def test_closer_pin_moves_track_to_end(self):
+        result = optimize_sequence(self._pair(), {}, pins=[_make_pin(1, "closer")])
+        assert [t.track_id for t in result] == [2, 1]
+
+    def test_position_pin_at_index_zero_overrides_order(self):
+        result = optimize_sequence(
+            self._pair(), {}, pins=[_make_pin(2, "position", group_order=0)]
+        )
+        assert [t.track_id for t in result] == [2, 1]
+
+    def test_position_pin_at_last_index_overrides_order(self):
+        result = optimize_sequence(
+            self._pair(), {}, pins=[_make_pin(1, "position", group_order=1)]
+        )
+        assert [t.track_id for t in result] == [2, 1]
+
+    def test_adjacency_group_order_sets_order(self):
+        pins = [
+            _make_pin(2, "anchor", group_id="g", group_order=0),
+            _make_pin(1, "anchor", group_id="g", group_order=1),
+        ]
+        result = optimize_sequence(self._pair(), {}, pins=pins)
+        assert [t.track_id for t in result] == [2, 1]
+
+    def test_position_pin_overrides_conflicting_opener(self):
+        # Position pin at index 0 must win over an opener pin on the other track.
+        pins = [_make_pin(1, "opener"), _make_pin(2, "position", group_order=0)]
+        result = optimize_sequence(self._pair(), {}, pins=pins)
+        assert [t.track_id for t in result] == [2, 1]
+
+    def test_moment_pin_is_noop_for_two_tracks(self):
+        result = optimize_sequence(self._pair(), {}, pins=[_make_pin(1, "moment")])
+        assert [t.track_id for t in result] == [1, 2]
+
+    def test_single_track_returns_unchanged(self):
+        result = optimize_sequence([_make_track(1)], {}, pins=[_make_pin(1, "closer")])
+        assert [t.track_id for t in result] == [1]
+
+    def test_empty_returns_empty(self):
+        assert optimize_sequence([], {}) == []
+
+    def test_every_track_appears_exactly_once(self):
+        pins = [_make_pin(2, "opener"), _make_pin(1, "closer")]
+        result = optimize_sequence(self._pair(), {}, pins=pins)
+        assert sorted(t.track_id for t in result) == [1, 2]
+        assert [t.track_id for t in result] == [2, 1]
