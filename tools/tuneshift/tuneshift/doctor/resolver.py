@@ -48,7 +48,11 @@ def resolve_item(db: Database, client, item: PlanItem, *,
         return item
 
     if item.issue in _RECONCILE_ISSUES:
-        result = reconcile_track(db, item.track_id, client, force=True)
+        _playlist = db.find_playlist_by_name(item.playlist) if item.playlist else None
+        result = reconcile_track(
+            db, item.track_id, client, force=True,
+            playlist_id=_playlist.id if _playlist else None,
+        )
         if result.confidence == "not_found" or not result.platform_track_id:
             item.resolution = "manual"
             item.confidence = 0

@@ -1,0 +1,101 @@
+"""Integration tests: per-playlist preferences bias reconciliation ordering."""
+from pathlib import Path
+from unittest.mock import MagicMock
+
+from tuneshift.db import Database
+from tuneshift.models import Track, TrackResult
+from tuneshift.reconcile import reconcile_track
+
+
+def _client(results: list[TrackResult]) -> MagicMock:
+    client = MagicMock()
+    client.platform_name = "spotify"
+    client.search_isrc.return_value = None
+    client.search_track.return_value = results
+    client.search_album.return_value = []
+    client.get_album_tracks.return_value = []
+    client.search_artist.return_value = []
+    client.get_artist_albums.return_value = []
+    return client
+
+
+class TestGlobalPreferencesRoundTrip:
+    def test_set_get_global_preferences(self, tmp_db: Path) -> None:
+        db = Database(tmp_db)
+        assert db.get_global_preferences() is None
+        db.set_global_preferences({"avoid": ["remix"]})
+        assert db.get_global_preferences() == {"avoid": ["remix"]}
+
+    def test_overwrite_global_preferences(self, tmp_db: Path) -> None:
+        db = Database(tmp_db)
+        db.set_global_preferences({"avoid": ["remix"]})
+        db.set_global_preferences({"avoid": ["live"]})
+        assert db.get_global_preferences() == {"avoid": ["live"]}
+
+    def test_clear_global_preferences(self, tmp_db: Path) -> None:
+        db = Database(tmp_db)
+        db.set_global_preferences({"avoid": ["remix"]})
+        db.set_global_preferences(None)
+        assert db.get_global_preferences() is None
+
+
+class TestPlaylistPreferenceReRank:
+    """Preferences bias candidate *ordering* within a scoring band.
+
+    In Chunk 2 this is a bounded tie-break: among candidates that score equally
+    under default scoring, a preferred keyword decides the pick. Overriding a
+    version penalty (e.g. forcing a live take to beat the studio master on a
+    live-recordings playlist) is version-intent semantics owned by Chunk 4; the
+    default-preferences path here stays byte-parity with the pre-preferences
+    engine.
+    """
+
+    def _setup(self, tmp_db: Path) -> tuple[Database, int, int]:
+        db = Database(tmp_db)
+        track_id = db.add_track(
+            Track(title="Song", artist="Artist", album="Neutral Album")
+        )
+        playlist_id = db.create_playlist("A Playlist")
+        db.add_track_to_playlist(playlist_id, track_id, 0)
+        return db, track_id, playlist_id
+
+    def _tied_candidates(self) -> list[TrackResult]:
+        # Identical title/artist; albums both fully mismatch the source album
+        # and carry no version/edition keywords -> identical default score.
+        return [
+            TrackResult(platform_id="alpha", title="Song", artist="Artist",
+                        album="Alpha"),
+            TrackResult(platform_id="bravo", title="Song", artist="Artist",
+                        album="Bravo"),
+        ]
+
+    def test_default_preferences_preserve_insertion_order_on_a_tie(
+        self, tmp_db: Path
+    ) -> None:
+        db, track_id, playlist_id = self._setup(tmp_db)
+        # No preferences set -> default cascade -> byte-parity ordering: the
+        # first-inserted candidate wins the tie.
+        result = reconcile_track(
+            db, track_id, _client(self._tied_candidates()), playlist_id=playlist_id
+        )
+        assert result.platform_track_id == "alpha"
+
+    def test_preferred_keyword_breaks_the_tie(self, tmp_db: Path) -> None:
+        db, track_id, playlist_id = self._setup(tmp_db)
+        db.set_preferences(playlist_id, {"prefer": ["bravo"]})
+        result = reconcile_track(
+            db, track_id, _client(self._tied_candidates()), playlist_id=playlist_id
+        )
+        assert result.platform_track_id == "bravo"
+
+    def test_playlist_id_none_ignores_configured_preferences(
+        self, tmp_db: Path
+    ) -> None:
+        db, track_id, playlist_id = self._setup(tmp_db)
+        # Preferences exist but no playlist_id is passed -> not consulted ->
+        # default (insertion-order) tie-break stands.
+        db.set_preferences(playlist_id, {"prefer": ["bravo"]})
+        result = reconcile_track(
+            db, track_id, _client(self._tied_candidates()), playlist_id=None
+        )
+        assert result.platform_track_id == "alpha"

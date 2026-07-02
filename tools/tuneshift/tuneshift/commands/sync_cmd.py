@@ -75,6 +75,7 @@ def _sync_one(db, playlist, platforms, args) -> int:
                 db, track.id, client,
                 force=getattr(args, "reconcile", False),
                 cached_mapping=cached_mappings.get(track.id),
+                playlist_id=playlist.id,
             )
 
             if result.confidence == "not_found":

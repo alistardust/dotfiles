@@ -17,6 +17,12 @@ from tuneshift.matching.normalize import (
     normalize_artist,
     normalize_title,
 )
+from tuneshift.matching.preferences import (
+    Preferences,
+    VersionPreferences,
+    preference_sort_bias,
+    resolve_preferences,
+)
 from tuneshift.matching.track import (
     classify_results,
     duration_penalty,
@@ -38,4 +44,8 @@ __all__ = [
     "score_match_with_version",
     "score_track_match",
     "classify_results",
+    "Preferences",
+    "VersionPreferences",
+    "resolve_preferences",
+    "preference_sort_bias",
 ]

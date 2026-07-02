@@ -9,6 +9,8 @@ from tuneshift.matching import (
     duration_proximity_bonus,
     is_remaster,
     normalize_title,
+    preference_sort_bias,
+    resolve_preferences,
     score_match_with_version,
 )
 from tuneshift.models import AlbumResult, ArtistResult, PlatformMapping, TrackResult
@@ -178,13 +180,27 @@ def reconcile_track(
     client: object,
     force: bool = False,
     cached_mapping: PlatformMapping | None = None,
+    playlist_id: int | None = None,
 ) -> ReconcileResult:
-    """Reconcile a canonical track to a platform ID using multi-strategy cascade."""
+    """Reconcile a canonical track to a platform ID using multi-strategy cascade.
+
+    When ``playlist_id`` is given, per-playlist version preferences cascade over
+    the account-wide defaults and bias candidate ordering. With no configured
+    preferences (or ``playlist_id=None``) the cascade resolves to the built-in
+    defaults, which is a strict no-op — identical to the pre-preferences
+    behaviour.
+    """
     track = db.get_track(track_id)
     if track is None:
         return ReconcileResult(confidence="not_found")
 
     platform_name = client.platform_name
+
+    prefs = resolve_preferences(
+        db.get_global_preferences(),
+        db.get_preferences(playlist_id) if playlist_id is not None else None,
+        None,
+    )
 
     # Cache/mapping checks
     if not force:
@@ -252,8 +268,16 @@ def reconcile_track(
         ed = _edition_score(r.album or "")
         scored.append((s, ed, r))
 
-    # Sort by score descending, then by edition preference (standard preferred)
-    scored.sort(key=lambda x: (-x[0], x[1]))
+    # Sort by score descending, then by edition preference (standard preferred).
+    # Per-playlist preferences bias only the ordering; the reported score and
+    # confidence are untouched. With default preferences the bias is 0, so the
+    # ordering is byte-identical to the pre-preferences behaviour.
+    scored.sort(
+        key=lambda x: (
+            -(x[0] + preference_sort_bias(x[2].album or "", prefs)),
+            x[1],
+        )
+    )
     scores = [s for s, _, _ in scored]
     confidence = classify_results(scores)
 

@@ -1597,6 +1597,25 @@ class Database:
         row = self.conn.execute("SELECT preferences FROM playlists WHERE id = ?", (playlist_id,)).fetchone()
         return json.loads(row[0]) if row and row[0] else None
 
+    def set_global_preferences(self, prefs: dict | None) -> None:
+        """Set the account-wide default preferences (schema_meta key/value)."""
+        if prefs:
+            self.conn.execute(
+                "INSERT INTO schema_meta (key, value) VALUES ('global_preferences', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (json.dumps(prefs),),
+            )
+        else:
+            self.conn.execute("DELETE FROM schema_meta WHERE key = 'global_preferences'")
+        self.conn.commit()
+
+    def get_global_preferences(self) -> dict | None:
+        """Get the account-wide default preferences, or None if unset."""
+        row = self.conn.execute(
+            "SELECT value FROM schema_meta WHERE key = 'global_preferences'"
+        ).fetchone()
+        return json.loads(row[0]) if row and row[0] else None
+
     def set_playlist_type(self, playlist_id: int, playlist_type: str | None) -> None:
         """Set the playlist type."""
         self.conn.execute("UPDATE playlists SET playlist_type = ? WHERE id = ?", (playlist_type, playlist_id))
