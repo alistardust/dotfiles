@@ -17,9 +17,8 @@ from tuneshift.models import Track
 
 @pytest.fixture(autouse=True)
 def _isolate_plan_store(tmp_path, monkeypatch):
-    """Redirect plan/backup dirs so tests never touch ~/.local/share."""
+    """Redirect plan dir so tests never touch ~/.local/share."""
     monkeypatch.setattr(batch_cmd, "_PLAN_DIR", tmp_path / "plans")
-    monkeypatch.setattr(batch_cmd, "_BACKUP_DIR", tmp_path / "backups")
 
 
 def _batch_args(**over):
