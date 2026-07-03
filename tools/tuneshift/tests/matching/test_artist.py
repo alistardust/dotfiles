@@ -22,6 +22,20 @@ class TestScoreArtistMatch:
         bad = score_artist_match("Radiohead", _artist("Coldplay"))
         assert bad.total > good.total
 
+    def test_collaborator_order_independent(self):
+        # Same collaborators, different order, must score as good as an exact
+        # match — reordering a credit is not a different artist.
+        reordered = score_artist_match(
+            "Jay-Z & Alicia Keys", _artist("Alicia Keys & Jay-Z")
+        )
+        exact = score_artist_match(
+            "Jay-Z & Alicia Keys", _artist("Jay-Z & Alicia Keys")
+        )
+        assert reordered.total == exact.total
+
+    def test_accent_folded_name_matches(self):
+        assert score_artist_match("Beyonce", _artist("Beyoncé")).total < 0.05
+
     def test_missing_enrichment_is_neutral(self):
         d = score_artist_match("Radiohead", _artist("Radiohead"))
         weighted = {s.name for s in d.signals if s.weight > 0}

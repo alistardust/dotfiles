@@ -19,7 +19,7 @@ from tuneshift.matching.engine import (
     RecommendationThresholds,
     recommend,
 )
-from tuneshift.matching.normalize import normalize_artist
+from tuneshift.matching.normalize import artist_set_overlap, normalize_artist
 from tuneshift.matching.penalties import SignalPenalty
 from tuneshift.matching.similarity import ratio
 
@@ -44,7 +44,15 @@ def _name_signal(source_name: str, candidate_name: str) -> SignalPenalty:
     cand = normalize_artist(candidate_name)
     if not src or not cand:
         return SignalPenalty("artist:name", 0, 1.0, _W_NAME)
-    penalty = 0.0 if src == cand else 1.0 - ratio(src, cand)
+    if src == cand:
+        return SignalPenalty("artist:name", 0, 0.0, _W_NAME)
+    # Use the stronger of fuzzy string similarity and order-independent
+    # multi-artist set overlap, so "Jay-Z & Alicia Keys" matches
+    # "Alicia Keys & Jay-Z" without the reordering tanking the score, while
+    # single-artist scoring is unchanged (disjoint singles overlap to 0.0, so
+    # the fuzzy ratio wins).
+    similarity = max(ratio(src, cand), artist_set_overlap(source_name, candidate_name))
+    penalty = 1.0 - similarity
     return SignalPenalty("artist:name", _signed_points(penalty, _W_NAME), penalty, _W_NAME)
 
 

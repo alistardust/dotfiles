@@ -22,10 +22,14 @@ NORMALIZE_TITLE = [
     ('Track [ft. Someone]', 'track'),
     ('Song feat. Guest', 'song'),
     ('The Song', 'the song'),
-    ('Café del Mar', 'café del mar'),
+    # RE-BASELINED (Chunk 8 i18n): accent folding now maps 'é'->'e' so
+    # accented and unaccented spellings collide (recall win, human-reviewed).
+    ('Café del Mar', 'cafe del mar'),
     ('“Quoted” Title…', '"quoted" title...'),
     ('', ''),
-    ('Anniversary (40th Anniversary Edition)', 'anniversary (40th anniversary edition)'),
+    # RE-BASELINED (Chunk 8 i18n): ordinal-anniversary editions are now
+    # stripped like other edition parentheticals (human-reviewed).
+    ('Anniversary (40th Anniversary Edition)', 'anniversary'),
     ('Mix (2019 Remix)', 'mix'),
     ("Taylor's Version (Taylor's Version)", "taylor's version"),
 ]
@@ -42,7 +46,8 @@ NORMALIZE_ARTIST = [
     ('Artist (feat. Guest)', 'artist'),
     ('', ''),
     ('A$AP Rocky', 'a$ap rocky'),
-    ('Beyoncé', 'beyoncé'),
+    # RE-BASELINED (Chunk 8 i18n): accent folding maps 'é'->'e'.
+    ('Beyoncé', 'beyonce'),
 ]
 
 IS_REMASTER = [

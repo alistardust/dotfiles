@@ -47,9 +47,12 @@ from tuneshift.matching.review import (
     review_kind,
 )
 from tuneshift.matching.normalize import (
+    artist_set_overlap,
+    fold_accents,
     is_remaster,
     normalize_artist,
     normalize_title,
+    split_artists,
 )
 from tuneshift.matching.preferences import (
     Preferences,
@@ -80,6 +83,9 @@ __all__ = [
     "normalize_title",
     "normalize_artist",
     "is_remaster",
+    "fold_accents",
+    "split_artists",
+    "artist_set_overlap",
     "score_match",
     "version_penalty",
     "duration_penalty",

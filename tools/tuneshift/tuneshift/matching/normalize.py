@@ -13,6 +13,7 @@ import unicodedata
 _EDITION_PARENS_RE = re.compile(
     r"\s*\("
     r"(?:\d{4}\s*)?"
+    r"(?:\d+(?:st|nd|rd|th)\s+)?"
     r"(?:Remastered|Remaster|Deluxe Edition|Deluxe Version|Deluxe|"
     r"Digital Deluxe|Mono|Stereo|"
     r"Expanded Edition|Expanded|Anniversary Edition|Anniversary|"
@@ -34,9 +35,69 @@ _PUNCT_NORMALIZE = str.maketrans({
     "\u2018": "'", "\u2019": "'",
     "\u201c": '"', "\u201d": '"',
     "\u2026": "...",
+    "\u2013": "-", "\u2014": "-", "\u2015": "-",  # en/em/horizontal dashes
+    "\u00a0": " ",  # non-breaking space
 })
+# Expand "Pt." / "Pt" part-abbreviations to "Part" so multi-part titles match.
+# Word-boundaried on both sides so "Ptolemy" is untouched.
+_PART_ABBREV_RE = re.compile(r"\bpt\.?(?=\s|$)", re.IGNORECASE)
+# Latin combining diacritical marks only (U+0300-U+036F). Deliberately excludes
+# CJK/kana combining marks (e.g. Japanese dakuten U+3099-U+309A) so folding never
+# alters a non-Latin script.
+_LATIN_COMBINING_RE = re.compile(r"[\u0300-\u036f]")
+# Separators that join collaborating artists in a single credit string.
+_ARTIST_SPLIT_RE = re.compile(
+    r"\s*(?:,|&|\band\b|\bfeaturing\b|\bfeat\.?(?=\s)|\bft\.?(?=\s)|"
+    r"\bwith\b|\bx\b|\u00d7|/)\s*",
+    re.IGNORECASE,
+)
 _BOUNDARY_PUNCT_RE = re.compile(r"(?:^[^\w]+|[^\w]+$)")  # Leading/trailing non-word chars
 _STANDALONE_PUNCT_RE = re.compile(r"\s+[^\w\s]+\s+")  # Standalone punctuation between words
+
+
+def fold_accents(text: str) -> str:
+    """Strip Latin diacritics while leaving non-Latin scripts intact.
+
+    Decomposes to NFD, removes only the Latin combining-mark range
+    (U+0300-U+036F), and recomposes. "Beyoncé" -> "Beyonce" and "Motörhead" ->
+    "Motorhead", but CJK, kana (including dakuten-bearing characters like "が"),
+    and Hangul pass through unchanged — we never transliterate or romanize a
+    non-Latin script.
+    """
+    if not text:
+        return ""
+    decomposed = unicodedata.normalize("NFD", text)
+    stripped = _LATIN_COMBINING_RE.sub("", decomposed)
+    return unicodedata.normalize("NFC", stripped)
+
+
+def split_artists(name: str) -> set[str]:
+    """Split a multi-artist credit into a set of normalized artist tokens.
+
+    "Jay-Z & Alicia Keys" and "Alicia Keys & Jay-Z" both yield
+    {"jay-z", "alicia keys"}, so collaborator order does not matter when
+    comparing. Splits on commas, ampersands, "and", feat/ft/featuring/with, "x",
+    "\u00d7", and slashes. Each token is accent-folded and casefolded.
+    """
+    if not name:
+        return set()
+    folded = fold_accents(name).translate(_PUNCT_NORMALIZE)
+    parts = _ARTIST_SPLIT_RE.split(folded)
+    return {p.strip().casefold() for p in parts if p and p.strip()}
+
+
+def artist_set_overlap(source_name: str, candidate_name: str) -> float:
+    """Fraction of the source's artists also credited on the candidate.
+
+    Returns overlap of the source artist set with the candidate set, in
+    [0.0, 1.0]. 1.0 means every source artist appears on the candidate
+    regardless of order; 0.0 means no shared artist. Order-independent.
+    """
+    src = split_artists(source_name)
+    cand = split_artists(candidate_name)
+    if not src or not cand:
+        return 0.0
+    return len(src & cand) / len(src)
 
 
 def normalize_title(title: str) -> str:
@@ -44,7 +105,9 @@ def normalize_title(title: str) -> str:
     if not title:
         return ""
     title = unicodedata.normalize("NFC", title)
+    title = fold_accents(title)
     title = title.translate(_PUNCT_NORMALIZE)
+    title = _PART_ABBREV_RE.sub("Part", title)
     title = _EDITION_PARENS_RE.sub("", title)
     title = _FEAT_PAREN_RE.sub("", title)
     title = _FEAT_BARE_RE.sub("", title)
@@ -60,6 +123,7 @@ def normalize_artist(artist: str) -> str:
     if not artist:
         return ""
     artist = unicodedata.normalize("NFC", artist)
+    artist = fold_accents(artist)
     artist = artist.translate(_PUNCT_NORMALIZE)
     artist = _FEAT_PAREN_RE.sub("", artist)
     artist = _FEAT_BARE_RE.sub("", artist)
