@@ -23,6 +23,12 @@ from tuneshift.matching.artist import (
     classify_artist_results,
     score_artist_match,
 )
+from tuneshift.matching.audit import (
+    Availability,
+    MatchAudit,
+    ReasonCode,
+    RejectedCandidate,
+)
 from tuneshift.matching.normalize import (
     is_remaster,
     normalize_artist,
@@ -80,4 +86,8 @@ __all__ = [
     "VersionVerdict",
     "infer_version",
     "compare_version",
+    "Availability",
+    "ReasonCode",
+    "RejectedCandidate",
+    "MatchAudit",
 ]

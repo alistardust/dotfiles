@@ -5,6 +5,10 @@ from difflib import SequenceMatcher
 
 from tuneshift.db import Database
 from tuneshift.matching import (
+    Availability,
+    MatchAudit,
+    ReasonCode,
+    RejectedCandidate,
     classify_album_results,
     classify_artist_results,
     classify_results,
@@ -17,6 +21,7 @@ from tuneshift.matching import (
     score_album_match,
     score_artist_match,
     score_match_with_version,
+    score_track_match,
     version_intent,
 )
 from tuneshift.models import AlbumResult, ArtistResult, PlatformMapping, TrackResult
@@ -48,6 +53,141 @@ class ReconcileResult:
     alternatives: list[TrackResult] = field(default_factory=list)
     from_cache: bool = False
     match_type: str = ""
+    availability: str = "not_found"
+    reason_code: str | None = None
+    album_confidence: str | None = None
+    artist_confidence: str | None = None
+    audit: MatchAudit | None = None
+
+
+# --- Availability + audit helpers (Chunk 5 explainability) ---
+
+# Platforms whose "no result" cannot be trusted as "does not exist": their APIs
+# cannot distinguish region/tier-blocked from genuinely absent (see the
+# availability spike). A miss on these degrades to AMBIGUOUS, never NOT_FOUND.
+_UNTRUSTED_ABSENCE = frozenset({"ytmusic"})
+
+
+def _decisive_signal(track, candidate: TrackResult,
+                     prefer: frozenset[str], avoid: frozenset[str]) -> str | None:
+    """Name the signal that most drove a candidate's distance (worst-first).
+
+    Reuses the engine-native scorer so the reason shown to a human matches the
+    real scoring, e.g. ``version:reject`` for a wrong recording or ``duration``
+    for a suspicious length.
+    """
+    distance = score_track_match(track, candidate, prefer=prefer, avoid=avoid)
+    rows = distance.breakdown
+    return rows[0].name if rows else None
+
+
+def _candidate_blocked(result: TrackResult) -> str | None:
+    """Return a blocked reason code if the candidate is known-but-unplayable.
+
+    Uses the availability signal we now retain on ``TrackResult`` (``available``
+    from Spotify ``is_playable``/Tidal ``allowStreaming``; ``tier_restricted``
+    for premium-only). ``None`` means "available or unknown" — never a guess.
+    """
+    if getattr(result, "tier_restricted", False):
+        return ReasonCode.TIER_RESTRICTED
+    available = getattr(result, "available", None)
+    if available is False:
+        return ReasonCode.BLOCKED_IN_MARKET
+    return None
+
+
+def _build_audit(
+    *,
+    track,
+    platform_name: str,
+    scored: list[tuple[int, int, TrackResult]],
+    confidence: str,
+    prefer: frozenset[str],
+    avoid: frozenset[str],
+) -> MatchAudit:
+    """Construct the explainable audit + availability verdict for a reconcile.
+
+    ``scored`` is the fully ranked ``(score, edition_penalty, result)`` list
+    (best first). Empty ``scored`` means no candidates were produced at all.
+    """
+    untrusted = platform_name in _UNTRUSTED_ABSENCE
+
+    if not scored:
+        availability = Availability.AMBIGUOUS if untrusted else Availability.NOT_FOUND
+        reason = (
+            ReasonCode.PLATFORM_CANNOT_DISTINGUISH if untrusted else ReasonCode.NO_CANDIDATES
+        )
+        return MatchAudit(availability=availability, reason_code=reason)
+
+    best_score, _, best = scored[0]
+    rejected = [
+        RejectedCandidate(
+            platform_id=r.platform_id,
+            title=r.title,
+            artist=r.artist,
+            album=r.album,
+            score=s,
+            decisive_signal=_decisive_signal(track, r, prefer, avoid),
+        )
+        for s, _, r in scored[1:4]
+    ]
+    distance = round((100 - best_score) / 100, 4)
+    best_signal = _decisive_signal(track, best, prefer, avoid)
+
+    # Known-but-blocked takes precedence: the exact recording exists, just not
+    # playable here. Surface it as held, never as a silent miss.
+    blocked_reason = _candidate_blocked(best)
+    if blocked_reason is not None:
+        return MatchAudit(
+            availability=Availability.EXACT_UNAVAILABLE,
+            reason_code=blocked_reason,
+            chosen_platform_id=best.platform_id,
+            chosen_score=best_score,
+            decisive_signal=best_signal,
+            distance=distance,
+            rejected=rejected,
+        )
+
+    if confidence == "not_found":
+        # Candidates existed but none cleared the bar. Distinguish a
+        # version-class rejection (wrong recording) from a plain low score.
+        version_rejected = best_signal is not None and best_signal.startswith("version:")
+        if untrusted:
+            availability, reason = Availability.AMBIGUOUS, ReasonCode.PLATFORM_CANNOT_DISTINGUISH
+        elif version_rejected:
+            availability, reason = Availability.NOT_FOUND, ReasonCode.VERSION_REJECTED
+        else:
+            availability, reason = Availability.NOT_FOUND, ReasonCode.ALL_BELOW_THRESHOLD
+        return MatchAudit(
+            availability=availability,
+            reason_code=reason,
+            chosen_score=best_score,
+            decisive_signal=best_signal,
+            distance=distance,
+            rejected=rejected,
+        )
+
+    if confidence == "ambiguous":
+        return MatchAudit(
+            availability=Availability.AMBIGUOUS,
+            reason_code=ReasonCode.AMBIGUOUS_TOP,
+            chosen_platform_id=best.platform_id,
+            chosen_score=best_score,
+            decisive_signal=best_signal,
+            distance=distance,
+            rejected=rejected,
+        )
+
+    # confidence == "high": clear pick.
+    return MatchAudit(
+        availability=Availability.EXACT_AVAILABLE,
+        reason_code=ReasonCode.MATCHED,
+        chosen_platform_id=best.platform_id,
+        chosen_score=best_score,
+        decisive_signal=best_signal,
+        distance=distance,
+        rejected=rejected,
+    )
 
 
 # --- Album/artist selection helpers (shared scorers, no blind [0]) ---
@@ -249,7 +389,21 @@ def reconcile_track(
         tier, _, _ = db.get_resolution_state(track_id)
         if tier is not None and mapping is not None:
             if mapping.status == "unavailable":
-                return ReconcileResult(confidence="not_found", from_cache=True)
+                audit = MatchAudit(
+                    availability=Availability.EXACT_UNAVAILABLE,
+                    reason_code=ReasonCode.BLOCKED_IN_MARKET,
+                )
+                return ReconcileResult(
+                    confidence="not_found", from_cache=True,
+                    availability=audit.availability, reason_code=audit.reason_code,
+                    audit=audit,
+                )
+            audit = MatchAudit(
+                availability=Availability.EXACT_AVAILABLE,
+                reason_code=ReasonCode.MATCHED,
+                chosen_platform_id=mapping.platform_track_id,
+                chosen_score=mapping.match_score or 100,
+            )
             return ReconcileResult(
                 platform_track_id=mapping.platform_track_id,
                 score=mapping.match_score or 100,
@@ -257,10 +411,28 @@ def reconcile_track(
                 is_divergent=mapping.is_divergent,
                 divergence_note=mapping.divergence_note,
                 from_cache=True,
+                availability=audit.availability, reason_code=audit.reason_code,
+                audit=audit,
             )
         if mapping and mapping.user_approved:
             if mapping.status == "unavailable":
-                return ReconcileResult(confidence="not_found", from_cache=True)
+                audit = MatchAudit(
+                    availability=Availability.EXACT_UNAVAILABLE,
+                    reason_code=ReasonCode.LOCKED,
+                    locked=True,
+                )
+                return ReconcileResult(
+                    confidence="not_found", from_cache=True,
+                    availability=audit.availability, reason_code=audit.reason_code,
+                    audit=audit,
+                )
+            audit = MatchAudit(
+                availability=Availability.EXACT_AVAILABLE,
+                reason_code=ReasonCode.LOCKED,
+                chosen_platform_id=mapping.platform_track_id,
+                chosen_score=mapping.match_score or 100,
+                locked=True,
+            )
             return ReconcileResult(
                 platform_track_id=mapping.platform_track_id,
                 score=mapping.match_score or 100,
@@ -268,6 +440,8 @@ def reconcile_track(
                 is_divergent=mapping.is_divergent,
                 divergence_note=mapping.divergence_note,
                 from_cache=True,
+                availability=audit.availability, reason_code=audit.reason_code,
+                audit=audit,
             )
 
     # Multi-strategy candidate collection with strategy tracking
@@ -294,7 +468,16 @@ def reconcile_track(
                 break
 
     if not all_candidates:
-        return ReconcileResult(confidence="not_found")
+        audit = _build_audit(
+            track=track, platform_name=platform_name, scored=[],
+            confidence="not_found", prefer=prefer_classes, avoid=avoid_classes,
+        )
+        return ReconcileResult(
+            confidence="not_found",
+            availability=audit.availability,
+            reason_code=audit.reason_code,
+            audit=audit,
+        )
 
     # Score all candidates uniformly
     all_durations = [r.duration_seconds for r in all_candidates if r.duration_seconds]
@@ -325,9 +508,19 @@ def reconcile_track(
     )
     scores = [s for s, _, _ in scored]
     confidence = classify_results(scores)
+    audit = _build_audit(
+        track=track, platform_name=platform_name, scored=scored,
+        confidence=confidence, prefer=prefer_classes, avoid=avoid_classes,
+    )
 
     if confidence == "not_found":
-        return ReconcileResult(confidence="not_found", alternatives=[r for _, _, r in scored[:3]])
+        return ReconcileResult(
+            confidence="not_found",
+            alternatives=[r for _, _, r in scored[:3]],
+            availability=audit.availability,
+            reason_code=audit.reason_code,
+            audit=audit,
+        )
 
     best_score, _, best_result = scored[0]
     is_div = _check_divergence(track.album, best_result.album)
@@ -372,6 +565,9 @@ def reconcile_track(
         divergence_note=div_note,
         alternatives=[r for _, _, r in scored[1:4]],
         match_type=match_type,
+        availability=audit.availability,
+        reason_code=audit.reason_code,
+        audit=audit,
     )
 
 
