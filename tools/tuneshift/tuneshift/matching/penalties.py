@@ -244,21 +244,47 @@ def _residual_version_signals(
     source_title: str, source_album: str,
     cand_title: str, cand_album: str,
     weights: Weights = DEFAULT_WEIGHTS,
+    *,
+    prefer: frozenset[str] = frozenset(),
+    avoid: frozenset[str] = frozenset(),
 ) -> list[SignalPenalty]:
-    """Penalise packaging/edit keywords present on the candidate but not the source.
+    """Score packaging/edit (edition) keywords on the candidate.
 
-    These (radio edit, compilation, deluxe) do not change *which recording* a
-    track is, so they are asymmetric minor down-ranks: no penalty when the
-    source already carries the same marker.
+    These buckets (radio/single edit, compilation, deluxe/expanded/anniversary)
+    do not change *which recording* a track is, so they sit on top of the
+    source-aware recording verdict. There are three regimes per bucket, keyed on
+    the effective per-playlist preferences (``prefer``/``avoid`` carry the
+    edition bucket names produced by
+    :func:`tuneshift.matching.preferences.scoring_intent`):
+
+    * **avoided** — the candidate carries an edition the playlist wants to steer
+      away from: down-rank it (substitute-grade) so a cleaner alternative wins,
+      while keeping it findable when it is the only option.
+    * **preferred** — the playlist wants this edition: candidates *lacking* it
+      are treated as a substitute for the intent (substitute-grade penalty), so
+      the preferred edition wins even at the score ceiling; the edition-bearing
+      candidate keeps its full score.
+    * **default** (neither preferred nor avoided) — the historical asymmetric
+      minor down-rank: penalise only when the candidate carries the marker and
+      the source does not. With no configured preferences every bucket falls
+      here, preserving byte-for-byte parity.
     """
     from tuneshift.matching import normalize as _norm
 
     src_combined = f"{source_title} {source_album}"
     cand_combined = f"{cand_title} {cand_album}"
+    sub = weights.version.substitute
     signals: list[SignalPenalty] = []
     for name, attr, regex_name in _RESIDUAL_KEYWORDS:
         regex = getattr(_norm, regex_name)
-        if regex.search(cand_combined) and not regex.search(src_combined):
+        cand_has = bool(regex.search(cand_combined))
+        if name in avoid:
+            if cand_has:
+                signals.append(SignalPenalty(f"version:{name}", -sub, 0.55, sub))
+        elif name in prefer:
+            if not cand_has:
+                signals.append(SignalPenalty(f"version:{name}", -sub, 0.55, sub))
+        elif cand_has and not regex.search(src_combined):
             cost = getattr(weights.version, attr)
             signals.append(SignalPenalty(f"version:{name}", -cost, 1.0, cost))
     return signals
@@ -303,6 +329,7 @@ def source_aware_version_signals(
 
     signals.extend(_residual_version_signals(
         source_title, source_album, cand_title, cand_album, weights,
+        prefer=prefer, avoid=avoid,
     ))
     return signals
 

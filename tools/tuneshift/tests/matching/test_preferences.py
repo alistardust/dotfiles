@@ -2,8 +2,10 @@
 from tuneshift.matching.preferences import (
     Preferences,
     VersionPreferences,
+    edition_buckets,
     preference_sort_bias,
     resolve_preferences,
+    scoring_intent,
     version_intent,
 )
 
@@ -125,3 +127,37 @@ class TestVersionIntent:
         prefer, avoid = version_intent(Preferences(prefer=["original"], avoid=["live"]))
         assert prefer == frozenset()
         assert avoid == frozenset({"live"})
+
+
+class TestEditionBuckets:
+    def test_radio_and_single_map_to_radio_edit(self) -> None:
+        assert edition_buckets(["radio", "single"]) == frozenset({"radio_edit"})
+
+    def test_expanded_anniversary_deluxe_map_to_deluxe(self) -> None:
+        assert edition_buckets(["expanded", "anniversary", "deluxe"]) == frozenset({"deluxe"})
+
+    def test_compilation_maps_to_itself(self) -> None:
+        assert edition_buckets(["compilation", "greatest-hits"]) == frozenset({"compilation"})
+
+    def test_recording_and_unknown_keywords_ignored(self) -> None:
+        assert edition_buckets(["live", "studio", "bogus"]) == frozenset()
+
+
+class TestScoringIntent:
+    def test_combines_all_three_axes(self) -> None:
+        prefer, avoid = scoring_intent(
+            ["live", "explicit", "expanded"], ["clean", "radio", "remix"]
+        )
+        # recording (live/remix) + lyric (explicit/clean) + edition buckets.
+        assert prefer == frozenset({"live", "explicit", "deluxe"})
+        assert avoid == frozenset({"clean", "remix", "radio_edit"})
+
+    def test_case_insensitive_and_trims(self) -> None:
+        prefer, avoid = scoring_intent(["  Live ", "EXPANDED"], ["Radio"])
+        assert prefer == frozenset({"live", "deluxe"})
+        assert avoid == frozenset({"radio_edit"})
+
+    def test_unknown_tokens_dropped(self) -> None:
+        prefer, avoid = scoring_intent(["nonsense"], ["also-bogus"])
+        assert prefer == frozenset()
+        assert avoid == frozenset()

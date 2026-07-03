@@ -24,6 +24,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from tuneshift.matching import classify_results, score_match_with_version
+from tuneshift.matching.preferences import scoring_intent
 
 from tests.gold.config import AcceptanceTargets, load_targets
 from tests.gold.dataset import GoldCase, gold_cases
@@ -88,8 +89,7 @@ def score_case(case: GoldCase) -> CaseResult:
     all_durations = [c.duration_seconds for c in case.candidates
                      if c.duration_seconds is not None]
     scored: list[tuple[str, int]] = []
-    prefer = frozenset(case.prefer_classes)
-    avoid = frozenset(case.avoid_classes)
+    prefer, avoid = scoring_intent(list(case.prefer_classes), list(case.avoid_classes))
     for candidate in case.candidates:
         score = score_match_with_version(
             case.source_title,

@@ -58,8 +58,10 @@ from tuneshift.matching.normalize import (
 from tuneshift.matching.preferences import (
     Preferences,
     VersionPreferences,
+    edition_buckets,
     preference_sort_bias,
     resolve_preferences,
+    scoring_intent,
     version_intent,
 )
 from tuneshift.matching.confidence import classify_scores
@@ -101,6 +103,8 @@ __all__ = [
     "resolve_preferences",
     "preference_sort_bias",
     "version_intent",
+    "scoring_intent",
+    "edition_buckets",
     "score_album_match",
     "classify_album_results",
     "edition_cost",

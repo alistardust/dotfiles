@@ -317,3 +317,65 @@ def test_source_aware_weight_override():
         "Song (Live)", "Live Album", "Song", "Album", weights=w
     )
     assert sum(s.points for s in signals) == -25
+
+
+# --- edition-axis residual preferences (radio/single, deluxe, compilation) ---
+
+def test_residual_default_penalises_radio_edit_when_source_lacks_it():
+    # No preferences: the historical asymmetric down-rank still fires.
+    signals = pen._residual_version_signals(
+        "Oops I Did It Again", "Oops I Did It Again",
+        "Oops I Did It Again (Radio Edit)", "Oops I Did It Again",
+    )
+    assert any(s.name == "version:radio_edit" for s in signals)
+
+
+def test_residual_default_no_penalty_when_source_also_radio_edit():
+    signals = pen._residual_version_signals(
+        "Song (Radio Edit)", "Album", "Song (Radio Edit)", "Album",
+    )
+    assert signals == []
+
+
+def test_residual_avoid_radio_downranks_candidate_carrying_it():
+    sub = pen.DEFAULT_WEIGHTS.version.substitute
+    signals = pen._residual_version_signals(
+        "Song", "Album", "Song (Radio Edit)", "Album",
+        avoid=frozenset({"radio_edit"}),
+    )
+    assert sum(s.points for s in signals) == -sub
+
+
+def test_residual_prefer_deluxe_penalises_candidate_lacking_it():
+    sub = pen.DEFAULT_WEIGHTS.version.substitute
+    # Standard edition (no deluxe/expanded marker) is treated as a substitute
+    # for the intent, so it is down-ranked below the preferred edition.
+    lacking = pen._residual_version_signals(
+        "Come On Over", "Come On Over",
+        "Come On Over", "Come On Over",
+        prefer=frozenset({"deluxe"}),
+    )
+    assert sum(s.points for s in lacking) == -sub
+
+
+def test_residual_prefer_deluxe_keeps_edition_bearing_candidate_at_full_score():
+    bearing = pen._residual_version_signals(
+        "Come On Over", "Come On Over",
+        "Come On Over", "Come On Over (Expanded Edition)",
+        prefer=frozenset({"deluxe"}),
+    )
+    assert bearing == []
+
+
+def test_prefer_edition_flips_the_winner_end_to_end():
+    from tuneshift.matching.track import score_match_with_version as smv
+
+    src = ("Come On Over", "Shania Twain", "Come On Over")
+    standard = ("Come On Over", "Shania Twain", "Come On Over")
+    expanded = ("Come On Over", "Shania Twain", "Come On Over (Expanded Edition)")
+    prefer = frozenset({"deluxe"})
+    std_score = smv(*src, *standard, prefer=prefer)
+    exp_score = smv(*src, *expanded, prefer=prefer)
+    assert exp_score > std_score
+    # Without the preference, the standard edition is not down-ranked.
+    assert smv(*src, *standard) >= smv(*src, *expanded)

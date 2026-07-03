@@ -16,6 +16,7 @@ from tuneshift.matching.normalize import (
     normalize_artist,
     normalize_title,
     strip_album_from_title,
+    strip_version_markers,
 )
 from tuneshift.matching.penalties import (
     DEFAULT_WEIGHTS,
@@ -153,9 +154,13 @@ def score_match_with_version(
     # scoring, on both sides, so the corruption does not tank title similarity.
     source_title = strip_album_from_title(source_title, source_album)
     result_title = strip_album_from_title(result_title, result_album)
+    # Title *similarity* answers "same song?"; the source-aware version axis
+    # (below) answers "same version?" from the raw titles. Strip recording/
+    # edition markers ("(Live)", "(Radio Edit)", ...) from the similarity titles
+    # only, so a preferred version is not penalised for carrying its own marker.
     base = score_match(
-        source_title, source_artist, source_album,
-        result_title, result_artist, result_album,
+        strip_version_markers(source_title), source_artist, source_album,
+        strip_version_markers(result_title), result_artist, result_album,
         weights,
     )
     vsignals = source_aware_version_signals(
@@ -196,8 +201,8 @@ def score_track_match(
     cand_title = strip_album_from_title(cand_title, cand_album)
     distance = Distance()
     distance.add(title_signal(
-        normalize_title(src_title),
-        normalize_title(cand_title),
+        normalize_title(strip_version_markers(src_title)),
+        normalize_title(strip_version_markers(cand_title)),
         weights,
     ))
     distance.add(artist_signal(

@@ -26,7 +26,7 @@ from tuneshift.matching import (
     score_artist_match,
     score_match_with_version,
     score_track_match,
-    version_intent,
+    scoring_intent,
 )
 from tuneshift.models import AlbumResult, ArtistResult, PlatformMapping, TrackResult
 
@@ -558,10 +558,15 @@ def reconcile_track(
         db.get_preferences(playlist_id) if playlist_id is not None else None,
         db.get_track_preferences(track_id),
     )
-    # Recording-class intent from the effective prefs. Empty when prefs are the
-    # built-in defaults, so scoring stays purely source-aware (a live source is
-    # not rejected as "avoided") — see version_intent for the default guard.
-    prefer_classes, avoid_classes = version_intent(prefs)
+    # Combined scoring intent from the effective prefs: recording classes and
+    # lyric axis feed the source-aware version verdict; edition buckets
+    # (radio/single, deluxe/expanded/anniversary, compilation) feed the residual
+    # edition penalties. Empty when prefs are the built-in defaults, so scoring
+    # stays purely source-aware (a live source is not rejected as "avoided").
+    if prefs.is_default():
+        prefer_classes, avoid_classes = frozenset(), frozenset()
+    else:
+        prefer_classes, avoid_classes = scoring_intent(prefs.prefer, prefs.avoid)
 
     # Cache/mapping checks
     if not force:

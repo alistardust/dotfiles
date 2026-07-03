@@ -238,3 +238,43 @@ _RADIO_EDIT_RE = re.compile(
     r"\b(radio edit|radio version|single edit|single version)\b",
     re.IGNORECASE,
 )
+
+# Recording/edition version markers whose presence in a *title* should not
+# reduce title similarity: the source-aware version axis (which reads the raw
+# title via ``infer_version``) owns the "same version?" judgement, so the
+# similarity title only needs to answer "same song?".
+_VERSION_MARKER_REGEXES = (
+    _LIVE_RE, _REMIX_RE, _REMASTER_RE, _ACOUSTIC_RE, _KARAOKE_RE,
+    _INSTRUMENTAL_RE, _TRIBUTE_RE, _RADIO_EDIT_RE, _DELUXE_RE, _COMPILATION_RE,
+)
+_DASH_SUFFIX_RE = re.compile(r"\s+[-\u2013\u2014]\s+([^-\u2013\u2014]+)$")
+
+
+def strip_version_markers(title: str) -> str:
+    """Remove recording/edition version markers from a title for *similarity*.
+
+    Removes any parenthetical/bracket group or a trailing dash-suffix whose text
+    matches a known version marker (live, remix, remaster, acoustic, karaoke,
+    instrumental, tribute, radio/single edit, deluxe/expanded/anniversary,
+    compilation). Genuine subtitles (e.g. "(You Drive Me) Crazy", "(All I Wanna
+    Do)") are preserved because their text matches no marker.
+
+    Used only by the version-aware scorers to decouple "same song?" (title
+    similarity) from "same version?" (the source-aware version axis, which reads
+    the raw, unstripped title). Returns the original title if stripping would
+    empty it.
+    """
+    if not title:
+        return title
+
+    def _is_marker(text: str) -> bool:
+        return any(rx.search(text) for rx in _VERSION_MARKER_REGEXES)
+
+    def _maybe_strip_paren(match: "re.Match[str]") -> str:
+        return "" if _is_marker(match.group(1)) else match.group(0)
+
+    cleaned = _PAREN_GROUP_RE.sub(_maybe_strip_paren, title)
+    dash = _DASH_SUFFIX_RE.search(cleaned)
+    if dash and _is_marker(dash.group(1)):
+        cleaned = cleaned[: dash.start()]
+    return _WHITESPACE_RE.sub(" ", cleaned).strip() or title

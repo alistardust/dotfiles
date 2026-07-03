@@ -557,4 +557,81 @@ def gold_cases() -> list[GoldCase]:
                  "not pick the different-artist original.",
             tags=("different-album", "compilation-valid", "wrong-artist-trap"),
         ),
+        # --- Per-playlist EDITION preferences (radio/single, expanded) ----
+        GoldCase(
+            id="oops-avoid-radio-single",
+            source_title="Oops!... I Did It Again",
+            source_artist="Britney Spears",
+            source_album="Oops!... I Did It Again",
+            candidates=[
+                Candidate("2931958", "Oops!... I Did It Again", "Britney Spears",
+                          "Oops!... I Did It Again", 211),
+                Candidate("oops-radio", "Oops!... I Did It Again (Radio Edit)",
+                          "Britney Spears", "Now That's What I Call Music!", 197),
+                Candidate("oops-single", "Oops!... I Did It Again (Single Version)",
+                          "Britney Spears", "Oops!... I Did It Again (Single)", 200),
+            ],
+            expected_platform_id="2931958",
+            source_duration_seconds=211,
+            note="A playlist that avoids radio/single edits must keep the album "
+                 "original, not a radio or single edit.",
+            tags=("preference", "edition", "avoid-radio"),
+            avoid_classes=("radio", "single"),
+        ),
+        GoldCase(
+            id="come-on-over-prefer-expanded",
+            source_title="Come On Over",
+            source_artist="Shania Twain",
+            source_album="Come On Over",
+            candidates=[
+                Candidate("cono-standard", "Come On Over", "Shania Twain",
+                          "Come On Over", 175),
+                Candidate("12270570", "Come On Over", "Shania Twain",
+                          "Come On Over (Expanded Edition)", 175),
+            ],
+            expected_platform_id="12270570",
+            source_duration_seconds=175,
+            note="A playlist that prefers the expanded edition must elevate it over "
+                 "the standard release even though both are the same recording.",
+            tags=("preference", "edition", "prefer-expanded"),
+            prefer_classes=("expanded",),
+        ),
+        GoldCase(
+            id="playlist-prefer-radio-edit",
+            source_title="Sabotage",
+            source_artist="Beastie Boys",
+            source_album="Ill Communication",
+            candidates=[
+                Candidate("sab-album", "Sabotage", "Beastie Boys",
+                          "Ill Communication", 178),
+                Candidate("sab-radio", "Sabotage (Radio Edit)", "Beastie Boys",
+                          "Ill Communication", 165),
+            ],
+            expected_platform_id="sab-radio",
+            source_duration_seconds=178,
+            note="A radio-programming playlist can prefer the radio edit; the "
+                 "preference must elevate it over the album cut.",
+            tags=("preference", "edition", "prefer-radio"),
+            prefer_classes=("radio",),
+        ),
+        # --- Christina Aguilera retitled single (Tidal 12270106) ----------
+        GoldCase(
+            id="christina-come-on-over-baby",
+            source_title="Come On Over Baby (All I Wanna Do)",
+            source_artist="Christina Aguilera",
+            source_album="Christina Aguilera",
+            candidates=[
+                Candidate("12270106", "Come On Over Baby (All I Wanna Do)",
+                          "Christina Aguilera", "Christina Aguilera", 224),
+                Candidate("cono-shania", "Come On Over", "Shania Twain",
+                          "Come On Over", 175),
+                Candidate("cono-karaoke", "Come On Over Baby (All I Wanna Do) (Karaoke)",
+                          "Karaoke Superstars", "Pop Karaoke Hits", 224),
+            ],
+            expected_platform_id="12270106",
+            source_duration_seconds=224,
+            note="Retitled single with a parenthetical must match the correct "
+                 "Christina recording, never the Shania collision or the karaoke.",
+            tags=("retitle", "parenthetical", "wrong-artist-trap", "karaoke-trap"),
+        ),
     ]

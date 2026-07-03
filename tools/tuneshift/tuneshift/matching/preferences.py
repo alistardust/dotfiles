@@ -16,6 +16,30 @@ _DEFAULT_PREFER = ("studio", "original", "explicit")
 _DEFAULT_AVOID = ("live", "remix", "acoustic", "radio-edit", "clean")
 _DEFAULT_TIEBREAK = ("newest-remaster", "original-release")
 
+# Lyric-axis tokens honoured by ``compare_version`` (explicit/clean).
+_LYRIC_TOKENS = frozenset({"clean", "explicit"})
+
+# User-facing edition keywords -> the residual edition bucket they map onto.
+# Buckets correspond to the packaging/edit regexes in ``matching.normalize``
+# (see ``penalties._RESIDUAL_KEYWORDS``): ``radio_edit`` covers radio/single
+# edits, ``deluxe`` covers deluxe/expanded/anniversary/special editions, and
+# ``compilation`` covers greatest-hits/best-of style releases. Mapping to the
+# existing, tested buckets avoids introducing new regexes.
+_EDITION_ALIASES: dict[str, str] = {
+    "radio": "radio_edit",
+    "radio-edit": "radio_edit",
+    "radio_edit": "radio_edit",
+    "single": "radio_edit",
+    "deluxe": "deluxe",
+    "expanded": "deluxe",
+    "anniversary": "deluxe",
+    "special-edition": "deluxe",
+    "special edition": "deluxe",
+    "compilation": "compilation",
+    "greatest-hits": "compilation",
+    "best-of": "compilation",
+}
+
 
 @dataclass
 class Preferences:
@@ -122,10 +146,63 @@ def version_intent(prefs: Preferences) -> tuple[frozenset[str], frozenset[str]]:
     return _classes(prefs.prefer), _classes(prefs.avoid)
 
 
+def edition_buckets(keywords: list[str]) -> frozenset[str]:
+    """Map user edition keywords onto residual edition buckets.
+
+    Unknown or recording-class keywords are ignored. Returns a subset of
+    ``{"radio_edit", "deluxe", "compilation"}`` (see ``_EDITION_ALIASES``).
+    """
+    return frozenset(
+        _EDITION_ALIASES[k.strip().lower()]
+        for k in keywords
+        if k and k.strip().lower() in _EDITION_ALIASES
+    )
+
+
+def scoring_intent(
+    prefer: list[str], avoid: list[str]
+) -> tuple[frozenset[str], frozenset[str]]:
+    """Resolve raw preference keywords into combined scoring-intent token sets.
+
+    Each returned set unions three axes the scorer understands, all of which
+    share a disjoint token space so a single set is unambiguous:
+
+    * recording classes (``live``, ``remix``, ``acoustic``, ...) — consumed by
+      :func:`~tuneshift.matching.version.compare_version`;
+    * lyric tokens (``clean``, ``explicit``) — also consumed by
+      ``compare_version``;
+    * edition buckets (``radio_edit``, ``deluxe``, ``compilation``) — consumed
+      by the residual edition penalties in :mod:`tuneshift.matching.penalties`.
+
+    Callers are responsible for the default no-op guard (an all-default
+    ``Preferences`` must resolve to empty sets so scoring stays purely
+    source-aware); this function performs the mapping only.
+    """
+    from tuneshift.matching.version import RecordingClass
+
+    recording_values = {c.value for c in RecordingClass}
+
+    def _map(keywords: list[str]) -> frozenset[str]:
+        out: set[str] = set()
+        for k in keywords:
+            if not k:
+                continue
+            kl = k.strip().lower()
+            if kl in recording_values or kl in _LYRIC_TOKENS:
+                out.add(kl)
+            elif kl in _EDITION_ALIASES:
+                out.add(_EDITION_ALIASES[kl])
+        return frozenset(out)
+
+    return _map(prefer), _map(avoid)
+
+
 __all__ = [
     "Preferences",
     "VersionPreferences",
     "resolve_preferences",
     "preference_sort_bias",
     "version_intent",
+    "edition_buckets",
+    "scoring_intent",
 ]
