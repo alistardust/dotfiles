@@ -33,6 +33,7 @@ from tuneshift.matching.preferences import (
     VersionPreferences,
     preference_sort_bias,
     resolve_preferences,
+    version_intent,
 )
 from tuneshift.matching.track import (
     classify_results,
@@ -66,6 +67,7 @@ __all__ = [
     "VersionPreferences",
     "resolve_preferences",
     "preference_sort_bias",
+    "version_intent",
     "score_album_match",
     "classify_album_results",
     "edition_cost",

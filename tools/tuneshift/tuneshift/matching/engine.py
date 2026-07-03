@@ -46,7 +46,12 @@ class RecommendationThresholds:
 DEFAULT_THRESHOLDS = RecommendationThresholds()
 
 # Signal names (or prefixes) that cap the recommendation to non-auto.
-_HARD_VERSION_CAPS = frozenset({"version:karaoke", "version:instrumental"})
+# ``version:reject`` (source-aware wrong-recording / censored) forces REJECT;
+# the legacy candidate-only karaoke/instrumental caps are retained for callers
+# still building distances from ``version_signals``.
+_HARD_VERSION_CAPS = frozenset({"version:reject", "version:karaoke", "version:instrumental"})
+# A source-aware substitute (fallback recording) caps to SUGGEST, never AUTO.
+_SUBSTITUTE_CAP = "version:substitute"
 _DURATION_CAP = "duration"
 
 
@@ -127,6 +132,9 @@ class Distance:
         for s in self._signals:
             if s.name in _HARD_VERSION_CAPS and s.points != 0:
                 return Recommendation.REJECT
+        for s in self._signals:
+            if s.name == _SUBSTITUTE_CAP and s.points != 0:
+                return Recommendation.SUGGEST
         for s in self._signals:
             if s.name == _DURATION_CAP and s.points != 0:
                 return Recommendation.SUGGEST

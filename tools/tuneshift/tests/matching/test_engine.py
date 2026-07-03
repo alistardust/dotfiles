@@ -97,6 +97,38 @@ def test_hard_version_reject_caps_to_reject():
     assert eng.recommend(d) is eng.Recommendation.REJECT
 
 
+def test_hard_version_reject_signal_caps_to_reject():
+    # Source-aware wrong-recording verdict -> REJECT even with perfect strings.
+    d = eng.Distance([sig("title", 50, 0.0, 50), sig("version:reject", -100, 1.0, 100)])
+    assert d.capped_recommendation() is eng.Recommendation.REJECT
+    assert eng.recommend(d) is eng.Recommendation.REJECT
+
+
+def test_version_substitute_caps_to_suggest():
+    # A fallback recording (e.g. studio master for a live source) is findable
+    # but must never auto-select.
+    d = eng.Distance([sig("title", 50, 0.0, 50), sig("version:substitute", -40, 0.4, 100)])
+    assert d.capped_recommendation() is eng.Recommendation.SUGGEST
+    assert eng.recommend(d) is not eng.Recommendation.AUTO
+
+
+def test_version_match_signal_does_not_cap():
+    # A neutral 0-point match signal must not cap an otherwise-AUTO candidate.
+    d = eng.Distance([sig("title", 50, 0.0, 50), sig("version:match", 0, 0.0, 0)])
+    assert d.capped_recommendation() is None
+    assert eng.recommend(d) is eng.Recommendation.AUTO
+
+
+def test_reject_cap_beats_substitute_cap():
+    # If both a reject and a substitute signal are present, REJECT wins.
+    d = eng.Distance([
+        sig("title", 50, 0.0, 50),
+        sig("version:reject", -100, 1.0, 100),
+        sig("version:substitute", -40, 0.4, 100),
+    ])
+    assert d.capped_recommendation() is eng.Recommendation.REJECT
+
+
 def test_duration_penalty_caps_to_suggest():
     # perfect strings but duration off -> never AUTO
     d = eng.Distance([sig("title", 50, 0.0, 50), sig("duration", -20, 0.2, 20)])

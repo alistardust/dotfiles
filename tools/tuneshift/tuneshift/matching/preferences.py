@@ -92,9 +92,37 @@ def preference_sort_bias(text: str, prefs: Preferences) -> int:
     return bias
 
 
+def version_intent(prefs: Preferences) -> tuple[frozenset[str], frozenset[str]]:
+    """Resolve preferences into (prefer, avoid) recording-class sets.
+
+    Only the keywords that name an actual recording class (live, remix,
+    acoustic, karaoke, instrumental, tribute) are forwarded to the source-aware
+    version comparison; packaging keywords (radio-edit, deluxe) and the studio/
+    original defaults are handled elsewhere.
+
+    Returns two empty sets when ``prefs`` are the built-in defaults, so a
+    playlist with no configured intent relies purely on source inference (a
+    studio source still rejects live takes, a live source still matches live).
+    """
+    from tuneshift.matching.version import RecordingClass
+
+    if prefs.is_default():
+        return frozenset(), frozenset()
+
+    recording_values = {c.value for c in RecordingClass}
+
+    def _classes(keywords: list[str]) -> frozenset[str]:
+        return frozenset(
+            k.lower() for k in keywords if k and k.lower() in recording_values
+        )
+
+    return _classes(prefs.prefer), _classes(prefs.avoid)
+
+
 __all__ = [
     "Preferences",
     "VersionPreferences",
     "resolve_preferences",
     "preference_sort_bias",
+    "version_intent",
 ]

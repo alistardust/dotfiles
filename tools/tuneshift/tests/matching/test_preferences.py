@@ -4,6 +4,7 @@ from tuneshift.matching.preferences import (
     VersionPreferences,
     preference_sort_bias,
     resolve_preferences,
+    version_intent,
 )
 
 
@@ -74,3 +75,38 @@ class TestSortBias:
     def test_no_keyword_match_is_neutral(self) -> None:
         prefs = Preferences(prefer=["acoustic"], avoid=["live"])
         assert preference_sort_bias("Studio Album", prefs) == 0
+
+
+class TestVersionIntent:
+    def test_default_prefs_yield_empty_sets(self) -> None:
+        # Critical guard: default avoid=(live,remix,...) must NOT leak into the
+        # source-aware avoid set, or a live source would reject itself.
+        prefer, avoid = version_intent(Preferences())
+        assert prefer == frozenset()
+        assert avoid == frozenset()
+
+    def test_non_default_maps_recording_classes(self) -> None:
+        prefer, avoid = version_intent(Preferences(prefer=["live"], avoid=["remix"]))
+        assert prefer == frozenset({"live"})
+        assert avoid == frozenset({"remix"})
+
+    def test_packaging_keywords_are_dropped(self) -> None:
+        # radio-edit / deluxe are not recording classes; only live survives.
+        prefer, avoid = version_intent(
+            Preferences(prefer=["live"], avoid=["radio-edit", "deluxe"])
+        )
+        assert prefer == frozenset({"live"})
+        assert avoid == frozenset()
+
+    def test_studio_kept_as_recording_class(self) -> None:
+        # studio IS a recording class, so it is forwarded (harmless: it only
+        # reinforces the implicit baseline). The avoid class comes through too.
+        prefer, avoid = version_intent(Preferences(prefer=["studio"], avoid=["live"]))
+        assert prefer == frozenset({"studio"})
+        assert avoid == frozenset({"live"})
+
+    def test_original_keyword_dropped(self) -> None:
+        # "original" is not a RecordingClass value; it is dropped.
+        prefer, avoid = version_intent(Preferences(prefer=["original"], avoid=["live"]))
+        assert prefer == frozenset()
+        assert avoid == frozenset({"live"})

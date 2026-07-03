@@ -29,16 +29,38 @@ def test_karaoke_candidate_is_rejected_despite_title_match():
     src = T("Bohemian Rhapsody", "Queen", "A Night at the Opera")
     cand = T("Bohemian Rhapsody (Karaoke Version)", "Queen", "Karaoke Hits")
     d = score_track_match(src, cand)
-    assert d.has_signal("version:karaoke")
+    # Source-aware: a studio source REJECTs a karaoke recording (the specific
+    # class is collapsed into the verdict signal).
+    assert d.has_signal("version:reject")
     assert recommend(d) is Recommendation.REJECT
 
 
-def test_live_candidate_carries_version_signal():
+def test_live_candidate_rejected_for_studio_source():
+    # Studio source, live candidate -> wrong recording -> REJECT.
     src = T("Heroes", "David Bowie", '"Heroes"')
     cand = T("Heroes (Live)", "David Bowie", "Stage")
     d = score_track_match(src, cand)
-    names = [s.name for s in d.signals]
-    assert "version:live" in names
+    assert d.has_signal("version:reject")
+    assert recommend(d) is Recommendation.REJECT
+
+
+def test_live_source_matches_live_candidate():
+    # Source is itself a live take -> a live candidate must MATCH, not be penalised.
+    src = T("Heroes (Live)", "David Bowie", "Stage")
+    cand = T("Heroes (Live)", "David Bowie", "Stage")
+    d = score_track_match(src, cand)
+    assert d.has_signal("version:match")
+    assert not d.has_signal("version:reject")
+
+
+def test_live_source_gets_studio_as_substitute():
+    # Source is live; only the studio master exists -> SUBSTITUTE (findable,
+    # capped below AUTO), not a silent perfect match.
+    src = T("Heroes (Live)", "David Bowie", "Stage", None, 360)
+    cand = T("Heroes", "David Bowie", '"Heroes"', None, 360)
+    d = score_track_match(src, cand)
+    assert d.has_signal("version:substitute")
+    assert recommend(d) is not Recommendation.AUTO
 
 
 def test_wrong_artist_increases_distance():

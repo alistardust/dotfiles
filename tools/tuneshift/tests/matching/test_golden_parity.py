@@ -111,7 +111,10 @@ DURATION_PROXIMITY = [
 
 SCORE_MATCH_WITH_VERSION = [
     (('Song', 'Artist', 'Album', 'Song', 'Artist', 'Album', None, None, None), 100),
-    (('Song', 'Artist', 'Album', 'Song (Live)', 'Artist', 'Album', None, None, None), 30),
+    # RE-BASELINED (Chunk 4 intent fidelity, 2026-07-02): a studio source no
+    # longer *tolerates* a live candidate with a 30 score — the source-aware
+    # recording verdict REJECTs a live take for a studio master, flooring to 0.
+    (('Song', 'Artist', 'Album', 'Song (Live)', 'Artist', 'Album', None, None, None), 0),
     (('Song', 'Artist', 'Album', 'Song', 'Artist', 'Album', 500, 200, None), 80),
     (('Song', 'Artist', 'Album', 'Song (Karaoke)', 'Artist', 'Album', None, None, None), 0),
 ]

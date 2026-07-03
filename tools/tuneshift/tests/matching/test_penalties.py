@@ -243,3 +243,77 @@ def test_version_weight_override():
 def test_default_weights_frozen():
     with pytest.raises(Exception):
         pen.DEFAULT_WEIGHTS.title_exact = 1  # type: ignore[misc]
+
+
+# --- source-aware version signals ---
+
+def _names(signals):
+    return {s.name for s in signals}
+
+
+def test_source_aware_studio_to_studio_matches():
+    signals = pen.source_aware_version_signals("Song", "Album", "Song", "Album")
+    assert "version:match" in _names(signals)
+    assert sum(s.points for s in signals) == 0
+
+
+def test_source_aware_studio_to_live_rejects():
+    signals = pen.source_aware_version_signals("Song", "Album", "Song (Live)", "Live Album")
+    assert "version:reject" in _names(signals)
+    assert sum(s.points for s in signals) == -100
+
+
+def test_source_aware_live_to_live_matches():
+    signals = pen.source_aware_version_signals(
+        "Song (Live)", "Live Album", "Song (Live)", "Live Album"
+    )
+    assert "version:match" in _names(signals)
+    assert sum(s.points for s in signals) == 0
+
+
+def test_source_aware_live_to_studio_substitutes():
+    signals = pen.source_aware_version_signals("Song (Live)", "Live Album", "Song", "Album")
+    assert "version:substitute" in _names(signals)
+    assert sum(s.points for s in signals) == -40
+
+
+def test_source_aware_remaster_is_soft():
+    signals = pen.source_aware_version_signals(
+        "Song", "Album", "Song", "Album (2011 Remaster)"
+    )
+    assert "version:soft" in _names(signals)
+
+
+def test_source_aware_prefer_live_elevates_live_to_match():
+    # With prefer:{live}, a studio source accepting a live candidate is a MATCH,
+    # not a reject.
+    signals = pen.source_aware_version_signals(
+        "Song", "Album", "Song (Live)", "Live Album",
+        prefer=frozenset({"live"}),
+    )
+    assert "version:match" in _names(signals)
+    assert "version:reject" not in _names(signals)
+
+
+def test_source_aware_avoid_live_hard_rejects_even_live_source():
+    # avoid takes precedence: a live candidate is rejected regardless of source.
+    signals = pen.source_aware_version_signals(
+        "Song (Live)", "Live Album", "Song (Live)", "Live Album",
+        avoid=frozenset({"live"}),
+    )
+    assert "version:reject" in _names(signals)
+
+
+def test_source_aware_explicit_source_rejects_clean_candidate():
+    signals = pen.source_aware_version_signals(
+        "Song (Explicit)", "Album", "Song (Clean)", "Album"
+    )
+    assert "version:reject" in _names(signals)
+
+
+def test_source_aware_weight_override():
+    w = pen.DEFAULT_WEIGHTS.with_overrides(version=pen.VersionWeights(substitute=25))
+    signals = pen.source_aware_version_signals(
+        "Song (Live)", "Live Album", "Song", "Album", weights=w
+    )
+    assert sum(s.points for s in signals) == -25

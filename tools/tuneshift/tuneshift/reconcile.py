@@ -17,6 +17,7 @@ from tuneshift.matching import (
     score_album_match,
     score_artist_match,
     score_match_with_version,
+    version_intent,
 )
 from tuneshift.models import AlbumResult, ArtistResult, PlatformMapping, TrackResult
 
@@ -237,6 +238,10 @@ def reconcile_track(
         db.get_preferences(playlist_id) if playlist_id is not None else None,
         None,
     )
+    # Recording-class intent from the effective prefs. Empty when prefs are the
+    # built-in defaults, so scoring stays purely source-aware (a live source is
+    # not rejected as "avoided") — see version_intent for the default guard.
+    prefer_classes, avoid_classes = version_intent(prefs)
 
     # Cache/mapping checks
     if not force:
@@ -282,7 +287,9 @@ def reconcile_track(
         # Short-circuit: only on ISRC match (score 100). Never short-circuit
         # on text matches because a later strategy might find a better version.
         if threshold is not None and threshold >= 100 and all_candidates:
-            top_score = _quick_top_score(track, all_candidates)
+            top_score = _quick_top_score(
+                track, all_candidates, prefer=prefer_classes, avoid=avoid_classes,
+            )
             if top_score >= threshold:
                 break
 
@@ -299,6 +306,8 @@ def reconcile_track(
             result_duration=r.duration_seconds,
             reference_duration=track.duration_seconds,
             all_durations=all_durations,
+            prefer=prefer_classes,
+            avoid=avoid_classes,
         )
         s = min(100, s + duration_proximity_bonus(r.duration_seconds, track.duration_seconds))
         ed = edition_cost(r.album or "")
@@ -366,7 +375,13 @@ def reconcile_track(
     )
 
 
-def _quick_top_score(track, candidates: list[TrackResult]) -> int:
+def _quick_top_score(
+    track,
+    candidates: list[TrackResult],
+    *,
+    prefer: frozenset[str] = frozenset(),
+    avoid: frozenset[str] = frozenset(),
+) -> int:
     """Quick score check for short-circuit decision."""
     best = 0
     for c in candidates:
@@ -375,6 +390,8 @@ def _quick_top_score(track, candidates: list[TrackResult]) -> int:
             c.title, c.artist, c.album,
             result_duration=c.duration_seconds,
             reference_duration=track.duration_seconds,
+            prefer=prefer,
+            avoid=avoid,
         )
         s = min(100, s + duration_proximity_bonus(c.duration_seconds, track.duration_seconds))
         if s > best:

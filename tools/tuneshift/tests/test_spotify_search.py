@@ -12,7 +12,10 @@ from tuneshift.platforms.spotify import SpotifyClient
 
 @pytest.fixture
 def client():
-    c = SpotifyClient()
+    # Pass an explicit client_id so construction never reaches the env/1Password
+    # credential lookup — these tests mock _sp and must stay hermetic ("no
+    # network, no auth", per the module docstring).
+    c = SpotifyClient(client_id="test-client-id")
     c._sp = MagicMock()
     return c
 

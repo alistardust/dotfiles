@@ -20,6 +20,7 @@ from tuneshift.matching.penalties import (
     artist_signal,
     duration_signal,
     isrc_signal,
+    source_aware_version_signals,
     title_signal,
     version_signals,
 )
@@ -129,19 +130,30 @@ def score_match_with_version(
     reference_duration: int | None = None,
     all_durations: list[int] | None = None,
     weights: Weights = DEFAULT_WEIGHTS,
+    *,
+    prefer: frozenset[str] = frozenset(),
+    avoid: frozenset[str] = frozenset(),
 ) -> int:
-    """Score a search result with version + duration preferences applied.
+    """Score a search result with source-aware version + duration penalties.
 
     The base similarity score (with its 0-100 clamp) is computed first, then the
-    version and duration penalties are subtracted, matching the historical
-    staged clamping exactly.
+    source-aware recording verdict and duration penalties are subtracted. A
+    ``REJECT`` verdict (wrong recording, or a censored/clean take for an explicit
+    source) floors the score to 0 so the candidate cannot be auto-selected;
+    ``SUBSTITUTE`` (a fallback recording, e.g. the studio master when a live take
+    was requested) down-ranks it but keeps it findable. ``prefer``/``avoid`` are
+    recording-class sets from the effective per-playlist preferences.
     """
     base = score_match(
         source_title, source_artist, source_album,
         result_title, result_artist, result_album,
         weights,
     )
-    penalty = version_penalty(result_title, result_album, weights)
+    vsignals = source_aware_version_signals(
+        source_title, source_album or "", result_title, result_album,
+        prefer=prefer, avoid=avoid, weights=weights,
+    )
+    penalty = -sum(s.points for s in vsignals)
     dur_pen = duration_penalty(result_duration, reference_duration, all_durations, weights)
     return max(0, min(100, base - penalty - dur_pen))
 
@@ -152,6 +164,8 @@ def score_track_match(
     *,
     weights: Weights = DEFAULT_WEIGHTS,
     all_durations: list[int] | None = None,
+    prefer: frozenset[str] = frozenset(),
+    avoid: frozenset[str] = frozenset(),
 ) -> Distance:
     """Engine-native track scorer: build the full Distance for one candidate.
 
@@ -159,14 +173,19 @@ def score_track_match(
     ``artist``, ``album``, ``isrc`` and ``duration_seconds``. Returns a
     :class:`Distance` accumulating title/artist/album/isrc/version/duration
     signals — callers derive ``.total`` (distance), ``.breakdown`` and a
-    recommendation. The legacy integer point sum is available via ``.points``.
+    recommendation. The version signal is *source-aware* (see
+    :func:`source_aware_version_signals`): it compares the candidate's recording
+    class to the source's, so a live source matches a live take instead of being
+    penalised for it. ``prefer``/``avoid`` are recording-class preference sets.
     """
+    src_title = getattr(source, "title", "") or ""
     src_album = getattr(source, "album", None)
+    cand_title = getattr(candidate, "title", "") or ""
     cand_album = getattr(candidate, "album", None) or ""
     distance = Distance()
     distance.add(title_signal(
-        normalize_title(getattr(source, "title", "") or ""),
-        normalize_title(getattr(candidate, "title", "") or ""),
+        normalize_title(src_title),
+        normalize_title(cand_title),
         weights,
     ))
     distance.add(artist_signal(
@@ -185,10 +204,9 @@ def score_track_match(
         getattr(candidate, "isrc", None),
         weights,
     ))
-    distance.extend(version_signals(
-        getattr(candidate, "title", "") or "",
-        cand_album,
-        weights,
+    distance.extend(source_aware_version_signals(
+        src_title, src_album or "", cand_title, cand_album,
+        prefer=prefer, avoid=avoid, weights=weights,
     ))
     distance.add(duration_signal(
         getattr(candidate, "duration_seconds", None),

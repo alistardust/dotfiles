@@ -35,6 +35,12 @@ class VersionWeights:
     acoustic: int = 10
     remaster: int = 10
     deluxe: int = 5
+    # Source-aware recording-verdict magnitudes (Chunk 4). ``reject`` is large
+    # enough to floor the 0-100 legacy score; ``substitute`` down-ranks a
+    # fallback recording (e.g. studio master for a requested live take) without
+    # hiding it; a soft remaster reuses ``remaster``.
+    substitute: int = 40
+    reject: int = 100
 
 
 @dataclass(frozen=True)
@@ -221,6 +227,83 @@ def version_signals(title: str, album: str, weights: Weights = DEFAULT_WEIGHTS) 
         if regex.search(combined):
             cost = getattr(weights.version, attr)
             signals.append(SignalPenalty(f"version:{name}", -cost, 1.0, cost))
+    return signals
+
+
+# Keywords that are NOT recording-identity classes: they describe packaging or
+# an edit of the *same* recording, so they layer on top of the source-aware
+# recording verdict rather than being folded into it.
+_RESIDUAL_KEYWORDS: tuple[tuple[str, str, str], ...] = (
+    ("radio_edit", "radio_edit", "_RADIO_EDIT_RE"),
+    ("compilation", "compilation", "_COMPILATION_RE"),
+    ("deluxe", "deluxe", "_DELUXE_RE"),
+)
+
+
+def _residual_version_signals(
+    source_title: str, source_album: str,
+    cand_title: str, cand_album: str,
+    weights: Weights = DEFAULT_WEIGHTS,
+) -> list[SignalPenalty]:
+    """Penalise packaging/edit keywords present on the candidate but not the source.
+
+    These (radio edit, compilation, deluxe) do not change *which recording* a
+    track is, so they are asymmetric minor down-ranks: no penalty when the
+    source already carries the same marker.
+    """
+    from tuneshift.matching import normalize as _norm
+
+    src_combined = f"{source_title} {source_album}"
+    cand_combined = f"{cand_title} {cand_album}"
+    signals: list[SignalPenalty] = []
+    for name, attr, regex_name in _RESIDUAL_KEYWORDS:
+        regex = getattr(_norm, regex_name)
+        if regex.search(cand_combined) and not regex.search(src_combined):
+            cost = getattr(weights.version, attr)
+            signals.append(SignalPenalty(f"version:{name}", -cost, 1.0, cost))
+    return signals
+
+
+def source_aware_version_signals(
+    source_title: str, source_album: str,
+    cand_title: str, cand_album: str,
+    *,
+    prefer: frozenset[str] = frozenset(),
+    avoid: frozenset[str] = frozenset(),
+    weights: Weights = DEFAULT_WEIGHTS,
+) -> list[SignalPenalty]:
+    """Source-aware version scoring (Chunk 4).
+
+    Combines the recording-identity verdict (``compare_version``) with the
+    residual packaging/edit penalties. The recording verdict is emitted as a
+    single ``version:<verdict>`` signal whose name drives the engine's
+    recommendation cap (REJECT / SUBSTITUTE), so callers get correct intent
+    fidelity in both the distance and legacy-point projections.
+    """
+    from tuneshift.matching.version import (
+        VersionVerdict,
+        compare_version,
+        infer_version,
+    )
+
+    vw = weights.version
+    src = infer_version(source_title, source_album)
+    cand = infer_version(cand_title, cand_album)
+    verdict = compare_version(src, cand, prefer=prefer, avoid=avoid)
+
+    signals: list[SignalPenalty] = []
+    if verdict is VersionVerdict.MATCH:
+        signals.append(SignalPenalty("version:match", 0, 0.0, 0))
+    elif verdict is VersionVerdict.SOFT:
+        signals.append(SignalPenalty("version:soft", -vw.remaster, 0.15, vw.remaster))
+    elif verdict is VersionVerdict.SUBSTITUTE:
+        signals.append(SignalPenalty("version:substitute", -vw.substitute, 0.55, vw.substitute))
+    else:  # REJECT
+        signals.append(SignalPenalty("version:reject", -vw.reject, 1.0, vw.reject))
+
+    signals.extend(_residual_version_signals(
+        source_title, source_album, cand_title, cand_album, weights,
+    ))
     return signals
 
 
