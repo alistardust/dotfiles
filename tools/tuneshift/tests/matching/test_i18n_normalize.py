@@ -116,8 +116,8 @@ class TestBaseTitle:
     """base_title strips trailing descriptive subtitles for the retitle blend."""
 
     def test_trailing_subtitle_is_stripped(self):
-        assert base_title("Come On Over Baby (All I Wanna Do)") == "Come On Over Baby"
-        assert base_title("Come On Over Baby (All I Want Is You)") == "Come On Over Baby"
+        assert base_title("Sample Song (One Descriptive Phrase)") == "Sample Song"
+        assert base_title("Sample Song (Another Descriptive Phrase)") == "Sample Song"
 
     def test_leading_and_embedded_parens_preserved(self):
         # Integral parentheticals that are part of the song name must survive.

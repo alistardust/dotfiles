@@ -86,17 +86,17 @@ def test_points_matches_legacy_base_when_no_version_or_duration():
 
 
 class TestSubtitleRetitleBlend:
-    """A regional retitle that differs only in a trailing descriptive subtitle
-    must still match, while genuinely different songs are not merged."""
+    """A retitle that differs only in a trailing descriptive subtitle must
+    still match, while genuinely different songs are not merged."""
 
     def test_true_retitle_is_rescued(self):
-        # Christina "Come On Over Baby (All I Wanna Do)" vs the real Tidal title
-        # "(All I Want Is You)" — same recording, same album/duration.
+        # Same recording, same core title + album/duration, differing only in a
+        # trailing descriptive subtitle — synthetic to keep the assertion honest.
         score = score_match_with_version(
-            "Come On Over Baby (All I Wanna Do)", "Christina Aguilera",
-            "Christina Aguilera",
-            "Come on over Baby (All I Want Is You)", "Christina Aguilera",
-            "Christina Aguilera",
+            "Sample Song (One Descriptive Phrase)", "Some Artist",
+            "Some Album",
+            "Sample Song (Another Descriptive Phrase)", "Some Artist",
+            "Some Album",
             result_duration=224, reference_duration=224,
         )
         assert score >= 80
@@ -105,16 +105,16 @@ class TestSubtitleRetitleBlend:
         # Same album, but the differing subtitle must not score a perfect 100 —
         # the residual penalty keeps a gap below an identical-title match.
         retitle = score_match_with_version(
-            "Come On Over Baby (All I Wanna Do)", "Christina Aguilera",
-            "Christina Aguilera",
-            "Come On Over Baby (All I Want Is You)", "Christina Aguilera",
-            "Christina Aguilera",
+            "Sample Song (One Descriptive Phrase)", "Some Artist",
+            "Some Album",
+            "Sample Song (Another Descriptive Phrase)", "Some Artist",
+            "Some Album",
         )
         identical = score_match_with_version(
-            "Come On Over Baby (All I Want Is You)", "Christina Aguilera",
-            "Christina Aguilera",
-            "Come On Over Baby (All I Want Is You)", "Christina Aguilera",
-            "Christina Aguilera",
+            "Sample Song (Another Descriptive Phrase)", "Some Artist",
+            "Some Album",
+            "Sample Song (Another Descriptive Phrase)", "Some Artist",
+            "Some Album",
         )
         assert retitle < identical
 
