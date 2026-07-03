@@ -76,6 +76,7 @@ def _sync_one(db, playlist, platforms, args) -> int:
                 force=getattr(args, "reconcile", False),
                 cached_mapping=cached_mappings.get(track.id),
                 playlist_id=playlist.id,
+                verify_locked=getattr(args, "verify_locks", False),
             )
             db.save_match_audit(track.id, platform_name, result.audit)
 

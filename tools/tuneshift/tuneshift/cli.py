@@ -38,6 +38,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_sync.add_argument("--all", action="store_true", help="Sync all playlists")
     p_sync.add_argument("--reconcile", action="store_true", help="Force re-reconciliation")
     p_sync.add_argument("--auto", action="store_true", help="Accept all best matches without prompting")
+    p_sync.add_argument(
+        "--verify-locks", action="store_true",
+        help="Probe locked tracks for liveness and self-heal dead platform ids "
+             "to the same recording (skips the API probe by default)",
+    )
 
     # diff
     p_diff = sub.add_parser("diff", help="Show what would change on sync")
