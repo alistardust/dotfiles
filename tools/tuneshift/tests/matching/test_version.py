@@ -40,10 +40,23 @@ class TestInferVersion:
         ("Song (Acoustic)", RecordingClass.ACOUSTIC),
         ("Song (Live)", RecordingClass.LIVE),
         ("Song (Tribute)", RecordingClass.TRIBUTE),
+        ("Song (Sped Up)", RecordingClass.ALTERED),
+        ("Song (Sped-Up Version)", RecordingClass.ALTERED),
+        ("Song - Slowed", RecordingClass.ALTERED),
+        ("Song (Slowed Down)", RecordingClass.ALTERED),
+        ("Song (Nightcore)", RecordingClass.ALTERED),
         ("Song", RecordingClass.STUDIO),
     ])
     def test_recording_class_detection(self, title, expected):
         assert infer_version(title, "").recording is expected
+
+    def test_studio_source_rejects_sped_up_candidate(self):
+        # A tempo-altered edit is a distinct recording, not the studio master.
+        src = infer_version("Cornelia Street", "Lover")
+        cand = infer_version("Cornelia Street (Sped Up)", "Cornelia Street (Sped Up)")
+        assert src.recording is RecordingClass.STUDIO
+        assert cand.recording is RecordingClass.ALTERED
+        assert compare_version(src, cand) is VersionVerdict.REJECT
 
     def test_remaster_flag(self):
         p = infer_version("Song", "Album (2011 Remaster)")

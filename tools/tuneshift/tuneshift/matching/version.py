@@ -40,6 +40,7 @@ class RecordingClass(str, Enum):
     REMIX = "remix"
     ACOUSTIC = "acoustic"
     TRIBUTE = "tribute"
+    ALTERED = "altered"
 
 
 # Recording-identity classes in DETECTION PRIORITY order (most specific first);
@@ -48,6 +49,7 @@ _CLASS_REGEXES: tuple[tuple[RecordingClass, str], ...] = (
     (RecordingClass.KARAOKE, "_KARAOKE_RE"),
     (RecordingClass.INSTRUMENTAL, "_INSTRUMENTAL_RE"),
     (RecordingClass.TRIBUTE, "_TRIBUTE_RE"),
+    (RecordingClass.ALTERED, "_SPED_UP_RE"),
     (RecordingClass.REMIX, "_REMIX_RE"),
     (RecordingClass.ACOUSTIC, "_ACOUSTIC_RE"),
     (RecordingClass.LIVE, "_LIVE_RE"),

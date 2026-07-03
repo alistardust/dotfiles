@@ -615,23 +615,29 @@ def gold_cases() -> list[GoldCase]:
             prefer_classes=("radio",),
         ),
         # --- Christina Aguilera retitled single (Tidal 12270106) ----------
+        # The real Tidal title carries a DIFFERENT descriptive subtitle than the
+        # canonical source ("All I Want Is You" vs "All I Wanna Do") — a regional
+        # retitle of the same recording. The base-title blend must rescue this
+        # over the Shania collision and the karaoke take.
         GoldCase(
             id="christina-come-on-over-baby",
             source_title="Come On Over Baby (All I Wanna Do)",
             source_artist="Christina Aguilera",
             source_album="Christina Aguilera",
             candidates=[
-                Candidate("12270106", "Come On Over Baby (All I Wanna Do)",
+                Candidate("12270106", "Come On Over Baby (All I Want Is You)",
                           "Christina Aguilera", "Christina Aguilera", 224),
                 Candidate("cono-shania", "Come On Over", "Shania Twain",
                           "Come On Over", 175),
-                Candidate("cono-karaoke", "Come On Over Baby (All I Wanna Do) (Karaoke)",
+                Candidate("cono-karaoke", "Come On Over Baby (All I Want Is You) (Karaoke)",
                           "Karaoke Superstars", "Pop Karaoke Hits", 224),
             ],
             expected_platform_id="12270106",
             source_duration_seconds=224,
-            note="Retitled single with a parenthetical must match the correct "
-                 "Christina recording, never the Shania collision or the karaoke.",
-            tags=("retitle", "parenthetical", "wrong-artist-trap", "karaoke-trap"),
+            note="Regional retitle: source and candidate differ only in a trailing "
+                 "descriptive subtitle. Must match the correct Christina recording, "
+                 "never the Shania collision or the karaoke.",
+            tags=("retitle", "parenthetical", "subtitle-divergence",
+                  "wrong-artist-trap", "karaoke-trap"),
         ),
     ]

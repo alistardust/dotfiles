@@ -1,7 +1,7 @@
 """Tests for the engine-native score_track_match entry point."""
 from dataclasses import dataclass
 
-from tuneshift.matching import score_track_match
+from tuneshift.matching import score_match_with_version, score_track_match
 from tuneshift.matching.engine import Recommendation, recommend
 
 
@@ -80,3 +80,58 @@ def test_points_matches_legacy_base_when_no_version_or_duration():
     # the legacy object-form base score
     legacy = score_match(src, cand)
     assert d.points == legacy
+
+
+# --- Descriptive-subtitle retitle blend (score_match_with_version) -----------
+
+
+class TestSubtitleRetitleBlend:
+    """A regional retitle that differs only in a trailing descriptive subtitle
+    must still match, while genuinely different songs are not merged."""
+
+    def test_true_retitle_is_rescued(self):
+        # Christina "Come On Over Baby (All I Wanna Do)" vs the real Tidal title
+        # "(All I Want Is You)" — same recording, same album/duration.
+        score = score_match_with_version(
+            "Come On Over Baby (All I Wanna Do)", "Christina Aguilera",
+            "Christina Aguilera",
+            "Come on over Baby (All I Want Is You)", "Christina Aguilera",
+            "Christina Aguilera",
+            result_duration=224, reference_duration=224,
+        )
+        assert score >= 80
+
+    def test_retitle_still_costs_a_residual_penalty(self):
+        # Same album, but the differing subtitle must not score a perfect 100 —
+        # the residual penalty keeps a gap below an identical-title match.
+        retitle = score_match_with_version(
+            "Come On Over Baby (All I Wanna Do)", "Christina Aguilera",
+            "Christina Aguilera",
+            "Come On Over Baby (All I Want Is You)", "Christina Aguilera",
+            "Christina Aguilera",
+        )
+        identical = score_match_with_version(
+            "Come On Over Baby (All I Want Is You)", "Christina Aguilera",
+            "Christina Aguilera",
+            "Come On Over Baby (All I Want Is You)", "Christina Aguilera",
+            "Christina Aguilera",
+        )
+        assert retitle < identical
+
+    def test_different_songs_sharing_base_title_are_not_merged(self):
+        # Same base "Untitled" but different subtitle, artist and album: the
+        # title rescue must not lift this into match territory.
+        score = score_match_with_version(
+            "Untitled (How Does It Feel)", "D'Angelo", "Voodoo",
+            "Untitled (Rise)", "Some Other Band", "Different Album",
+        )
+        assert score < 50
+
+    def test_leading_paren_title_unaffected(self):
+        # "(You Drive Me) Crazy" is a leading paren, not a trailing subtitle;
+        # an identical match still scores a perfect 100.
+        score = score_match_with_version(
+            "(You Drive Me) Crazy", "Britney Spears", "...Baby One More Time",
+            "(You Drive Me) Crazy", "Britney Spears", "...Baby One More Time",
+        )
+        assert score == 100

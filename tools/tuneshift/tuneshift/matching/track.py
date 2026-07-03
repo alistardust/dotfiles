@@ -13,6 +13,7 @@ from __future__ import annotations
 from tuneshift.matching.confidence import classify_scores
 from tuneshift.matching.engine import Distance
 from tuneshift.matching.normalize import (
+    base_title,
     normalize_artist,
     normalize_title,
     strip_album_from_title,
@@ -20,6 +21,7 @@ from tuneshift.matching.normalize import (
 )
 from tuneshift.matching.penalties import (
     DEFAULT_WEIGHTS,
+    SignalPenalty,
     Weights,
     album_signal,
     artist_signal,
@@ -29,6 +31,38 @@ from tuneshift.matching.penalties import (
     title_signal,
     version_signals,
 )
+
+
+# Residual title cost applied when two titles agree only after trailing
+# descriptive subtitles are removed (a regional/edition retitle). Large enough
+# to keep a gap below an exact-title match so genuinely different songs sharing
+# a base title do not silently merge, small enough to rescue a true retitle
+# that would otherwise fall below the match threshold.
+_SUBTITLE_PENALTY = 10
+
+
+def _blended_title_signal(
+    sim_source: str, sim_result: str, weights: Weights
+) -> SignalPenalty:
+    """Title signal that rescues trailing-subtitle retitles.
+
+    Scores the (already version-stripped, normalized) titles as-is, then again
+    on their base titles (trailing descriptive subtitles removed), and keeps the
+    stronger result minus :data:`_SUBTITLE_PENALTY`. When neither title carries a
+    trailing subtitle the base leg is a no-op and the full signal is returned
+    unchanged, preserving byte-parity for the common case.
+    """
+    full = title_signal(sim_source, sim_result, weights)
+    base_src, base_res = base_title(sim_source), base_title(sim_result)
+    if base_src == sim_source and base_res == sim_result:
+        return full
+    base = title_signal(base_src, base_res, weights)
+    points = base.points - _SUBTITLE_PENALTY
+    if points <= full.points:
+        return full
+    budget = weights.title_exact
+    penalty = max(0.0, min(1.0, 1.0 - points / budget)) if budget > 0 else 0.0
+    return SignalPenalty("title", points, penalty, budget)
 
 
 def score_match(
@@ -158,11 +192,26 @@ def score_match_with_version(
     # (below) answers "same version?" from the raw titles. Strip recording/
     # edition markers ("(Live)", "(Radio Edit)", ...) from the similarity titles
     # only, so a preferred version is not penalised for carrying its own marker.
+    sim_source = strip_version_markers(source_title)
+    sim_result = strip_version_markers(result_title)
     base = score_match(
-        strip_version_markers(source_title), source_artist, source_album,
-        strip_version_markers(result_title), result_artist, result_album,
+        sim_source, source_artist, source_album,
+        sim_result, result_artist, result_album,
         weights,
     )
+    # Rescue regional/edition retitles that differ only in a trailing descriptive
+    # subtitle ("(All I Wanna Do)" vs "(All I Want Is You)"): re-score on the base
+    # titles and take the better, minus a residual penalty so the divergence
+    # still costs a little and two genuinely different songs sharing a base title
+    # keep a gap (album/duration/ISRC remain the tiebreakers).
+    base_source, base_result = base_title(sim_source), base_title(sim_result)
+    if base_source != sim_source or base_result != sim_result:
+        base_only = score_match(
+            base_source, source_artist, source_album,
+            base_result, result_artist, result_album,
+            weights,
+        )
+        base = max(base, base_only - _SUBTITLE_PENALTY)
     vsignals = source_aware_version_signals(
         source_title, source_album or "", result_title, result_album,
         prefer=prefer, avoid=avoid, weights=weights,
@@ -200,7 +249,7 @@ def score_track_match(
     src_title = strip_album_from_title(src_title, src_album)
     cand_title = strip_album_from_title(cand_title, cand_album)
     distance = Distance()
-    distance.add(title_signal(
+    distance.add(_blended_title_signal(
         normalize_title(strip_version_markers(src_title)),
         normalize_title(strip_version_markers(cand_title)),
         weights,

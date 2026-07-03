@@ -13,6 +13,7 @@ These lock the Chunk 8 internationalization behavior:
 """
 
 from tuneshift.matching import normalize_artist, normalize_title
+from tuneshift.matching.normalize import base_title, strip_version_markers
 from tuneshift.matching.normalize import (
     artist_set_overlap,
     fold_accents,
@@ -109,3 +110,32 @@ class TestMultiArtistSetOverlap:
 
     def test_single_artist_overlap(self):
         assert artist_set_overlap("Adele", "Adele") == 1.0
+
+
+class TestBaseTitle:
+    """base_title strips trailing descriptive subtitles for the retitle blend."""
+
+    def test_trailing_subtitle_is_stripped(self):
+        assert base_title("Come On Over Baby (All I Wanna Do)") == "Come On Over Baby"
+        assert base_title("Come On Over Baby (All I Want Is You)") == "Come On Over Baby"
+
+    def test_leading_and_embedded_parens_preserved(self):
+        # Integral parentheticals that are part of the song name must survive.
+        assert base_title("(You Drive Me) Crazy") == "(You Drive Me) Crazy"
+        assert base_title("(Sittin' On) The Dock of the Bay") == \
+            "(Sittin' On) The Dock of the Bay"
+
+    def test_stacked_trailing_groups_and_dash_suffix(self):
+        assert base_title("Song (A) (B)") == "Song"
+        assert base_title("Song (A) - B") == "Song"
+        assert base_title("Song (Live - 2020)") == "Song"
+
+    def test_stripping_to_empty_returns_original(self):
+        assert base_title("(Instrumental)") == "(Instrumental)"
+
+    def test_tempo_marker_is_a_version_marker_not_a_subtitle(self):
+        # "(Sped Up)" is neutralized by strip_version_markers before base_title
+        # ever runs, so the version axis (not the title blend) owns that call.
+        assert strip_version_markers("Cornelia Street (Sped Up)") == "Cornelia Street"
+        assert strip_version_markers("Song - Slowed Down") == "Song"
+        assert strip_version_markers("Song (Nightcore)") == "Song"

@@ -94,6 +94,37 @@ arc and appended at the end (never dropped).
 
 ---
 
+## 6. Descriptive-subtitle retitles vs. genuinely different songs
+
+**Limit.** Some tracks are the *same recording* released under a different
+trailing descriptive subtitle across regions or editions — e.g. Christina
+Aguilera's "Come On Over Baby **(All I Wanna Do)**" vs. the retail title
+"Come On Over Baby **(All I Want Is You)**". A naive title comparison scores
+these as divergent and can drop a correct match below the auto threshold.
+
+**Why.** Title *similarity* answers "same song?" while the source-aware version
+axis answers "same version?". Trailing descriptive subtitles are neither a
+version marker nor part of the base song name, so they must not dominate the
+"same song?" judgement.
+
+**Behaviour.** The version-aware scorers compute a **blended title similarity**:
+the version-stripped titles are scored as-is, then again on their *base titles*
+(trailing descriptive subtitles removed via `base_title`), and the stronger of
+the two is kept minus a small residual penalty. This rescues true retitles while
+keeping a gap below an identical-title match, so two genuinely different songs
+that merely share a base title (e.g. "Untitled (How Does It Feel)" vs. "Untitled
+(Rise)") are **not** merged — album, artist, duration and ISRC remain the
+tiebreakers. Only *trailing* parentheticals are collapsed; integral leading
+parentheticals ("(You Drive Me) Crazy") are preserved.
+
+**Related — tempo-altered edits.** "Sped up", "slowed"/"slowed down" and
+"nightcore" edits are a distinct recording class (`RecordingClass.ALTERED`), not
+a descriptive subtitle. A studio source therefore **rejects** a tempo-altered
+candidate (it is a different recording), and the marker is handled on the version
+axis rather than being collapsed into the base title.
+
+---
+
 ## How limits surface (summary)
 
 | Situation | Availability verdict | User sees |

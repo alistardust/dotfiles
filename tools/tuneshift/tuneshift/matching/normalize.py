@@ -238,6 +238,10 @@ _RADIO_EDIT_RE = re.compile(
     r"\b(radio edit|radio version|single edit|single version)\b",
     re.IGNORECASE,
 )
+_SPED_UP_RE = re.compile(
+    r"\b(sped[\s-]?up|slowed(?:\s+down)?|nightcore|daycore)\b",
+    re.IGNORECASE,
+)
 
 # Recording/edition version markers whose presence in a *title* should not
 # reduce title similarity: the source-aware version axis (which reads the raw
@@ -246,8 +250,10 @@ _RADIO_EDIT_RE = re.compile(
 _VERSION_MARKER_REGEXES = (
     _LIVE_RE, _REMIX_RE, _REMASTER_RE, _ACOUSTIC_RE, _KARAOKE_RE,
     _INSTRUMENTAL_RE, _TRIBUTE_RE, _RADIO_EDIT_RE, _DELUXE_RE, _COMPILATION_RE,
+    _SPED_UP_RE,
 )
 _DASH_SUFFIX_RE = re.compile(r"\s+[-\u2013\u2014]\s+([^-\u2013\u2014]+)$")
+_TRAILING_PAREN_RE = re.compile(r"\s*[\(\[][^\(\)\[\]]*[\)\]]\s*$")
 
 
 def strip_version_markers(title: str) -> str:
@@ -277,4 +283,39 @@ def strip_version_markers(title: str) -> str:
     dash = _DASH_SUFFIX_RE.search(cleaned)
     if dash and _is_marker(dash.group(1)):
         cleaned = cleaned[: dash.start()]
+    return _WHITESPACE_RE.sub(" ", cleaned).strip() or title
+
+
+def base_title(title: str) -> str:
+    """Return the title with *trailing* descriptive subtitles removed.
+
+    Peels any trailing parenthetical/bracket group or trailing dash-suffix
+    regardless of its content, so a regional/edition retitle that differs only
+    in a descriptive subtitle reduces to the same base title
+    (e.g. both "Come On Over Baby (All I Wanna Do)" and "... (All I Want Is
+    You)" collapse to "Come On Over Baby"). Unlike :func:`strip_version_markers`
+    this does not gate on known markers.
+
+    Only *trailing* groups are removed: leading or embedded parentheticals that
+    are integral to the song name — "(You Drive Me) Crazy", "(Sittin' On) The
+    Dock of the Bay" — are preserved. Returns the original title if stripping
+    would empty it.
+
+    Used only by the version-aware scorers as the second leg of a blended title
+    similarity, so a true retitle is not penalised as a divergent title while a
+    residual gap still guards against merging genuinely different songs that
+    happen to share a base title.
+    """
+    if not title:
+        return title
+    cleaned = title
+    while True:
+        before = cleaned
+        cleaned = _TRAILING_PAREN_RE.sub("", cleaned)
+        dash = _DASH_SUFFIX_RE.search(cleaned)
+        if dash:
+            cleaned = cleaned[: dash.start()]
+        cleaned = cleaned.strip()
+        if cleaned == before:
+            break
     return _WHITESPACE_RE.sub(" ", cleaned).strip() or title
