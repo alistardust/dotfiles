@@ -37,6 +37,15 @@ from tuneshift.matching.fingerprint import (
     build_fingerprint,
     fingerprint_equal,
 )
+from tuneshift.matching.review import (
+    ReviewBurden,
+    ReviewCluster,
+    ReviewItem,
+    cluster_reviews,
+    compute_burden,
+    needs_review,
+    review_kind,
+)
 from tuneshift.matching.normalize import (
     is_remaster,
     normalize_artist,
@@ -106,4 +115,11 @@ __all__ = [
     "build_fingerprint",
     "fingerprint_equal",
     "DEFAULT_DURATION_BUCKET_SECONDS",
+    "ReviewItem",
+    "ReviewCluster",
+    "ReviewBurden",
+    "cluster_reviews",
+    "compute_burden",
+    "needs_review",
+    "review_kind",
 ]

@@ -5,9 +5,12 @@ import os
 import re
 import sqlite3
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from tuneshift.models import Album, Artist, PlatformMapping, Playlist, PlaylistPin, Track
+
+if TYPE_CHECKING:
+    from tuneshift.matching import ReviewItem
 
 _SCHEMA_VERSION = 13
 
@@ -1406,6 +1409,59 @@ class Database:
             (track_id,),
         ).fetchall()
         return {row["platform"]: MatchAudit.from_json(row["audit_json"]) for row in rows}
+
+    def get_review_items(
+        self,
+        playlist_id: int | None = None,
+        platform: str | None = None,
+    ) -> list["ReviewItem"]:
+        """Return per-(playlist, track, platform) review items from stored audits.
+
+        Joins persisted ``match_audits`` to the tracks and the playlists they
+        appear in. One item per distinct (playlist, track, platform) so a track
+        pinned twice in a playlist is not double-counted, while the same track in
+        two playlists is surfaced under each. Callers filter/cluster with
+        :func:`tuneshift.matching.cluster_reviews` and
+        :func:`tuneshift.matching.compute_burden`.
+        """
+        from tuneshift.matching import ReviewItem
+
+        sql = """
+            SELECT DISTINCT p.id AS playlist_id, p.name AS playlist_name,
+                   t.id AS track_id, t.title, t.artist, t.album,
+                   ma.platform, ma.availability, ma.reason_code
+            FROM match_audits ma
+            JOIN tracks t ON t.id = ma.track_id
+            JOIN playlist_tracks pt ON pt.track_id = ma.track_id
+            JOIN playlists p ON p.id = pt.playlist_id
+        """
+        conditions: list[str] = []
+        params: list[object] = []
+        if playlist_id is not None:
+            conditions.append("p.id = ?")
+            params.append(playlist_id)
+        if platform is not None:
+            conditions.append("ma.platform = ?")
+            params.append(platform)
+        if conditions:
+            sql += " WHERE " + " AND ".join(conditions)
+        sql += " ORDER BY p.name, t.artist, t.title"
+
+        rows = self.conn.execute(sql, params).fetchall()
+        return [
+            ReviewItem(
+                track_id=row["track_id"],
+                title=row["title"],
+                artist=row["artist"],
+                album=row["album"],
+                platform=row["platform"],
+                availability=row["availability"],
+                reason_code=row["reason_code"],
+                playlist_id=row["playlist_id"],
+                playlist_name=row["playlist_name"],
+            )
+            for row in rows
+        ]
 
     def get_platform_mapping(self, track_id: int, platform: str) -> PlatformMapping | None:
         """Get a platform mapping for a track."""

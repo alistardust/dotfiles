@@ -204,6 +204,16 @@ def build_parser() -> argparse.ArgumentParser:
                        help="Reconcile now against the platform(s) instead of reading the "
                             "stored decision (requires login)")
 
+    # triage
+    p_triage = sub.add_parser(
+        "triage",
+        help="Cluster tracks needing attention for bulk review + show review burden",
+    )
+    p_triage.add_argument("playlist", nargs="?",
+                          help="Limit to one playlist (default: all playlists)")
+    p_triage.add_argument("--platform", choices=["spotify", "tidal", "ytmusic"],
+                          help="Limit to one platform (default: all)")
+
     # goal
     p_goal = sub.add_parser("goal", help="Set or show playlist goal/theme")
     p_goal.add_argument("playlist", help="Playlist name")
@@ -667,6 +677,9 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "why":
             from tuneshift.commands.why_cmd import handle_why
             return handle_why(args, db)
+        elif args.command == "triage":
+            from tuneshift.commands.triage_cmd import handle_triage
+            return handle_triage(args, db)
         elif args.command == "goal":
             from tuneshift.commands.goal_cmd import handle_goal
             return handle_goal(args, db)
