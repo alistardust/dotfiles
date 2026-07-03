@@ -9,7 +9,7 @@ from typing import Any
 
 from tuneshift.models import Album, Artist, PlatformMapping, Playlist, PlaylistPin, Track
 
-_SCHEMA_VERSION = 12
+_SCHEMA_VERSION = 13
 
 # Columns editable via update_track. Constrains f-string interpolation in the
 # UPDATE statement to a fixed, safe set (no SQL identifier injection).
@@ -40,7 +40,8 @@ CREATE TABLE IF NOT EXISTS tracks (
     confidence_score REAL,
     resolved_at TEXT,
     artist_id INTEGER REFERENCES artists(id),
-    album_id INTEGER REFERENCES albums(id)
+    album_id INTEGER REFERENCES albums(id),
+    preferences TEXT
 );
 
 CREATE TABLE IF NOT EXISTS platform_tracks (
@@ -57,6 +58,7 @@ CREATE TABLE IF NOT EXISTS platform_tracks (
     status TEXT NOT NULL DEFAULT 'matched',
     user_approved INTEGER NOT NULL DEFAULT 0,
     unavailable INTEGER NOT NULL DEFAULT 0,
+    fingerprint TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(track_id, platform)
 );
@@ -704,6 +706,29 @@ class Database:
                     )
                 """)
 
+            if current_version < 13:
+                # Chunk 6: durable self-healing locks + per-track precedence.
+                cols = {
+                    row[1]
+                    for row in self.conn.execute(
+                        "PRAGMA table_info(platform_tracks)"
+                    ).fetchall()
+                }
+                if "fingerprint" not in cols:
+                    self.conn.execute(
+                        "ALTER TABLE platform_tracks ADD COLUMN fingerprint TEXT"
+                    )
+                track_cols = {
+                    row[1]
+                    for row in self.conn.execute(
+                        "PRAGMA table_info(tracks)"
+                    ).fetchall()
+                }
+                if "preferences" not in track_cols:
+                    self.conn.execute(
+                        "ALTER TABLE tracks ADD COLUMN preferences TEXT"
+                    )
+
             self.conn.execute(
                 "UPDATE schema_meta SET value = ? WHERE key = 'version'",
                 (str(_SCHEMA_VERSION),),
@@ -1307,8 +1332,8 @@ class Database:
             """INSERT INTO platform_tracks
                (track_id, platform, platform_track_id, platform_title,
                 platform_artist, platform_album, match_score,
-                is_divergent, divergence_note, status, user_approved)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                is_divergent, divergence_note, status, user_approved, fingerprint)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(track_id, platform) DO UPDATE SET
                  platform_track_id = excluded.platform_track_id,
                  platform_title = excluded.platform_title,
@@ -1318,7 +1343,8 @@ class Database:
                  is_divergent = excluded.is_divergent,
                  divergence_note = excluded.divergence_note,
                  status = excluded.status,
-                 user_approved = excluded.user_approved""",
+                 user_approved = excluded.user_approved,
+                 fingerprint = COALESCE(excluded.fingerprint, platform_tracks.fingerprint)""",
             (
                 mapping.track_id,
                 mapping.platform,
@@ -1331,6 +1357,7 @@ class Database:
                 mapping.divergence_note,
                 mapping.status,
                 int(mapping.user_approved),
+                mapping.fingerprint,
             ),
         )
         self.conn.commit()
@@ -1400,6 +1427,7 @@ class Database:
             divergence_note=row["divergence_note"],
             status=row["status"],
             user_approved=bool(row["user_approved"]),
+            fingerprint=row["fingerprint"],
         )
 
     def get_platform_mappings_for_tracks(
@@ -1429,6 +1457,7 @@ class Database:
                 divergence_note=row["divergence_note"],
                 status=row["status"],
                 user_approved=bool(row["user_approved"]),
+                fingerprint=row["fingerprint"],
             )
         return result
 
@@ -1681,6 +1710,19 @@ class Database:
         """Get the account-wide default preferences, or None if unset."""
         row = self.conn.execute(
             "SELECT value FROM schema_meta WHERE key = 'global_preferences'"
+        ).fetchone()
+        return json.loads(row[0]) if row and row[0] else None
+
+    def set_track_preferences(self, track_id: int, prefs: dict | None) -> None:
+        """Set the per-track preferences (highest-precedence override layer)."""
+        val = json.dumps(prefs) if prefs else None
+        self.conn.execute("UPDATE tracks SET preferences = ? WHERE id = ?", (val, track_id))
+        self.conn.commit()
+
+    def get_track_preferences(self, track_id: int) -> dict | None:
+        """Get the per-track preferences, or None if unset."""
+        row = self.conn.execute(
+            "SELECT preferences FROM tracks WHERE id = ?", (track_id,)
         ).fetchone()
         return json.loads(row[0]) if row and row[0] else None
 

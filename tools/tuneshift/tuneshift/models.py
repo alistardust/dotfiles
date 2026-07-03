@@ -37,6 +37,7 @@ class PlatformMapping:
     divergence_note: str | None = None
     status: str = "matched"
     user_approved: bool = False
+    fingerprint: str | None = None
 
 
 @dataclass

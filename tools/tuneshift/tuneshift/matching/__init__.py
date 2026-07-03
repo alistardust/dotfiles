@@ -31,6 +31,12 @@ from tuneshift.matching.audit import (
     describe_availability,
     describe_reason,
 )
+from tuneshift.matching.fingerprint import (
+    DEFAULT_DURATION_BUCKET_SECONDS,
+    TrackFingerprint,
+    build_fingerprint,
+    fingerprint_equal,
+)
 from tuneshift.matching.normalize import (
     is_remaster,
     normalize_artist,
@@ -94,4 +100,8 @@ __all__ = [
     "MatchAudit",
     "describe_availability",
     "describe_reason",
+    "TrackFingerprint",
+    "build_fingerprint",
+    "fingerprint_equal",
+    "DEFAULT_DURATION_BUCKET_SECONDS",
 ]
