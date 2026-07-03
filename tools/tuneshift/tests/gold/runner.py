@@ -88,6 +88,8 @@ def score_case(case: GoldCase) -> CaseResult:
     all_durations = [c.duration_seconds for c in case.candidates
                      if c.duration_seconds is not None]
     scored: list[tuple[str, int]] = []
+    prefer = frozenset(case.prefer_classes)
+    avoid = frozenset(case.avoid_classes)
     for candidate in case.candidates:
         score = score_match_with_version(
             case.source_title,
@@ -99,6 +101,8 @@ def score_case(case: GoldCase) -> CaseResult:
             result_duration=candidate.duration_seconds,
             reference_duration=case.source_duration_seconds,
             all_durations=all_durations or None,
+            prefer=prefer,
+            avoid=avoid,
         )
         scored.append((candidate.platform_id, score))
 

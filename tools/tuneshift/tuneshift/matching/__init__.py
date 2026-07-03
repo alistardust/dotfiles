@@ -53,6 +53,7 @@ from tuneshift.matching.normalize import (
     normalize_artist,
     normalize_title,
     split_artists,
+    strip_album_from_title,
 )
 from tuneshift.matching.preferences import (
     Preferences,
@@ -86,6 +87,7 @@ __all__ = [
     "fold_accents",
     "split_artists",
     "artist_set_overlap",
+    "strip_album_from_title",
     "score_match",
     "version_penalty",
     "duration_penalty",

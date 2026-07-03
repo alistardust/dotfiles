@@ -31,13 +31,22 @@ _FEAT_BARE_RE = re.compile(
     r"\s+(?:feat\.?|ft\.?|featuring)\s+.+$",
     re.IGNORECASE,
 )
+# Explicit/clean *labels* are version-axis markers, not part of the title.
+# Version detection reads the raw title/album (infer_version), so stripping the
+# label here only cleans the string used for title *similarity*.
+_EXPLICIT_CLEAN_LABEL_RE = re.compile(
+    r"\s*[\(\[]\s*(?:explicit|clean)(?:\s+version)?\s*[\)\]]",
+    re.IGNORECASE,
+)
 _PUNCT_NORMALIZE = str.maketrans({
     "\u2018": "'", "\u2019": "'",
     "\u201c": '"', "\u201d": '"',
     "\u2026": "...",
     "\u2013": "-", "\u2014": "-", "\u2015": "-",  # en/em/horizontal dashes
     "\u00a0": " ",  # non-breaking space
+    "\u00b0": " degrees ",  # degree sign: "98°" -> "98 degrees" (band names)
 })
+_WHITESPACE_RE = re.compile(r"\s+")
 # Expand "Pt." / "Pt" part-abbreviations to "Part" so multi-part titles match.
 # Word-boundaried on both sides so "Ptolemy" is untouched.
 _PART_ABBREV_RE = re.compile(r"\bpt\.?(?=\s|$)", re.IGNORECASE)
@@ -100,6 +109,43 @@ def artist_set_overlap(source_name: str, candidate_name: str) -> float:
     return len(src & cand) / len(src)
 
 
+# A parenthetical or bracketed group anywhere in a title.
+_PAREN_GROUP_RE = re.compile(r"\s*[\(\[]([^\)\]]*)[\)\]]")
+
+
+def strip_album_from_title(title: str, album: str | None) -> str:
+    """Remove a parenthetical from a title when it merely repeats the album.
+
+    Some sources corrupt a track title by appending the album name in
+    parentheses, e.g. ``"Femininomenon (The Rise and Fall of a Midwest
+    Princess)"`` where the album *is* "The Rise and Fall of a Midwest Princess".
+    That parenthetical is noise that tanks title similarity against the clean
+    catalogue title and pollutes the search query.
+
+    A parenthetical group is removed only when its normalized contents closely
+    match the normalized album (ratio >= 0.9), so genuine subtitles like
+    ``"(You Drive Me) Crazy"`` are preserved. If nothing matches, the title is
+    returned unchanged. This is album-aware and therefore lives outside
+    ``normalize_title`` (which has no album context).
+    """
+    if not title or not album:
+        return title
+    from tuneshift.matching.similarity import ratio
+
+    norm_album = normalize_title(album)
+    if not norm_album:
+        return title
+
+    def _maybe_strip(match: re.Match[str]) -> str:
+        inner = normalize_title(match.group(1))
+        if inner and ratio(inner, norm_album) >= 0.9:
+            return ""
+        return match.group(0)
+
+    cleaned = _PAREN_GROUP_RE.sub(_maybe_strip, title)
+    return _WHITESPACE_RE.sub(" ", cleaned).strip() or title
+
+
 def normalize_title(title: str) -> str:
     """Normalize a track/album title for comparison."""
     if not title:
@@ -109,9 +155,10 @@ def normalize_title(title: str) -> str:
     title = title.translate(_PUNCT_NORMALIZE)
     title = _PART_ABBREV_RE.sub("Part", title)
     title = _EDITION_PARENS_RE.sub("", title)
+    title = _EXPLICIT_CLEAN_LABEL_RE.sub("", title)
     title = _FEAT_PAREN_RE.sub("", title)
     title = _FEAT_BARE_RE.sub("", title)
-    return title.strip().casefold()
+    return _WHITESPACE_RE.sub(" ", title).strip().casefold()
 
 
 def normalize_artist(artist: str) -> str:
@@ -131,9 +178,13 @@ def normalize_artist(artist: str) -> str:
     artist = _THE_PREFIX_RE.sub("", artist)
     artist = artist.replace("&", "and")
     artist = artist.replace(",", "")
+    # Asterisk is a stylized space/nothing in band names (B*Witched, *NSYNC),
+    # never a meaningful mid-word glyph like P!nk's "!" or A$AP's "$".
+    artist = artist.replace("*", " ")
     # Strip boundary punctuation but preserve mid-word chars (P!nk stays as p!nk)
     artist = _BOUNDARY_PUNCT_RE.sub("", artist)
     artist = _STANDALONE_PUNCT_RE.sub(" ", artist)
+    artist = _WHITESPACE_RE.sub(" ", artist)
     return artist.casefold().strip()
 
 

@@ -49,6 +49,8 @@ class GoldCase:
     source_duration_seconds: int | None = None
     note: str = ""
     tags: tuple[str, ...] = field(default_factory=tuple)
+    prefer_classes: tuple[str, ...] = field(default_factory=tuple)
+    avoid_classes: tuple[str, ...] = field(default_factory=tuple)
 
 
 def gold_cases() -> list[GoldCase]:
@@ -404,5 +406,155 @@ def gold_cases() -> list[GoldCase]:
             note="When the source is explicitly a live take, the live recording is "
                  "the intended match, not the studio cut.",
             tags=("live", "intent-fidelity"),
+        ),
+        # --- Artist-name normalization (real typographic traps) ----------
+        GoldCase(
+            id="artist-degree-sign-98",
+            source_title="The Hardest Thing",
+            source_artist="98\u00b0",
+            source_album="98\u00b0 and Rising",
+            candidates=[
+                Candidate("98deg-right", "The Hardest Thing", "98 Degrees",
+                          "98 Degrees and Rising", 273),
+                Candidate("98deg-wrong", "The Hardest Thing", "The Cardigans",
+                          "Gran Turismo", 228),
+            ],
+            expected_platform_id="98deg-right",
+            source_duration_seconds=273,
+            note="The degree sign in '98\u00b0' must normalize to '98 Degrees' so the "
+                 "typographic variant matches.",
+            tags=("artist-normalization", "unicode-symbol"),
+        ),
+        GoldCase(
+            id="artist-asterisk-bwitched",
+            source_title="C'est la Vie",
+            source_artist="B*Witched",
+            source_album="B*Witched",
+            candidates=[
+                Candidate("bw-right", "C'est la Vie", "B Witched", "B Witched", 156),
+                Candidate("bw-wrong", "C'est la Vie", "Robbie Nevil", "Uptown", 210),
+            ],
+            expected_platform_id="bw-right",
+            source_duration_seconds=156,
+            note="Asterisk in 'B*Witched' is a stylized space; must match 'B Witched'.",
+            tags=("artist-normalization", "asterisk"),
+        ),
+        GoldCase(
+            id="artist-leading-asterisk-nsync",
+            source_title="Bye Bye Bye",
+            source_artist="*NSYNC",
+            source_album="No Strings Attached",
+            candidates=[
+                Candidate("nsync-right", "Bye Bye Bye", "NSYNC",
+                          "No Strings Attached", 200),
+                Candidate("nsync-wrong", "Bye Bye Bye", "The Sugarcubes", "Life's Too Good", 190),
+            ],
+            expected_platform_id="nsync-right",
+            source_duration_seconds=200,
+            note="Leading asterisk in '*NSYNC' must not prevent matching 'NSYNC'.",
+            tags=("artist-normalization", "leading-asterisk"),
+        ),
+        # --- Featured artist in the title, not the artist field ----------
+        GoldCase(
+            id="feat-in-title-dirrty",
+            source_title="Dirrty (feat. Redman)",
+            source_artist="Christina Aguilera",
+            source_album="Stripped",
+            candidates=[
+                Candidate("dirrty-right", "Dirrty", "Christina Aguilera", "Stripped", 238),
+                Candidate("dirrty-wrong", "Dirrty (Remix)", "Christina Aguilera",
+                          "Stripped Remixes", 300),
+            ],
+            expected_platform_id="dirrty-right",
+            source_duration_seconds=238,
+            note="A feat. credit in the title must not penalize the same recording that "
+                 "omits it; never prefer a remix.",
+            tags=("feat-in-title", "remix-trap"),
+        ),
+        # --- Title corruption / normalization ----------------------------
+        GoldCase(
+            id="title-parenthetical-album-corruption",
+            source_title="Femininomenon (The Rise and Fall of a Midwest Princess)",
+            source_artist="Chappell Roan",
+            source_album="The Rise and Fall of a Midwest Princess",
+            candidates=[
+                Candidate("femin-right", "Femininomenon", "Chappell Roan",
+                          "The Rise and Fall of a Midwest Princess", 202),
+                Candidate("femin-wrong", "Pink Pony Club", "Chappell Roan",
+                          "The Rise and Fall of a Midwest Princess", 258),
+            ],
+            expected_platform_id="femin-right",
+            source_duration_seconds=202,
+            note="The album name wrongly appended to the title in parentheses must be "
+                 "stripped before matching (Lavender Menace corruption pattern).",
+            tags=("title-corruption", "parenthetical-album"),
+        ),
+        GoldCase(
+            id="title-leading-ellipsis",
+            source_title="...Baby One More Time",
+            source_artist="Britney Spears",
+            source_album="...Baby One More Time",
+            candidates=[
+                Candidate("baby-right", "...Baby One More Time", "Britney Spears",
+                          "...Baby One More Time", 211),
+                Candidate("baby-wrong", "Baby One More Time (Karaoke)", "Karaoke Stars",
+                          "Pop Hits Karaoke", 211),
+            ],
+            expected_platform_id="baby-right",
+            source_duration_seconds=211,
+            note="A leading ellipsis must not corrupt matching; never pick karaoke.",
+            tags=("title-corruption", "punctuation-heavy", "karaoke-trap"),
+        ),
+        GoldCase(
+            id="title-leading-paren-subtitle",
+            source_title="(You Drive Me) Crazy",
+            source_artist="Britney Spears",
+            source_album="...Baby One More Time",
+            candidates=[
+                Candidate("crazy-right", "(You Drive Me) Crazy", "Britney Spears",
+                          "...Baby One More Time", 197),
+                Candidate("crazy-wrong", "Crazy", "Gnarls Barkley", "St. Elsewhere", 178),
+            ],
+            expected_platform_id="crazy-right",
+            source_duration_seconds=197,
+            note="A leading parenthetical that is a genuine subtitle (not the album) "
+                 "must be preserved, not stripped down to 'Crazy'.",
+            tags=("title-corruption", "subtitle-preserved"),
+        ),
+        # --- Per-playlist recording preference ---------------------------
+        GoldCase(
+            id="avoid-live-preference",
+            source_title="Yesterday",
+            source_artist="The Beatles",
+            source_album="Help!",
+            candidates=[
+                Candidate("yesterday-studio", "Yesterday", "The Beatles", "Help!", 125),
+                Candidate("yesterday-live", "Yesterday (Live)", "The Beatles",
+                          "Live at the BBC", 130),
+            ],
+            expected_platform_id="yesterday-studio",
+            source_duration_seconds=125,
+            note="A playlist configured to avoid live takes must hard-reject the live "
+                 "recording and keep the studio cut.",
+            tags=("preference", "avoid-live"),
+            avoid_classes=("live",),
+        ),
+        # --- Track available only under a different album ----------------
+        GoldCase(
+            id="track-under-different-album",
+            source_title="Torn",
+            source_artist="Natalie Imbruglia",
+            source_album="Left of the Middle",
+            candidates=[
+                Candidate("torn-comp", "Torn", "Natalie Imbruglia",
+                          "The Best of Natalie Imbruglia", 285),
+                Candidate("torn-wrong", "Torn", "Ednaswap", "Wacko Magneto", 250),
+            ],
+            expected_platform_id="torn-comp",
+            source_duration_seconds=282,
+            note="When the requested album is absent on-platform but the correct "
+                 "recording exists under a compilation, that recording is valid; must "
+                 "not pick the different-artist original.",
+            tags=("different-album", "compilation-valid", "wrong-artist-trap"),
         ),
     ]

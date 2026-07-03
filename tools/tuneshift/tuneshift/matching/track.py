@@ -12,7 +12,11 @@ from __future__ import annotations
 
 from tuneshift.matching.confidence import classify_scores
 from tuneshift.matching.engine import Distance
-from tuneshift.matching.normalize import normalize_artist, normalize_title
+from tuneshift.matching.normalize import (
+    normalize_artist,
+    normalize_title,
+    strip_album_from_title,
+)
 from tuneshift.matching.penalties import (
     DEFAULT_WEIGHTS,
     Weights,
@@ -144,6 +148,11 @@ def score_match_with_version(
     was requested) down-ranks it but keeps it findable. ``prefer``/``avoid`` are
     recording-class sets from the effective per-playlist preferences.
     """
+    # Drop an album-name parenthetical that a source has appended to the title
+    # (e.g. "Femininomenon (The Rise and Fall of a Midwest Princess)") before
+    # scoring, on both sides, so the corruption does not tank title similarity.
+    source_title = strip_album_from_title(source_title, source_album)
+    result_title = strip_album_from_title(result_title, result_album)
     base = score_match(
         source_title, source_artist, source_album,
         result_title, result_artist, result_album,
@@ -182,6 +191,9 @@ def score_track_match(
     src_album = getattr(source, "album", None)
     cand_title = getattr(candidate, "title", "") or ""
     cand_album = getattr(candidate, "album", None) or ""
+    # Drop an album-name parenthetical appended to either title before scoring.
+    src_title = strip_album_from_title(src_title, src_album)
+    cand_title = strip_album_from_title(cand_title, cand_album)
     distance = Distance()
     distance.add(title_signal(
         normalize_title(src_title),

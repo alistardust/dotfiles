@@ -137,6 +137,17 @@ def compare_version(
         return VersionVerdict.REJECT
     if source.is_clean and candidate.is_explicit and verdict is VersionVerdict.MATCH:
         verdict = VersionVerdict.SUBSTITUTE
+    # A clean/censored edit is a modified master. Unless the source is itself
+    # clean (or a clean edit is explicitly preferred), it must not outrank the
+    # unmodified master: down-rank it to a substitute so the explicit/original
+    # wins by default, while staying findable when it is the only option.
+    if (
+        candidate.is_clean
+        and not source.is_clean
+        and "clean" not in prefer
+        and verdict is VersionVerdict.MATCH
+    ):
+        verdict = VersionVerdict.SUBSTITUTE
 
     # --- Remaster is cosmetic (same recording) ---
     if verdict is VersionVerdict.MATCH and candidate.is_remaster and not source.is_remaster:
