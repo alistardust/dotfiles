@@ -1,6 +1,7 @@
 """Track reconciliation: match canonical tracks to platform-specific IDs."""
+import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from difflib import SequenceMatcher
 
 from tuneshift.db import Database
@@ -9,11 +10,14 @@ from tuneshift.matching import (
     MatchAudit,
     ReasonCode,
     RejectedCandidate,
+    TrackFingerprint,
+    build_fingerprint,
     classify_album_results,
     classify_artist_results,
-    classify_results,
+    classify_scores,
     duration_proximity_bonus,
     edition_cost,
+    fingerprint_equal,
     is_remaster,
     normalize_title,
     preference_sort_bias,
@@ -358,6 +362,166 @@ _STRATEGIES = [
 ]
 
 
+def _fingerprint_for_track(track, mapping: PlatformMapping) -> TrackFingerprint:
+    """Resolve the target fingerprint for a locked mapping.
+
+    Prefer the fingerprint captured when the lock was approved; fall back to
+    building one from the canonical track for locks made before fingerprints
+    were stored (schema < v13).
+    """
+    if mapping.fingerprint:
+        try:
+            return TrackFingerprint.from_dict(json.loads(mapping.fingerprint))
+        except (ValueError, TypeError, KeyError):
+            logger.warning("corrupt stored fingerprint for track %s; rebuilding", mapping.track_id)
+    return build_fingerprint(
+        title=track.title,
+        artist=track.artist,
+        album=track.album,
+        isrc=track.isrc,
+        duration_seconds=track.duration_seconds,
+    )
+
+
+def _locked_id_alive(client, platform_track_id: str) -> bool | None:
+    """Return True/False if the locked id is alive, or None if undeterminable.
+
+    Liveness is checked via the platform's ``get_track``; clients that don't
+    expose one (e.g. Spotify) return None, meaning "cannot verify" — the caller
+    then trusts the lock as-is rather than guessing.
+    """
+    get_track = getattr(client, "get_track", None)
+    if not callable(get_track):
+        return None
+    try:
+        result = get_track(platform_track_id)
+    except _PLATFORM_ERRORS as exc:
+        logger.warning("lock liveness check failed for %s: %s", platform_track_id, exc)
+        return None
+    if result is None:
+        return False
+    if result.available is False:
+        return False
+    return True
+
+
+def _find_equivalent_candidate(track, client, target_fp: TrackFingerprint) -> TrackResult | None:
+    """Search the platform for a live candidate that is the SAME recording.
+
+    Runs the full strategy cascade and returns the first candidate whose
+    fingerprint equals ``target_fp`` (ISRC match, or normalized title/artist +
+    version class + duration bucket) and that is not explicitly blocked. Returns
+    None when no equivalent recording is available — the lock is then held, never
+    swapped to a different recording.
+    """
+    seen: set[str] = set()
+    for strategy_fn, _ in _STRATEGIES:
+        for cand in strategy_fn(track, client):
+            if cand.platform_id in seen:
+                continue
+            seen.add(cand.platform_id)
+            if cand.available is False:
+                continue
+            cand_fp = build_fingerprint(
+                title=cand.title,
+                artist=cand.artist,
+                album=cand.album,
+                isrc=cand.isrc,
+                duration_seconds=cand.duration_seconds,
+            )
+            if fingerprint_equal(target_fp, cand_fp):
+                return cand
+    return None
+
+
+def _locked_available_result(mapping: PlatformMapping, reason_code: str) -> ReconcileResult:
+    audit = MatchAudit(
+        availability=Availability.EXACT_AVAILABLE,
+        reason_code=reason_code,
+        chosen_platform_id=mapping.platform_track_id,
+        chosen_score=mapping.match_score or 100,
+        locked=True,
+    )
+    return ReconcileResult(
+        platform_track_id=mapping.platform_track_id,
+        score=mapping.match_score or 100,
+        confidence="high",
+        is_divergent=mapping.is_divergent,
+        divergence_note=mapping.divergence_note,
+        from_cache=True,
+        availability=audit.availability,
+        reason_code=audit.reason_code,
+        audit=audit,
+    )
+
+
+def _locked_unavailable_result(reason_code: str) -> ReconcileResult:
+    audit = MatchAudit(
+        availability=Availability.EXACT_UNAVAILABLE,
+        reason_code=reason_code,
+        locked=True,
+    )
+    return ReconcileResult(
+        confidence="not_found",
+        from_cache=True,
+        availability=audit.availability,
+        reason_code=audit.reason_code,
+        audit=audit,
+    )
+
+
+def _verify_and_heal_lock(
+    db: Database,
+    track,
+    client,
+    mapping: PlatformMapping,
+) -> ReconcileResult:
+    """Actively verify a user lock and self-heal it when the platform id died.
+
+    - Locked id alive         -> keep it; backfill fingerprint if missing.
+    - Liveness undeterminable  -> trust the lock as-is (per stored status).
+    - Locked id dead, same     -> re-bind to an equivalent live id (LOCK_HEALED).
+      recording found on platform
+    - Locked id dead, no        -> hold as EXACT_UNAVAILABLE (LOCK_HELD); never
+      equivalent found            drop the lock or swap to a different recording.
+    """
+    alive = _locked_id_alive(client, mapping.platform_track_id)
+
+    if alive is True:
+        if not mapping.fingerprint:
+            fp = _fingerprint_for_track(track, mapping)
+            db.upsert_platform_mapping(
+                replace(mapping, status="matched", fingerprint=json.dumps(fp.as_dict()))
+            )
+        return _locked_available_result(mapping, ReasonCode.LOCKED)
+
+    if alive is None:
+        # Cannot verify (client has no liveness probe) — honour stored status.
+        if mapping.status == "unavailable":
+            return _locked_unavailable_result(ReasonCode.LOCKED)
+        return _locked_available_result(mapping, ReasonCode.LOCKED)
+
+    # Locked id is dead — attempt to heal to the SAME recording.
+    target_fp = _fingerprint_for_track(track, mapping)
+    cand = _find_equivalent_candidate(track, client, target_fp)
+    if cand is not None:
+        healed = replace(
+            mapping,
+            platform_track_id=cand.platform_id,
+            platform_title=cand.title,
+            platform_artist=cand.artist,
+            platform_album=cand.album,
+            status="matched",
+            fingerprint=json.dumps(target_fp.as_dict()),
+        )
+        db.upsert_platform_mapping(healed)
+        return _locked_available_result(healed, ReasonCode.LOCK_HEALED)
+
+    # No equivalent recording available — hold the lock, do not swap.
+    db.upsert_platform_mapping(replace(mapping, status="unavailable"))
+    return _locked_unavailable_result(ReasonCode.LOCK_HELD)
+
+
 def reconcile_track(
     db: Database,
     track_id: int,
@@ -365,6 +529,7 @@ def reconcile_track(
     force: bool = False,
     cached_mapping: PlatformMapping | None = None,
     playlist_id: int | None = None,
+    verify_locked: bool = False,
 ) -> ReconcileResult:
     """Reconcile a canonical track to a platform ID using multi-strategy cascade.
 
@@ -373,6 +538,14 @@ def reconcile_track(
     preferences (or ``playlist_id=None``) the cascade resolves to the built-in
     defaults, which is a strict no-op — identical to the pre-preferences
     behaviour.
+
+    ``verify_locked`` controls whether a durable user lock is actively checked
+    for liveness on this run. Default ``False`` trusts the lock without an API
+    call (fast, no rate-limit pressure). When ``True`` — e.g. a periodic
+    integrity sync — a lock whose platform id has gone dead is self-healed to an
+    equivalent live id for the *same* recording, or held as unavailable if the
+    recording is genuinely gone. It is never silently swapped to a different
+    recording.
     """
     track = db.get_track(track_id)
     if track is None:
@@ -383,7 +556,7 @@ def reconcile_track(
     prefs = resolve_preferences(
         db.get_global_preferences(),
         db.get_preferences(playlist_id) if playlist_id is not None else None,
-        None,
+        db.get_track_preferences(track_id),
     )
     # Recording-class intent from the effective prefs. Empty when prefs are the
     # built-in defaults, so scoring stays purely source-aware (a live source is
@@ -422,6 +595,8 @@ def reconcile_track(
                 audit=audit,
             )
         if mapping and mapping.user_approved:
+            if verify_locked:
+                return _verify_and_heal_lock(db, track, client, mapping)
             if mapping.status == "unavailable":
                 audit = MatchAudit(
                     availability=Availability.EXACT_UNAVAILABLE,
@@ -514,7 +689,7 @@ def reconcile_track(
         )
     )
     scores = [s for s, _, _ in scored]
-    confidence = classify_results(scores)
+    confidence = classify_scores(scores, min_lead=prefs.min_lead)
     audit = _build_audit(
         track=track, platform_name=platform_name, scored=scored,
         confidence=confidence, prefer=prefer_classes, avoid=avoid_classes,

@@ -25,6 +25,7 @@ class Preferences:
     avoid: list[str] = field(default_factory=lambda: list(_DEFAULT_AVOID))
     duration_tolerance_percent: float = 15.0
     tiebreak_order: list[str] = field(default_factory=lambda: list(_DEFAULT_TIEBREAK))
+    min_lead: int = 0
 
     def is_default(self) -> bool:
         """True when these preferences equal the built-in defaults.
@@ -61,6 +62,8 @@ def resolve_preferences(
             base.duration_tolerance_percent = layer["duration_tolerance_percent"]
         if "tiebreak_order" in layer:
             base.tiebreak_order = list(layer["tiebreak_order"])
+        if "min_lead" in layer:
+            base.min_lead = int(layer["min_lead"])
     return base
 
 

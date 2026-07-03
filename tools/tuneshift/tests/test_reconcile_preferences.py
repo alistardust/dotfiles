@@ -99,3 +99,15 @@ class TestPlaylistPreferenceReRank:
             db, track_id, _client(self._tied_candidates()), playlist_id=None
         )
         assert result.platform_track_id == "alpha"
+
+    def test_track_preferences_override_playlist(self, tmp_db: Path) -> None:
+        # Track-level prefs are the highest-precedence layer: they must win over
+        # a conflicting playlist-level preference. Proves the track layer is
+        # actually consulted in reconcile (previously wired as track=None).
+        db, track_id, playlist_id = self._setup(tmp_db)
+        db.set_preferences(playlist_id, {"prefer": ["alpha"]})
+        db.set_track_preferences(track_id, {"prefer": ["bravo"]})
+        result = reconcile_track(
+            db, track_id, _client(self._tied_candidates()), playlist_id=playlist_id
+        )
+        assert result.platform_track_id == "bravo"

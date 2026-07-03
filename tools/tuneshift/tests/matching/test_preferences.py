@@ -47,6 +47,21 @@ class TestCascade:
         assert prefs.duration_tolerance_percent == 5.0
         assert "studio" in prefs.prefer
 
+    def test_min_lead_defaults_to_zero(self) -> None:
+        assert resolve_preferences(None, None, None).min_lead == 0
+
+    def test_min_lead_cascades_and_track_wins(self) -> None:
+        prefs = resolve_preferences(
+            {"min_lead": 5},
+            {"min_lead": 8},
+            {"min_lead": 15},
+        )
+        assert prefs.min_lead == 15
+
+    def test_min_lead_does_not_break_is_default(self) -> None:
+        # A configured min_lead makes prefs non-default (byte-parity guard).
+        assert not resolve_preferences({"min_lead": 10}, None, None).is_default()
+
 
 class TestIsDefault:
     def test_fresh_preferences_are_default(self) -> None:

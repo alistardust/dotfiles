@@ -75,6 +75,12 @@ class ReasonCode:
     PLATFORM_CANNOT_DISTINGUISH = "platform_cannot_distinguish"
     #: An acceptable non-exact recording was chosen as a fallback.
     SUBSTITUTED = "substituted"
+    #: A locked recording's platform id went dead; re-bound to an equivalent
+    #: live id for the SAME recording (verified by fingerprint + version class).
+    LOCK_HEALED = "lock_healed"
+    #: A locked recording is gone from the platform; held as unavailable rather
+    #: than silently swapped to a different recording.
+    LOCK_HELD = "lock_held"
 
 
 @dataclass(frozen=True)
@@ -173,6 +179,8 @@ _REASON_TEXT = {
     ReasonCode.AMBIGUOUS_TOP: "the top candidates were too close to choose confidently",
     ReasonCode.PLATFORM_CANNOT_DISTINGUISH: "this platform can't tell blocked from absent",
     ReasonCode.SUBSTITUTED: "an acceptable non-exact version was chosen as a fallback",
+    ReasonCode.LOCK_HEALED: "the locked track's id changed; re-bound to the same recording",
+    ReasonCode.LOCK_HELD: "the locked recording is gone; held rather than swapped to a different one",
 }
 
 _AVAILABILITY_TEXT = {

@@ -49,6 +49,7 @@ from tuneshift.matching.preferences import (
     resolve_preferences,
     version_intent,
 )
+from tuneshift.matching.confidence import classify_scores
 from tuneshift.matching.track import (
     classify_results,
     duration_penalty,
@@ -77,6 +78,7 @@ __all__ = [
     "score_match_with_version",
     "score_track_match",
     "classify_results",
+    "classify_scores",
     "Preferences",
     "VersionPreferences",
     "resolve_preferences",
