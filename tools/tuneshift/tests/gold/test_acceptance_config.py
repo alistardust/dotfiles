@@ -14,6 +14,9 @@ def test_defaults_match_approved_targets():
     assert targets.min_recall == 0.95
     assert targets.max_review_burden_per_1k == 20.0
     assert targets.min_zero_intervention_rate == 0.80
+    # Adversarial-gold-set regression ceiling is distinct from the production
+    # review-burden target and must sit well above it.
+    assert targets.gold_burden_ceiling_per_1k > targets.max_review_burden_per_1k
 
 
 def test_shipped_config_file_loads():

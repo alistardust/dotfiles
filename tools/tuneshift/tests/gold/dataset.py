@@ -272,4 +272,137 @@ def gold_cases() -> list[GoldCase]:
             note="Long album version distinguished from the single edit by duration.",
             tags=("duplicate", "duration-discriminator"),
         ),
+        # --- Karaoke / "in the style of" trap ----------------------------
+        GoldCase(
+            id="karaoke-made-famous-by",
+            source_title="Rolling in the Deep",
+            source_artist="Adele",
+            source_album="21",
+            candidates=[
+                Candidate("adele-ritd", "Rolling in the Deep", "Adele", "21", 228),
+                Candidate("ritd-karaoke", "Rolling in the Deep (Karaoke Version)",
+                          "Karaoke Universe", "Karaoke Hits", 231),
+                Candidate("ritd-madefamous", "Rolling in the Deep "
+                          "(Made Famous by Adele)", "The Karaoke Crew",
+                          "Pop Karaoke Vol. 3", 226),
+            ],
+            expected_platform_id="adele-ritd",
+            expected_version_class="studio",
+            source_duration_seconds=228,
+            note="Must pick the real Adele master, never a karaoke / "
+                 "'made famous by' impostor.",
+            tags=("karaoke", "tribute-trap", "wrong-artist-trap"),
+        ),
+        # --- Sped-up / TikTok edit trap ----------------------------------
+        GoldCase(
+            id="sped-up-edit-trap",
+            source_title="Cornelia Street",
+            source_artist="Taylor Swift",
+            source_album="Lover",
+            candidates=[
+                Candidate("cornelia-orig", "Cornelia Street", "Taylor Swift",
+                          "Lover", 288),
+                Candidate("cornelia-sped", "Cornelia Street (Sped Up)",
+                          "Taylor Swift", "Cornelia Street (Sped Up)", 233),
+            ],
+            expected_platform_id="cornelia-orig",
+            expected_version_class="studio",
+            source_duration_seconds=288,
+            note="Original album cut, not the sped-up edit, when the source is the "
+                 "studio version.",
+            tags=("sped-up", "edit-trap"),
+        ),
+        # --- Instrumental trap -------------------------------------------
+        GoldCase(
+            id="instrumental-trap",
+            source_title="Clocks",
+            source_artist="Coldplay",
+            source_album="A Rush of Blood to the Head",
+            candidates=[
+                Candidate("clocks-orig", "Clocks", "Coldplay",
+                          "A Rush of Blood to the Head", 307),
+                Candidate("clocks-instr", "Clocks (Instrumental)",
+                          "Piano Tribute Players", "Instrumental Tributes", 300),
+            ],
+            expected_platform_id="clocks-orig",
+            expected_version_class="studio",
+            source_duration_seconds=307,
+            note="Vocal source must not resolve to an instrumental cover.",
+            tags=("instrumental", "tribute-trap"),
+        ),
+        # --- Remix present but original available ------------------------
+        GoldCase(
+            id="remix-when-original-available",
+            source_title="Sorry",
+            source_artist="Justin Bieber",
+            source_album="Purpose",
+            candidates=[
+                Candidate("sorry-orig", "Sorry", "Justin Bieber", "Purpose", 200),
+                Candidate("sorry-latino", "Sorry (Latino Remix)", "Justin Bieber",
+                          "Sorry (Remixes)", 194),
+                Candidate("sorry-vs", "Sorry (BOXINLION Remix)", "Justin Bieber",
+                          "Sorry (Remixes)", 215),
+            ],
+            expected_platform_id="sorry-orig",
+            expected_version_class="studio",
+            source_duration_seconds=200,
+            note="Original beats any remix when the source is the studio version.",
+            tags=("remix", "edit-trap"),
+        ),
+        # --- Remaster of the same recording is acceptable ----------------
+        GoldCase(
+            id="remaster-acceptable",
+            source_title="Bohemian Rhapsody",
+            source_artist="Queen",
+            source_album="A Night at the Opera",
+            candidates=[
+                Candidate("bohemian-remaster", "Bohemian Rhapsody (2011 Remaster)",
+                          "Queen", "A Night at the Opera (2011 Remaster)", 355),
+                Candidate("bohemian-live", "Bohemian Rhapsody (Live at Wembley '86)",
+                          "Queen", "Live at Wembley '86", 358),
+            ],
+            expected_platform_id="bohemian-remaster",
+            expected_version_class="studio",
+            source_duration_seconds=354,
+            note="A remaster of the same studio recording is an acceptable match; "
+                 "the live version is not.",
+            tags=("remaster", "edition", "live-trap"),
+        ),
+        # --- feat. credit variant is the same recording ------------------
+        GoldCase(
+            id="feat-credit-same-recording",
+            source_title="Uptown Funk",
+            source_artist="Mark Ronson",
+            source_album="Uptown Special",
+            candidates=[
+                Candidate("uptown-feat", "Uptown Funk (feat. Bruno Mars)",
+                          "Mark Ronson", "Uptown Special", 270),
+                Candidate("uptown-cover", "Uptown Funk", "The Cover Kings",
+                          "Party Hits 2015", 268),
+            ],
+            expected_platform_id="uptown-feat",
+            expected_version_class="studio",
+            source_duration_seconds=270,
+            note="A '(feat. X)' credit on the same recording is the correct match "
+                 "over a same-title cover.",
+            tags=("feat-credit", "cover-trap"),
+        ),
+        # --- Live-intent source must pick the live recording -------------
+        GoldCase(
+            id="live-intent-prefers-live",
+            source_title="Hurt (Live)",
+            source_artist="Johnny Cash",
+            source_album="Unearthed",
+            candidates=[
+                Candidate("hurt-studio", "Hurt", "Johnny Cash",
+                          "American IV: The Man Comes Around", 218),
+                Candidate("hurt-live", "Hurt (Live)", "Johnny Cash", "Unearthed", 232),
+            ],
+            expected_platform_id="hurt-live",
+            expected_version_class="live",
+            source_duration_seconds=232,
+            note="When the source is explicitly a live take, the live recording is "
+                 "the intended match, not the studio cut.",
+            tags=("live", "intent-fidelity"),
+        ),
     ]

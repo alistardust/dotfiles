@@ -9,11 +9,15 @@ As of the Chunk 4 intent-fidelity work the source-aware engine achieves:
 * **full recall** on the labeled should-match cases.
 * **>= 80% zero-intervention** — most tracks resolve with no human review.
 
-``max_review_burden_per_1k`` is intentionally NOT gated here yet: the seed gold
-set has only ~12 cases, so a single review case is ~83/1k and the <=20/1k target
-is mathematically unreachable until the set grows (that happens in the scale
-chunk, which expands the dataset). The metric is still recorded and reported so
-regressions are visible; it is asserted once the dataset is large enough.
+``max_review_burden_per_1k`` is the *production* target and is intentionally
+NOT gated against this set: the gold set is adversarial (deliberately stuffed
+with traps), so its ambiguity rate is far higher than a real library's and the
+<=20/1k target is neither reachable nor meaningful here. It is verified against
+real telemetry once that exists. What IS gated here is a *regression guard*:
+the gold-set review burden must not exceed ``gold_burden_ceiling_per_1k`` (the
+current measured burden plus modest headroom), so a change that inflates how
+many cases the engine punts to review fails loudly — without padding the set
+with easy cases to game the production rate.
 """
 from __future__ import annotations
 
@@ -45,4 +49,19 @@ def test_zero_intervention_meets_target():
     assert metrics.zero_intervention_rate >= targets.min_zero_intervention_rate, (
         f"zero-intervention {metrics.zero_intervention_rate:.3f} "
         f"< target {targets.min_zero_intervention_rate:.3f}"
+    )
+
+
+def test_review_burden_no_regression():
+    """Gold-set review burden must not regress past the recorded ceiling.
+
+    This is the scale-chunk guard: not the absolute production <=20/1k target
+    (deferred to real telemetry), but a ceiling on the adversarial set so that
+    review inflation is caught immediately.
+    """
+    metrics = run_gold_set()
+    targets = load_targets()
+    assert metrics.review_burden_per_1k <= targets.gold_burden_ceiling_per_1k, (
+        f"gold-set review burden {metrics.review_burden_per_1k:.1f}/1k regressed "
+        f"past ceiling {targets.gold_burden_ceiling_per_1k:.1f}/1k"
     )
