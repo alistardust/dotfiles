@@ -1463,6 +1463,33 @@ class Database:
             for row in rows
         ]
 
+    def get_unavailable_track_ids(
+        self, playlist_id: int, platform: str = "tidal"
+    ) -> list[int]:
+        """Return playlist track ids that are unavailable on ``platform``.
+
+        A track counts as unavailable when its persisted ``match_audit`` for the
+        platform records availability ``not_found`` (genuinely absent) or
+        ``exact_unavailable`` (known but blocked). Tidal is the availability
+        source of truth, so it is the default platform.
+
+        Tracks with no audit for the platform are treated as available (not
+        excluded): a playlist that has never been reconciled is unaffected. The
+        sequencer uses this to keep unavailable tracks from distorting the arc.
+        """
+        rows = self.conn.execute(
+            """
+            SELECT DISTINCT pt.track_id
+            FROM playlist_tracks pt
+            JOIN match_audits ma
+              ON ma.track_id = pt.track_id AND ma.platform = ?
+            WHERE pt.playlist_id = ?
+              AND ma.availability IN ('not_found', 'exact_unavailable')
+            """,
+            (platform, playlist_id),
+        ).fetchall()
+        return [row[0] for row in rows]
+
     def get_platform_mapping(self, track_id: int, platform: str) -> PlatformMapping | None:
         """Get a platform mapping for a track."""
         row = self.conn.execute(
