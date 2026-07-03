@@ -63,7 +63,14 @@ class PlatformPlaylist:
 
 @dataclass
 class TrackResult:
-    """A search result from any platform."""
+    """A search result from any platform.
+
+    ``available`` and ``tier_restricted`` carry the availability signal the
+    platform exposes (Spotify ``is_playable``/``available_markets``; Tidal
+    ``allowStreaming``/``premium_streaming_only``). They are optional so call
+    sites that don't need availability are unaffected: ``available=None`` means
+    "unknown", never "blocked" — only an explicit ``False`` denotes blocked.
+    """
 
     platform_id: str
     title: str
@@ -71,6 +78,8 @@ class TrackResult:
     album: str
     duration_seconds: int | None = None
     isrc: str | None = None
+    available: bool | None = None
+    tier_restricted: bool = False
 
 
 @dataclass

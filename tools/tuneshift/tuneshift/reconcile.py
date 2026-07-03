@@ -178,10 +178,17 @@ def _build_audit(
             rejected=rejected,
         )
 
-    # confidence == "high": clear pick.
+    # confidence == "high": clear pick. Distinguish an exact recording from an
+    # accepted *substitute* version (e.g. the only available copy is a different
+    # but acceptable master) so callers can tell "we got the thing you asked
+    # for" from "we got a stand-in". Metadata only — the chosen match is
+    # identical either way.
+    is_substitute = best_signal == "version:substitute"
     return MatchAudit(
-        availability=Availability.EXACT_AVAILABLE,
-        reason_code=ReasonCode.MATCHED,
+        availability=(
+            Availability.SUBSTITUTE_AVAILABLE if is_substitute else Availability.EXACT_AVAILABLE
+        ),
+        reason_code=ReasonCode.SUBSTITUTED if is_substitute else ReasonCode.MATCHED,
         chosen_platform_id=best.platform_id,
         chosen_score=best_score,
         decisive_signal=best_signal,

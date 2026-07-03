@@ -111,3 +111,47 @@ def test_get_artist_albums_maps_items(client):
     assert len(albums) == 1
     assert albums[0].title == "OK Computer"
     assert albums[0].release_year == 1997
+
+
+def test_search_track_captures_is_playable(client):
+    client._sp.search.return_value = {
+        "tracks": {"items": [
+            {"id": "t1", "name": "Song", "artists": [{"name": "A"}],
+             "album": {"name": "Alb"}, "duration_ms": 200000,
+             "external_ids": {"isrc": "X"}, "is_playable": False},
+        ]}
+    }
+    tracks = client.search_track("q")
+    assert tracks[0].available is False
+
+
+def test_search_track_derives_availability_from_markets(client):
+    client._sp.search.return_value = {
+        "tracks": {"items": [
+            {"id": "t1", "name": "Song", "artists": [{"name": "A"}],
+             "album": {"name": "Alb"}, "available_markets": []},
+            {"id": "t2", "name": "Song2", "artists": [{"name": "A"}],
+             "album": {"name": "Alb"}, "available_markets": ["US"]},
+        ]}
+    }
+    tracks = client.search_track("q")
+    assert tracks[0].available is False
+    assert tracks[1].available is True
+
+
+def test_search_track_availability_unknown_when_absent(client):
+    client._sp.search.return_value = {
+        "tracks": {"items": [
+            {"id": "t1", "name": "Song", "artists": [{"name": "A"}],
+             "album": {"name": "Alb"}},
+        ]}
+    }
+    tracks = client.search_track("q")
+    assert tracks[0].available is None
+
+
+def test_search_track_passes_market_from_token(client):
+    client._sp.search.return_value = {"tracks": {"items": []}}
+    client.search_track("q")
+    _, kwargs = client._sp.search.call_args
+    assert kwargs.get("market") == "from_token"

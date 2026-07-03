@@ -361,6 +361,13 @@ class TidalClient:
 
     @staticmethod
     def _track_to_result(track: Any) -> TrackResult:
+        # tidalapi parses allowStreaming -> `available` and exposes tier flags.
+        # Capture them instead of discarding: None means "unknown", only an
+        # explicit False denotes blocked-in-market.
+        available = getattr(track, "available", None)
+        premium = getattr(track, "premium_streaming_only", None)
+        pay = getattr(track, "pay_to_stream", None)
+        tier_restricted = premium is True or pay is True
         return TrackResult(
             platform_id=str(track.id),
             title=track.name or "",
@@ -368,6 +375,8 @@ class TidalClient:
             album=track.album.name if getattr(track, "album", None) else "",
             duration_seconds=track.duration if getattr(track, "duration", None) else None,
             isrc=getattr(track, "isrc", None),
+            available=available if isinstance(available, bool) else None,
+            tier_restricted=tier_restricted,
         )
 
 

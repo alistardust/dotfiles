@@ -98,16 +98,25 @@ class SpotifyClient:
         return True
 
     def search_track(self, query: str, limit: int = 10) -> list[TrackResult]:
-        """Search Spotify tracks by free text."""
+        """Search Spotify tracks by free text.
+
+        ``market="from_token"`` scopes results to the authenticated user's
+        market so Spotify returns ``is_playable`` (and applies track relinking),
+        letting us record real availability instead of discarding it.
+        """
         spotify = self._ensure_session()
-        response = self._call_api(lambda: spotify.search(q=query, type="track", limit=limit))
+        response = self._call_api(
+            lambda: spotify.search(q=query, type="track", limit=limit, market="from_token")
+        )
         items = response.get("tracks", {}).get("items", [])
         return [self._track_to_result(item) for item in items if item.get("id")]
 
     def search_isrc(self, isrc: str) -> TrackResult | None:
         """Search Spotify by ISRC."""
         spotify = self._ensure_session()
-        response = self._call_api(lambda: spotify.search(q=f"isrc:{isrc}", type="track", limit=1))
+        response = self._call_api(
+            lambda: spotify.search(q=f"isrc:{isrc}", type="track", limit=1, market="from_token")
+        )
         items = response.get("tracks", {}).get("items", [])
         if not items:
             return None
@@ -354,7 +363,24 @@ class SpotifyClient:
             album=album.get("name", "") if isinstance(album, dict) else "",
             duration_seconds=int(duration_ms // 1000) if isinstance(duration_ms, int) else None,
             isrc=external_ids.get("isrc") if isinstance(external_ids, dict) else None,
+            available=SpotifyClient._extract_availability(track),
         )
+
+    @staticmethod
+    def _extract_availability(track: dict[str, Any]) -> bool | None:
+        """Derive a playability verdict from a Spotify track object.
+
+        Prefers ``is_playable`` (present when ``market=`` was passed). Falls back
+        to ``available_markets``: an explicitly empty list means blocked
+        everywhere in-catalog; an absent list means "unknown" (None), never a
+        guess. This is the signal tuneshift previously discarded.
+        """
+        if "is_playable" in track:
+            return bool(track["is_playable"])
+        markets = track.get("available_markets")
+        if isinstance(markets, list):
+            return len(markets) > 0
+        return None
 
     @staticmethod
     def _to_track_uri(track_id: str) -> str:

@@ -269,3 +269,68 @@ def test_reconcile_tries_all_strategies_when_low_scores(mock_client, db_with_tra
     mock_client.search_album.assert_called()
     mock_client.search_track.assert_called()
     mock_client.search_artist.assert_called()
+
+
+def test_reconcile_availability_exact_available(tmp_db: Path) -> None:
+    """A clean playable match reports EXACT_AVAILABLE with an audit."""
+    from tuneshift.matching import Availability
+
+    db = Database(tmp_db)
+    track_id = db.add_track(Track(title="Heroes", artist="David Bowie", album="Heroes"))
+    client = MagicMock()
+    client.platform_name = "spotify"
+    client.search_isrc.return_value = None
+    client.search_track.return_value = [
+        TrackResult(platform_id="sp1", title="Heroes", artist="David Bowie",
+                    album="Heroes", available=True),
+    ]
+    client.search_album.return_value = []
+    client.get_album_tracks.return_value = []
+    client.search_artist.return_value = []
+    client.get_artist_albums.return_value = []
+
+    result = reconcile_track(db, track_id, client)
+    assert result.availability == Availability.EXACT_AVAILABLE
+    assert result.audit is not None
+    assert result.audit.chosen_platform_id == "sp1"
+
+
+def test_reconcile_availability_blocked_is_exact_unavailable(tmp_db: Path) -> None:
+    """The exact recording found but not playable -> EXACT_UNAVAILABLE, not a miss."""
+    from tuneshift.matching import Availability
+
+    db = Database(tmp_db)
+    track_id = db.add_track(Track(title="Heroes", artist="David Bowie", album="Heroes"))
+    client = MagicMock()
+    client.platform_name = "spotify"
+    client.search_isrc.return_value = None
+    client.search_track.return_value = [
+        TrackResult(platform_id="sp1", title="Heroes", artist="David Bowie",
+                    album="Heroes", available=False),
+    ]
+    client.search_album.return_value = []
+    client.get_album_tracks.return_value = []
+    client.search_artist.return_value = []
+    client.get_artist_albums.return_value = []
+
+    result = reconcile_track(db, track_id, client)
+    assert result.availability == Availability.EXACT_UNAVAILABLE
+
+
+def test_reconcile_ytmusic_miss_is_ambiguous(tmp_db: Path) -> None:
+    """YouTube Music can't distinguish absence -> AMBIGUOUS, never NOT_FOUND."""
+    from tuneshift.matching import Availability
+
+    db = Database(tmp_db)
+    track_id = db.add_track(Track(title="Obscure", artist="Nobody", album="None"))
+    client = MagicMock()
+    client.platform_name = "ytmusic"
+    client.search_isrc.return_value = None
+    client.search_track.return_value = []
+    client.search_album.return_value = []
+    client.get_album_tracks.return_value = []
+    client.search_artist.return_value = []
+    client.get_artist_albums.return_value = []
+
+    result = reconcile_track(db, track_id, client)
+    assert result.availability == Availability.AMBIGUOUS
