@@ -43,6 +43,13 @@ from tuneshift.matching.track import (
     score_track_match,
     version_penalty,
 )
+from tuneshift.matching.version import (
+    RecordingClass,
+    VersionProfile,
+    VersionVerdict,
+    compare_version,
+    infer_version,
+)
 
 __all__ = [
     "normalize_title",
@@ -66,4 +73,9 @@ __all__ = [
     "score_artist_match",
     "classify_artist_results",
     "ARTIST_THRESHOLDS",
+    "RecordingClass",
+    "VersionProfile",
+    "VersionVerdict",
+    "infer_version",
+    "compare_version",
 ]

@@ -82,7 +82,7 @@ def is_remaster(album: str) -> bool:
 
 _LIVE_RE = re.compile(
     r"\b(live|concert|in concert|unplugged|mtv unplugged|"
-    r"here and there|one night only|at the|at madison|"
+    r"here and there|one night only|"
     r"17-11-70|11-17-70)\b",
     re.IGNORECASE,
 )
