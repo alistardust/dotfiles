@@ -237,11 +237,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_curate.add_argument("--hard-limit", type=int, help="Hard limit track count")
 
     # prefs
-    p_prefs = sub.add_parser("prefs", help="Manage global version preferences")
-    p_prefs.add_argument("action", choices=["show", "set"], help="Show or set preferences")
-    p_prefs.add_argument("key", nargs="?", help="Preference key (section.name)")
-    p_prefs.add_argument("value", nargs="?", help="Value to set")
-    p_prefs.add_argument("--config-path", help="Path to preferences file")
+    p_prefs = sub.add_parser("prefs", help="Manage version preferences (global/playlist/track)")
+    p_prefs.add_argument("action", choices=["show", "set", "clear"], help="Show, set or clear preferences")
+    p_prefs.add_argument("key", nargs="?", help="Preference key (version.<field>)")
+    p_prefs.add_argument("value", nargs="?", help="Value to set (comma-list for prefer/avoid)")
+    prefs_scope = p_prefs.add_mutually_exclusive_group()
+    prefs_scope.add_argument("--global", dest="global_scope", action="store_true", help="Target global defaults (default)")
+    prefs_scope.add_argument("--playlist", help="Target a playlist by name")
+    prefs_scope.add_argument("--track", type=int, help="Target a track by id")
 
     # share
     p_share = sub.add_parser("share", help="Generate shareable links for a playlist")
@@ -691,7 +694,7 @@ def main(argv: list[str] | None = None) -> int:
             return handle_curate(args, db)
         elif args.command == "prefs":
             from tuneshift.commands.prefs_cmd import handle_prefs
-            return handle_prefs(args)
+            return handle_prefs(args, db)
         elif args.command == "share":
             from tuneshift.commands.share_cmd import handle_share
             return handle_share(args, db)
