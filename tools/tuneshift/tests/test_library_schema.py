@@ -5,7 +5,7 @@ import sqlite3
 
 import pytest
 
-from tuneshift.db import Database
+from tuneshift.db import Database, _SCHEMA_VERSION
 from tuneshift.models import Artist, Album
 
 
@@ -253,7 +253,7 @@ class TestMigrationFromV7:
         version = db.conn.execute(
             "SELECT value FROM schema_meta WHERE key = 'version'"
         ).fetchone()[0]
-        assert int(version) == 11
+        assert int(version) == _SCHEMA_VERSION
 
         # Artists created
         artist_count = db.conn.execute("SELECT COUNT(*) FROM artists").fetchone()[0]

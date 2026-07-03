@@ -9,7 +9,7 @@ from typing import Any
 
 from tuneshift.models import Album, Artist, PlatformMapping, Playlist, PlaylistPin, Track
 
-_SCHEMA_VERSION = 11
+_SCHEMA_VERSION = 12
 
 # Columns editable via update_track. Constrains f-string interpolation in the
 # UPDATE statement to a fixed, safe set (no SQL identifier injection).
@@ -267,6 +267,16 @@ CREATE TABLE IF NOT EXISTS track_tags (
     PRIMARY KEY (track_id, tag)
 );
 CREATE INDEX IF NOT EXISTS idx_track_tags_tag ON track_tags(tag);
+
+CREATE TABLE IF NOT EXISTS match_audits (
+    track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+    platform TEXT NOT NULL,
+    availability TEXT NOT NULL,
+    reason_code TEXT NOT NULL,
+    audit_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (track_id, platform)
+);
 """
 
 _REMIX_RE = re.compile(r"\s*\((?:remaster(?:ed)?|deluxe edition)[^)]*\)\s*", re.IGNORECASE)
@@ -680,6 +690,19 @@ class Database:
                 self.conn.execute(
                     "CREATE INDEX IF NOT EXISTS idx_track_tags_tag ON track_tags(tag)"
                 )
+
+            if current_version < 12:
+                self.conn.execute("""
+                    CREATE TABLE IF NOT EXISTS match_audits (
+                        track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+                        platform TEXT NOT NULL,
+                        availability TEXT NOT NULL,
+                        reason_code TEXT NOT NULL,
+                        audit_json TEXT NOT NULL,
+                        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                        PRIMARY KEY (track_id, platform)
+                    )
+                """)
 
             self.conn.execute(
                 "UPDATE schema_meta SET value = ? WHERE key = 'version'",
@@ -1311,6 +1334,51 @@ class Database:
             ),
         )
         self.conn.commit()
+
+    def save_match_audit(self, track_id: int, platform: str, audit) -> None:
+        """Persist the explainable MatchAudit for a (track, platform) pair.
+
+        Stored for every reconcile outcome — including misses — so ``tuneshift
+        why`` can explain a decision without re-running a live search. The audit
+        is serialized to JSON via ``MatchAudit.to_json``; availability and
+        reason_code are also stored as plain columns for cheap filtering.
+        """
+        if audit is None:
+            return
+        self.conn.execute(
+            """INSERT INTO match_audits
+               (track_id, platform, availability, reason_code, audit_json, updated_at)
+               VALUES (?, ?, ?, ?, ?, datetime('now'))
+               ON CONFLICT(track_id, platform) DO UPDATE SET
+                 availability = excluded.availability,
+                 reason_code = excluded.reason_code,
+                 audit_json = excluded.audit_json,
+                 updated_at = excluded.updated_at""",
+            (track_id, platform, audit.availability, audit.reason_code, audit.to_json()),
+        )
+        self.conn.commit()
+
+    def get_match_audit(self, track_id: int, platform: str):
+        """Return the persisted ``MatchAudit`` for a (track, platform), or None."""
+        from tuneshift.matching import MatchAudit
+
+        row = self.conn.execute(
+            "SELECT audit_json FROM match_audits WHERE track_id = ? AND platform = ?",
+            (track_id, platform),
+        ).fetchone()
+        if row is None:
+            return None
+        return MatchAudit.from_json(row["audit_json"])
+
+    def get_match_audits_for_track(self, track_id: int) -> dict[str, object]:
+        """Return all persisted audits for a track, keyed by platform name."""
+        from tuneshift.matching import MatchAudit
+
+        rows = self.conn.execute(
+            "SELECT platform, audit_json FROM match_audits WHERE track_id = ?",
+            (track_id,),
+        ).fetchall()
+        return {row["platform"]: MatchAudit.from_json(row["audit_json"]) for row in rows}
 
     def get_platform_mapping(self, track_id: int, platform: str) -> PlatformMapping | None:
         """Get a platform mapping for a track."""

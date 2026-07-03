@@ -2,7 +2,7 @@
 
 import sqlite3
 
-from tuneshift.db import Database
+from tuneshift.db import Database, _SCHEMA_VERSION
 
 
 class TestSchemaV2Migration:
@@ -22,7 +22,7 @@ class TestSchemaV2Migration:
 
     def test_schema_version_is_current(self, db):
         row = db.conn.execute("SELECT value FROM schema_meta WHERE key = 'version'").fetchone()
-        assert int(row[0]) == 11
+        assert int(row[0]) == _SCHEMA_VERSION
 
     def test_migration_idempotent(self, tmp_path):
         db_path = tmp_path / "test.db"
@@ -94,7 +94,7 @@ class TestSchemaV2Migration:
         assert "auto_reorder" in playlist_cols
         assert "reorder_arc" in playlist_cols
         version = db.conn.execute("SELECT value FROM schema_meta WHERE key = 'version'").fetchone()[0]
-        assert int(version) == 11
+        assert int(version) == _SCHEMA_VERSION
         db.close()
 
 

@@ -162,9 +162,43 @@ class MatchAudit:
         return cls.from_dict(json.loads(raw))
 
 
+_REASON_TEXT = {
+    ReasonCode.MATCHED: "clear match",
+    ReasonCode.LOCKED: "a durable lock decided this",
+    ReasonCode.NO_CANDIDATES: "no candidate returned by any search strategy",
+    ReasonCode.ALL_BELOW_THRESHOLD: "candidates existed but all scored too low",
+    ReasonCode.VERSION_REJECTED: "the best candidate was the wrong version (live/cover/karaoke/…)",
+    ReasonCode.BLOCKED_IN_MARKET: "the exact recording exists but is blocked in this market",
+    ReasonCode.TIER_RESTRICTED: "the exact recording exists but needs a higher subscription tier",
+    ReasonCode.AMBIGUOUS_TOP: "the top candidates were too close to choose confidently",
+    ReasonCode.PLATFORM_CANNOT_DISTINGUISH: "this platform can't tell blocked from absent",
+    ReasonCode.SUBSTITUTED: "an acceptable non-exact version was chosen as a fallback",
+}
+
+_AVAILABILITY_TEXT = {
+    Availability.EXACT_AVAILABLE: "exact version available",
+    Availability.EXACT_UNAVAILABLE: "exact version found but not playable",
+    Availability.SUBSTITUTE_AVAILABLE: "substitute version available",
+    Availability.AMBIGUOUS: "ambiguous — needs review",
+    Availability.NOT_FOUND: "not found",
+}
+
+
+def describe_reason(reason_code: str) -> str:
+    """Human-readable one-liner for a machine-stable reason code."""
+    return _REASON_TEXT.get(reason_code, reason_code)
+
+
+def describe_availability(state: str) -> str:
+    """Human-readable one-liner for an availability state."""
+    return _AVAILABILITY_TEXT.get(state, state)
+
+
 __all__ = [
     "Availability",
     "ReasonCode",
     "RejectedCandidate",
     "MatchAudit",
+    "describe_reason",
+    "describe_availability",
 ]

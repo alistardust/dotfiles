@@ -190,6 +190,15 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Remove a trailing parenthetical that repeats the album name")
     p_edit.add_argument("--dry-run", action="store_true", help="Show changes without writing")
 
+    # why
+    p_why = sub.add_parser("why", help="Explain a track's match decision on each platform")
+    p_why.add_argument("track_id", type=int, help="Canonical track id to explain")
+    p_why.add_argument("--platform", choices=["spotify", "tidal", "ytmusic"],
+                       help="Limit to one platform (default: all with a stored decision)")
+    p_why.add_argument("--live", action="store_true",
+                       help="Reconcile now against the platform(s) instead of reading the "
+                            "stored decision (requires login)")
+
     # goal
     p_goal = sub.add_parser("goal", help="Set or show playlist goal/theme")
     p_goal.add_argument("playlist", help="Playlist name")
@@ -650,6 +659,9 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "edit":
             from tuneshift.commands.edit_cmd import handle_edit
             return handle_edit(args, db)
+        elif args.command == "why":
+            from tuneshift.commands.why_cmd import handle_why
+            return handle_why(args, db)
         elif args.command == "goal":
             from tuneshift.commands.goal_cmd import handle_goal
             return handle_goal(args, db)

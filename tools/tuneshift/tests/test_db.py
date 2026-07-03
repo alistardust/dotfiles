@@ -118,3 +118,74 @@ def test_remove_playlist_track_by_position(tmp_db: Path) -> None:
     assert len(tracks) == 2
     assert tracks[0].title == "A"
     assert tracks[1].title == "C"
+
+
+def test_match_audit_round_trip(tmp_db: Path) -> None:
+    """A persisted MatchAudit round-trips through the match_audits table."""
+    from tuneshift.matching import Availability, MatchAudit, ReasonCode, RejectedCandidate
+
+    db = Database(tmp_db)
+    track_id = db.add_track(Track(title="Heroes", artist="David Bowie", album="Heroes"))
+
+    audit = MatchAudit(
+        availability=Availability.EXACT_AVAILABLE,
+        reason_code=ReasonCode.MATCHED,
+        chosen_platform_id="sp1",
+        chosen_score=98,
+        decisive_signal="title:exact",
+        distance=0.02,
+        rejected=[RejectedCandidate(
+            platform_id="sp2", title="Heroes (Live)", artist="David Bowie",
+            album="Live", score=40, decisive_signal="version:reject",
+        )],
+    )
+    db.save_match_audit(track_id, "spotify", audit)
+
+    loaded = db.get_match_audit(track_id, "spotify")
+    assert loaded is not None
+    assert loaded.availability == Availability.EXACT_AVAILABLE
+    assert loaded.reason_code == ReasonCode.MATCHED
+    assert loaded.chosen_platform_id == "sp1"
+    assert loaded.chosen_score == 98
+    assert len(loaded.rejected) == 1
+    assert loaded.rejected[0].decisive_signal == "version:reject"
+
+
+def test_save_match_audit_none_is_noop(tmp_db: Path) -> None:
+    """Saving a None audit is a no-op, not an error."""
+    db = Database(tmp_db)
+    track_id = db.add_track(Track(title="X", artist="Y", album="Z"))
+    db.save_match_audit(track_id, "spotify", None)
+    assert db.get_match_audit(track_id, "spotify") is None
+
+
+def test_save_match_audit_upserts(tmp_db: Path) -> None:
+    """Re-saving replaces the prior audit for the same (track, platform)."""
+    from tuneshift.matching import Availability, MatchAudit, ReasonCode
+
+    db = Database(tmp_db)
+    track_id = db.add_track(Track(title="X", artist="Y", album="Z"))
+    db.save_match_audit(track_id, "spotify", MatchAudit(
+        availability=Availability.NOT_FOUND, reason_code=ReasonCode.NO_CANDIDATES))
+    db.save_match_audit(track_id, "spotify", MatchAudit(
+        availability=Availability.EXACT_AVAILABLE, reason_code=ReasonCode.MATCHED,
+        chosen_platform_id="sp9"))
+
+    loaded = db.get_match_audit(track_id, "spotify")
+    assert loaded.availability == Availability.EXACT_AVAILABLE
+    assert loaded.chosen_platform_id == "sp9"
+
+
+def test_get_match_audits_for_track_keyed_by_platform(tmp_db: Path) -> None:
+    from tuneshift.matching import Availability, MatchAudit, ReasonCode
+
+    db = Database(tmp_db)
+    track_id = db.add_track(Track(title="X", artist="Y", album="Z"))
+    db.save_match_audit(track_id, "spotify", MatchAudit(
+        availability=Availability.EXACT_AVAILABLE, reason_code=ReasonCode.MATCHED))
+    db.save_match_audit(track_id, "tidal", MatchAudit(
+        availability=Availability.EXACT_UNAVAILABLE, reason_code=ReasonCode.BLOCKED_IN_MARKET))
+
+    audits = db.get_match_audits_for_track(track_id)
+    assert set(audits) == {"spotify", "tidal"}
+    assert audits["tidal"].availability == Availability.EXACT_UNAVAILABLE

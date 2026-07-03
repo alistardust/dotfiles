@@ -77,6 +77,7 @@ def _sync_one(db, playlist, platforms, args) -> int:
                 cached_mapping=cached_mappings.get(track.id),
                 playlist_id=playlist.id,
             )
+            db.save_match_audit(track.id, platform_name, result.audit)
 
             if result.confidence == "not_found":
                 unavailable.append(f"  ? {track.title} - {track.artist}")

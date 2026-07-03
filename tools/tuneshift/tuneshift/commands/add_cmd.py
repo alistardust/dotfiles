@@ -105,6 +105,7 @@ def _sync_add_to_platforms(db: Database, playlist_id: int, track_id: int, title:
 
         # Reconcile the track
         result = reconcile_track(db, track_id, client, force=False, playlist_id=playlist_id)
+        db.save_match_audit(track_id, platform_name, result.audit)
         if result.platform_track_id:
             try:
                 client.add_tracks(platform_playlist_id, [result.platform_track_id])

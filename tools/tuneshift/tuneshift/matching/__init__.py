@@ -28,6 +28,8 @@ from tuneshift.matching.audit import (
     MatchAudit,
     ReasonCode,
     RejectedCandidate,
+    describe_availability,
+    describe_reason,
 )
 from tuneshift.matching.normalize import (
     is_remaster,
@@ -90,4 +92,6 @@ __all__ = [
     "ReasonCode",
     "RejectedCandidate",
     "MatchAudit",
+    "describe_availability",
+    "describe_reason",
 ]
