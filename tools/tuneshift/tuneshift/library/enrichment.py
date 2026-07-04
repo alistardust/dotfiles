@@ -197,30 +197,58 @@ def _enrich_artist_via_llm(db: Database, artist, classifier) -> None:
     db.update_artist(artist.id, **update_fields)
 
 
+def capture_tidal_catalog(
+    db: Database,
+    track_id: int,
+    platform: str,
+    platform_track_id: str | None,
+    *,
+    client=None,
+    refresh: bool = False,
+) -> list[str]:
+    """Best-effort Atmos/catalog capture right after a Tidal mapping is written.
+
+    The single post-mapping hook shared by every path that creates or updates a
+    Tidal platform mapping (``map`` / ``doctor --apply`` / ``ingest`` / ``enrich``
+    / the resolve worker), so the ``atmos-available`` tag is derived
+    automatically (AC4/AC10/AC11) instead of only via the manual
+    ``enrich --catalog`` flag. Deliberately ONE function so the paths can't drift
+    apart (FL4 lesson). No-ops for non-Tidal platforms or when no client/id is
+    available; never raises. Returns the derived tags (empty on no-op/failure).
+    """
+    if platform != "tidal" or client is None or not platform_track_id:
+        return []
+    try:
+        from tuneshift.enrichment.platform_metadata import enrich_track_from_tidal
+
+        tags = enrich_track_from_tidal(
+            db, track_id, platform_track_id, client=client, refresh=refresh
+        )
+        if tags:
+            logger.info("derived tidal tags for track=%s: %s", track_id, ", ".join(tags))
+        return tags
+    except Exception:  # noqa: BLE001 - catalog capture is best-effort
+        logger.warning("tidal catalog capture failed: track=%s", track_id, exc_info=True)
+        return []
+
+
 def _capture_tidal_catalog(
     db: Database, track_id: int, *, client=None, refresh: bool = False
 ) -> None:
-    """Capture Atmos/catalog metadata when the track has a Tidal mapping (AC10/AC11).
+    """Resolve-worker helper: capture catalog for a track's existing Tidal mapping.
 
-    Best-effort and non-fatal. No-ops silently when no Tidal client is available
-    (e.g. an add-path enrich before resolution) or the track has no Tidal
+    Looks up the mapping written by an earlier path and delegates to the shared
+    :func:`capture_tidal_catalog` hook. No-ops when the track has no Tidal
     mapping yet -- capture then happens on the next resolve/mapping pass.
     """
     if client is None:
         return
     mapping = db.get_platform_mapping(track_id, "tidal")
-    if not mapping or not mapping.platform_track_id:
+    if not mapping:
         return
-    try:
-        from tuneshift.enrichment.platform_metadata import enrich_track_from_tidal
-
-        tags = enrich_track_from_tidal(
-            db, track_id, mapping.platform_track_id, client=client, refresh=refresh
-        )
-        if tags:
-            logger.info("derived tidal tags for track=%s: %s", track_id, ", ".join(tags))
-    except Exception:  # noqa: BLE001 - catalog capture is best-effort
-        logger.warning("tidal catalog capture failed: track=%s", track_id, exc_info=True)
+    capture_tidal_catalog(
+        db, track_id, "tidal", mapping.platform_track_id, client=client, refresh=refresh
+    )
 
 
 def _ensure_energy_valence(

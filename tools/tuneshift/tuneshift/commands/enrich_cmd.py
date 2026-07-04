@@ -41,6 +41,7 @@ def handle_enrich(args, db: Database) -> int:
 
     enriched = 0
     skipped = 0
+    platform_client = None
 
     # Audio metadata (BPM, key, energy) via the platform's per-track endpoint
     if platform_name:
@@ -53,6 +54,7 @@ def handle_enrich(args, db: Database) -> int:
             print(f"Not logged in to {platform_name}. Run: tuneshift login {platform_name}", file=sys.stderr)
             return 1
 
+        platform_client = client
         if not hasattr(client, "get_track_metadata"):
             print(f"{platform_name} does not support metadata enrichment.", file=sys.stderr)
         else:
@@ -79,14 +81,18 @@ def handle_enrich(args, db: Database) -> int:
             print(f"Enriched \"{playlist.name}\": {enriched} tracks updated, {skipped} already had metadata")
 
     # Catalog metadata (Atmos, release year, genres, quality tiers) from Tidal,
-    # retry-aware. Runs when --catalog is requested.
-    if getattr(args, "catalog", False):
+    # retry-aware. AC11: this now runs on ANY Tidal enrichment update -- not only
+    # behind the explicit --catalog flag -- so an Atmos-mapped track always gets
+    # its atmos-available tag derived, and `--refresh` re-fetches it. Reuses the
+    # client already loaded above to avoid a second login.
+    if getattr(args, "catalog", False) or platform_name == "tidal":
         from tuneshift.enrichment.platform_metadata import enrich_playlist_from_tidal
 
         meta_enriched, meta_skipped, meta_failed = enrich_playlist_from_tidal(
             db, playlist.id,
             refresh=getattr(args, "refresh", False),
             max_retries=getattr(args, "max_retries", 3),
+            client=platform_client if platform_name == "tidal" else None,
         )
         msg = (f"Catalog metadata for \"{playlist.name}\": "
                f"{meta_enriched} updated, {meta_skipped} skipped")

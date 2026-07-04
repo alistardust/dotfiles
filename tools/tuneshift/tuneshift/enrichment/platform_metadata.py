@@ -113,6 +113,11 @@ def enrich_playlist_from_tidal(
                 db.upsert_track_platform_metadata(
                     track.id, "tidal", mapping.platform_track_id, **meta
                 )
+                # AC10/AC11: derive the atmos-available tag from the captured
+                # metadata. The upsert alone never wrote tags -- so historically
+                # even `enrich --catalog` printed "ATMOS" but never surfaced the
+                # tag the spec requires.
+                derive_tags(db, track.id)
                 enriched += 1
                 qualities = meta.get("audio_qualities", [])
                 atmos = "ATMOS" if "DOLBY_ATMOS" in (
