@@ -141,7 +141,39 @@ def test_drain_limit_caps_work(db):
     assert remaining == 3
 
 
-def test_quarantine_max_attempts(db):
+def test_enricher_runs_after_successful_resolve(db):
+    tid = _track(db)
+    calls = []
+
+    def resolver(track):
+        return [ResolvedCandidate("tidal", "1", {})]
+
+    def enricher(database, track):
+        calls.append(track.id)
+
+    worker = ResolutionWorker(db, resolver=resolver, enricher=enricher)
+    worker.enqueue(tid)
+    assert worker.drain() == 1
+    assert calls == [tid]
+
+
+def test_enricher_failure_is_non_fatal(db):
+    tid = _track(db)
+
+    def resolver(track):
+        return [ResolvedCandidate("tidal", "1", {})]
+
+    def enricher(database, track):
+        raise RuntimeError("enrichment blew up")
+
+    worker = ResolutionWorker(db, resolver=resolver, enricher=enricher)
+    worker.enqueue(tid)
+    # resolve still succeeds; enrichment failure must not fail the resolve
+    assert worker.drain() == 1
+    assert db.conn.execute(
+        "SELECT state FROM resolution_queue WHERE track_id=?", (tid,)
+    ).fetchone()["state"] == "resolved"
+
     """After exhausting retries, a persistently failing (non-rate-limit) resolve
     is quarantined rather than looping forever."""
     tid = _track(db)

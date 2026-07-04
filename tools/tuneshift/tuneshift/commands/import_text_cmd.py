@@ -66,6 +66,9 @@ def handle_import_text(args, db: Database) -> int:
             track_id = db.add_track(track)
             new_count += 1
         db.add_track_to_playlist(playlist_id, track_id, position)
+        # Library-first (AC-D7): enqueue async resolution/enrichment; never
+        # block the import on network. Idempotent per track.
+        db.enqueue_resolution(track_id)
 
     print(f"Imported \"{playlist_name}\": {len(tracks)} tracks ({new_count} new)")
     return 0

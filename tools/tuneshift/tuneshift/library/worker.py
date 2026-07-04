@@ -65,12 +65,14 @@ class ResolutionWorker:
         db: Database,
         resolver: Resolver,
         *,
+        enricher: Callable[[Database, Track], None] | None = None,
         rate_limiter: Any | None = None,
         max_attempts: int = 5,
         base_backoff_seconds: float = 60.0,
     ) -> None:
         self._db = db
         self._resolver = resolver
+        self._enricher = enricher
         self._rate_limiter = rate_limiter
         self._max_attempts = max_attempts
         self._base_backoff_seconds = base_backoff_seconds
@@ -142,6 +144,16 @@ class ResolutionWorker:
                 {"quarantine_state": None, "quarantine_reason": None},
                 source="resolver",
             )
+        # Async enrichment (AC-D7): classification + artist genres happen here,
+        # out of the interactive add path. Failures are non-fatal.
+        if self._enricher is not None:
+            try:
+                self._enricher(self._db, track)
+            except Exception:  # noqa: BLE001 - enrichment is best-effort
+                logger.warning(
+                    "enrichment failed after resolve: track=%s", track_id,
+                    exc_info=True,
+                )
         return True
 
     def _handle_failure(self, track_id: int, exc: Exception) -> bool:

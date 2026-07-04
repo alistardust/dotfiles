@@ -126,7 +126,7 @@ def _auto_classify_batch(db: Database, track_ids_to_enrich: list[tuple[int, str]
 
     # Enrich artists first (so we have genre context)
     seen_artists: set[str] = set()
-    from tuneshift.commands.add_cmd import _enrich_artist_via_llm
+    from tuneshift.library.enrichment import _enrich_artist_via_llm
     for track_id, _ in track_ids_to_enrich:
         track = db.get_track(track_id)
         if not track or track.artist in seen_artists:
