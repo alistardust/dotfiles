@@ -363,11 +363,19 @@ def _deterministic_tiebreak(
         for i in cluster
     ]
     result = tie_break(tie_candidates)
+    if result.decided_by == "stable-id":
+        # No MEANINGFUL tier (release-year / availability) separated the band.
+        # Preserve INSERTION ORDER — the pre-tiebreak, winner-parity behaviour —
+        # rather than tie_break's arbitrary lexicographic stable-id pick, which
+        # would silently reorder default (no-preference) selections. ``scored`` is
+        # stable-sorted by distance, so ``cluster[0]`` is the first-listed of the
+        # tied candidates. Still report ``None`` so the near-tie surfaces for
+        # review (AC-S3) even though the pick itself is deterministic.
+        return cluster[0], None
     winner_pos = next(
         idx for idx, tc in zip(cluster, tie_candidates) if tc.id == result.winner
     )
-    decided_by = result.decided_by if result.decided_by != "stable-id" else None
-    return winner_pos, decided_by
+    return winner_pos, result.decided_by
 
 
 def _resolve_winner(
