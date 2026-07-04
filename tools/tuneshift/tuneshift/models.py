@@ -104,6 +104,26 @@ class TrackResult:
     album_type: str | None = None
 
 
+@dataclass(frozen=True)
+class EffectiveLock:
+    """The resolved two-level identity lock for a (track, platform, playlist)
+    (AC-L1/L4). ``scope`` is ``"playlist"`` when a per-playlist override applies,
+    else ``"global"`` for the library-wide default lock. Carries the composite
+    identity (platform-id + ISRC + fingerprint) so callers can build an
+    :class:`~tuneshift.matching.selection.IdentityLock` that survives a platform
+    re-ID.
+    """
+
+    platform_track_id: str
+    scope: str
+    isrc: str | None = None
+    fingerprint: str | None = None
+    status: str = "matched"
+    is_divergent: bool = False
+    divergence_note: str | None = None
+    match_score: int | None = None
+
+
 @dataclass
 class PlaylistInfo:
     """Playlist metadata from any platform."""

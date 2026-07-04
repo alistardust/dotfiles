@@ -30,7 +30,7 @@ PLAN_VERSION = 1
 
 OP_VALUES = ("insert", "update", "delete", "remote_push")
 STATUS_VALUES = ("pending", "applied", "skipped", "rejected", "failed")
-CLASSIFICATION_VALUES = ("improved", "unchanged", "needs-human-judgment")
+CLASSIFICATION_VALUES = ("improved", "unchanged", "needs-human-judgment", "locked")
 
 
 def row_key_for(**primary_key: object) -> str:

@@ -86,16 +86,46 @@ def _change_for_track(
         or (global_mapping and global_mapping.user_approved)
     )
 
-    result = reconcile_track(
-        db, track_id, client, force=force, playlist_id=playlist_id
-    )
-
     op = "update" if playlist_mapping is not None else "insert"
     row_key = row_key_for(
         playlist_id=playlist_id, track_id=track_id, platform=platform
     )
     current_state = (
         {"platform_track_id": current_id} if current_id else None
+    )
+
+    # A locked row is never proposed for change (AC-L2): short-circuit to an
+    # explicit "locked, skipped" change without running the engine. It carries
+    # the locked release as its proposed state so an explicit include_locked
+    # re-apply re-affirms the lock (user_approved stays set) rather than
+    # downgrading it, and apply reports it under skipped_locked.
+    if locked:
+        proposed = (
+            {
+                "playlist_id": playlist_id,
+                "track_id": track_id,
+                "platform": platform,
+                "platform_track_id": current_id,
+                "source": "locked",
+                "user_approved": 1,
+            }
+            if current_id
+            else None
+        )
+        return PlanChange(
+            op=op,
+            table="playlist_track_mappings",
+            row_key=row_key,
+            current=current_state,
+            proposed=proposed,
+            reason="locked — protected from re-match (AC-L2)",
+            provenance="effective_lock",
+            classification="locked",
+            locked=True,
+        )
+
+    result = reconcile_track(
+        db, track_id, client, force=force, playlist_id=playlist_id
     )
 
     # Not confidently matched -> never write; surface for human judgement.

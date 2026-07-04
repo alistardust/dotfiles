@@ -102,10 +102,13 @@ def test_rematch_marks_user_approved_mapping_locked(tmp_db: Path) -> None:
         )
     ]
     plan = build_rematch_plan(db, pid, _client(candidates), platform="tidal")
-    # The change touching the approved row is present but marked locked ->
-    # excluded from apply by default (AC-P3).
+    # The change touching the approved row is present, marked locked, and
+    # classified "locked" — never proposed for a change to a DIFFERENT release
+    # (AC-L2). It is excluded from apply by default (AC-P3).
     locked = [c for c in plan.changes if c.locked]
     assert len(locked) == 1
+    assert locked[0].classification == "locked"
+    assert locked[0].proposed["platform_track_id"] == "PINNED"
     report = apply_plan(db, plan)
     assert report.applied == 0
     assert report.skipped_locked == 1

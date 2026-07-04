@@ -53,20 +53,22 @@ AMBIGUITY_DELTA = 0.05
 @dataclass(frozen=True)
 class IdentityLock:
     """A pinned composite identity (AC-L1): the specific release this track must
-    resolve to. Matches a candidate by ``platform_id`` OR ``isrc`` (composite key,
-    not ISRC alone), so a lock survives a platform re-ID as long as the ISRC still
-    lines up. This is the engine-level view of a lock; DB-backed storage,
-    fingerprint matching, and full self-heal land in Chunk 5 (AC-L2..L5).
+    resolve to. Matches a candidate by ``platform_id`` OR ``isrc`` OR
+    ``fingerprint`` (composite key, not ISRC alone), so a lock survives a platform
+    re-ID as long as the ISRC or the same-recording fingerprint still lines up.
     """
 
     platform_id: str | None = None
     isrc: str | None = None
+    fingerprint: str | None = None
 
-    def matches(self, candidate: object) -> bool:
+    def matches(self, candidate: object, candidate_fingerprint: str | None = None) -> bool:
         if self.platform_id and getattr(candidate, "platform_id", None) == self.platform_id:
             return True
         cand_isrc = getattr(candidate, "isrc", None)
         if self.isrc and cand_isrc and cand_isrc.upper() == self.isrc.upper():
+            return True
+        if self.fingerprint and candidate_fingerprint and candidate_fingerprint == self.fingerprint:
             return True
         return False
 

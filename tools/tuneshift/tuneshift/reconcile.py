@@ -38,9 +38,16 @@ from tuneshift.matching.registry import (
 from tuneshift.matching.selection import (
     AMBIGUITY_DELTA,
     ActivePreference,
+    IdentityLock,
     select_version,
 )
-from tuneshift.models import AlbumResult, ArtistResult, PlatformMapping, TrackResult
+from tuneshift.models import (
+    AlbumResult,
+    ArtistResult,
+    EffectiveLock,
+    PlatformMapping,
+    TrackResult,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -555,6 +562,32 @@ def _locked_unavailable_result(reason_code: str) -> ReconcileResult:
     )
 
 
+def _mapping_from_effective(track_id: int, platform: str, eff: EffectiveLock) -> PlatformMapping:
+    """Synthesize a :class:`PlatformMapping` view of an effective lock so the
+    shared locked-result / self-heal helpers can consume either scope uniformly."""
+    return PlatformMapping(
+        track_id=track_id,
+        platform=platform,
+        platform_track_id=eff.platform_track_id,
+        match_score=eff.match_score,
+        is_divergent=eff.is_divergent,
+        divergence_note=eff.divergence_note,
+        status=eff.status,
+        user_approved=True,
+        fingerprint=eff.fingerprint,
+    )
+
+
+def _identity_lock_from_effective(eff: EffectiveLock, track) -> IdentityLock:
+    """Build the engine-level composite lock (platform-id + ISRC + fingerprint)
+    from an effective lock so forced/verify selection paths honour it (AC-L1/L2)."""
+    return IdentityLock(
+        platform_id=eff.platform_track_id,
+        isrc=eff.isrc or (track.isrc if track is not None else None),
+        fingerprint=eff.fingerprint,
+    )
+
+
 def _verify_and_heal_lock(
     db: Database,
     track,
@@ -653,9 +686,29 @@ def reconcile_track(
     else:
         prefer_classes, avoid_classes = scoring_intent(prefs.prefer, prefs.avoid)
 
+    # Two-level composite identity lock (AC-L1/L4): a per-playlist override wins
+    # over the library-wide default lock. Resolved regardless of ``force`` so the
+    # forced/verify selection paths below can honour it via ``select_version``.
+    effective_lock = db.get_effective_lock(track_id, platform_name, playlist_id)
+
     # Cache/mapping checks
     if not force:
         mapping = cached_mapping or db.get_platform_mapping(track_id, platform_name)
+        # A lock (either scope) is authoritative on every non-forced run — it must
+        # be consulted BEFORE the auto-match cache, so a per-playlist override is
+        # never shadowed by the global cached mapping.
+        if effective_lock is not None:
+            if verify_locked and effective_lock.scope == "global" and mapping is not None:
+                return _verify_and_heal_lock(db, track, client, mapping)
+            # Per-playlist self-heal is routed through the plan/apply engine
+            # (Task 5.3); until then a per-playlist lock is trusted without a
+            # liveness probe rather than mutated inline.
+            if effective_lock.status == "unavailable":
+                return _locked_unavailable_result(ReasonCode.LOCKED)
+            return _locked_available_result(
+                _mapping_from_effective(track_id, platform_name, effective_lock),
+                ReasonCode.LOCKED,
+            )
         tier, _, _ = db.get_resolution_state(track_id)
         if tier is not None and mapping is not None:
             if mapping.status == "unavailable":
@@ -673,37 +726,6 @@ def reconcile_track(
                 reason_code=ReasonCode.MATCHED,
                 chosen_platform_id=mapping.platform_track_id,
                 chosen_score=mapping.match_score or 100,
-            )
-            return ReconcileResult(
-                platform_track_id=mapping.platform_track_id,
-                score=mapping.match_score or 100,
-                confidence="high",
-                is_divergent=mapping.is_divergent,
-                divergence_note=mapping.divergence_note,
-                from_cache=True,
-                availability=audit.availability, reason_code=audit.reason_code,
-                audit=audit,
-            )
-        if mapping and mapping.user_approved:
-            if verify_locked:
-                return _verify_and_heal_lock(db, track, client, mapping)
-            if mapping.status == "unavailable":
-                audit = MatchAudit(
-                    availability=Availability.EXACT_UNAVAILABLE,
-                    reason_code=ReasonCode.LOCKED,
-                    locked=True,
-                )
-                return ReconcileResult(
-                    confidence="not_found", from_cache=True,
-                    availability=audit.availability, reason_code=audit.reason_code,
-                    audit=audit,
-                )
-            audit = MatchAudit(
-                availability=Availability.EXACT_AVAILABLE,
-                reason_code=ReasonCode.LOCKED,
-                chosen_platform_id=mapping.platform_track_id,
-                chosen_score=mapping.match_score or 100,
-                locked=True,
             )
             return ReconcileResult(
                 platform_track_id=mapping.platform_track_id,
@@ -798,6 +820,7 @@ def reconcile_track(
     selection = select_version(
         track, all_candidates,
         active=_typed_active_prefs(prefs, resolver),
+        lock=_identity_lock_from_effective(effective_lock, track) if effective_lock else None,
         prefer=prefer_classes, avoid=avoid_classes,
         all_durations=all_durations or None,
         alias_resolver=resolver,

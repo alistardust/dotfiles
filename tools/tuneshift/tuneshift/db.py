@@ -10,7 +10,15 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from tuneshift.matching.normalize import normalize_artist as _alias_normalize
-from tuneshift.models import Album, Artist, PlatformMapping, Playlist, PlaylistPin, Track
+from tuneshift.models import (
+    Album,
+    Artist,
+    EffectiveLock,
+    PlatformMapping,
+    Playlist,
+    PlaylistPin,
+    Track,
+)
 
 if TYPE_CHECKING:
     from tuneshift.matching import ReviewItem
@@ -2335,6 +2343,65 @@ class Database:
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
         }
+
+    # --- two-level identity-lock resolution (spec §8, AC-L1/L4) ---
+
+    def get_effective_lock(
+        self, track_id: int, platform: str, playlist_id: int | None = None
+    ) -> EffectiveLock | None:
+        """Resolve the effective identity lock for a track on a platform (AC-L1/L4).
+
+        A lock is two-level: a per-playlist override (``playlist_track_mappings``
+        with ``user_approved=1``) takes precedence over the library-wide default
+        lock (``platform_tracks`` with ``user_approved=1``). Returns ``None`` when
+        neither level is locked. The result carries the composite identity
+        (platform-id + ISRC + fingerprint) so selection can honour the lock even
+        after a platform re-ID.
+
+        Only an ``user_approved`` mapping is a lock; an auto-matched (unapproved)
+        per-playlist row does NOT shadow a global lock — it falls through to the
+        global default.
+        """
+        track = self.get_track(track_id)
+        isrc = track.isrc if track is not None else None
+        global_mapping = self.get_platform_mapping(track_id, platform)
+
+        if playlist_id is not None:
+            pl = self.get_playlist_track_mapping(playlist_id, track_id, platform)
+            if pl is not None and pl["user_approved"] and pl["platform_track_id"]:
+                # A per-playlist override reuses the global mapping's fingerprint
+                # only when it points at the SAME release; otherwise the override
+                # is a distinct release and carries no cached fingerprint yet.
+                fingerprint = None
+                if (
+                    global_mapping is not None
+                    and global_mapping.platform_track_id == pl["platform_track_id"]
+                ):
+                    fingerprint = global_mapping.fingerprint
+                return EffectiveLock(
+                    platform_track_id=pl["platform_track_id"],
+                    scope="playlist",
+                    isrc=isrc,
+                    fingerprint=fingerprint,
+                    status="matched",
+                )
+
+        if (
+            global_mapping is not None
+            and global_mapping.user_approved
+            and global_mapping.platform_track_id
+        ):
+            return EffectiveLock(
+                platform_track_id=global_mapping.platform_track_id,
+                scope="global",
+                isrc=isrc,
+                fingerprint=global_mapping.fingerprint,
+                status=global_mapping.status or "matched",
+                is_divergent=global_mapping.is_divergent,
+                divergence_note=global_mapping.divergence_note,
+                match_score=global_mapping.match_score,
+            )
+        return None
 
     # --- playlist_track_prefs (spec §4.1a: most-specific preference scope) ---
 
