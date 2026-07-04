@@ -128,7 +128,15 @@ def test_add_then_resolve_hydrates_queue_metadata_and_candidates(tmp_path: Path)
     assert db.get_resolution_queue_state(track_id) == "pending"
 
     fake = _FakeTidalClient(_candidates())
-    with patch("tuneshift.commands.resolve._load_client", return_value=fake):
+    with (
+        patch("tuneshift.commands.resolve._load_client", return_value=fake),
+        # The enricher now fires on resolve (FL2). Patch its network seams so
+        # this identity-hydration test stays hermetic; the enricher wiring is
+        # exercised for real in test_resolve_enriches.py.
+        patch("tuneshift.library.enrichment._enrich_artist_via_llm"),
+        patch("tuneshift.enrichment.pipeline.classify_track_grounded", return_value=None),
+        patch("tuneshift.library.enrichment._ensure_energy_valence"),
+    ):
         run_resolve(_resolve_args(), db)
 
     # (1) queue transitioned out of pending.
@@ -160,7 +168,12 @@ def test_resolve_quarantines_when_no_candidate(tmp_path: Path) -> None:
     track_id = db.get_playlist_tracks(playlist.id)[0].id
 
     fake = _FakeTidalClient([])  # platform finds nothing
-    with patch("tuneshift.commands.resolve._load_client", return_value=fake):
+    with (
+        patch("tuneshift.commands.resolve._load_client", return_value=fake),
+        patch("tuneshift.library.enrichment._enrich_artist_via_llm"),
+        patch("tuneshift.enrichment.pipeline.classify_track_grounded", return_value=None),
+        patch("tuneshift.library.enrichment._ensure_energy_valence"),
+    ):
         run_resolve(_resolve_args(), db)
 
     assert db.get_resolution_queue_state(track_id) == "quarantined"

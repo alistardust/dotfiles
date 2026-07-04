@@ -22,29 +22,45 @@ from tuneshift.db import Database
 logger = logging.getLogger(__name__)
 
 
-def enrich_track(db: Database, track_id: int, artist_name: str) -> None:
+def enrich_track(
+    db: Database,
+    track_id: int,
+    artist_name: str,
+    *,
+    classifier=None,
+    tidal_client=None,
+    refresh: bool = False,
+) -> None:
     """Classify a track and enrich its artist. Runs out-of-band; never fatal.
 
     Uses the search-grounded pipeline (MusicBrainz for artist genres, LLM as
-    fallback, grounded classifier for track vibes/themes).
+    fallback, grounded classifier for track vibes/themes). When the track has a
+    Tidal mapping, also captures Atmos/catalog metadata and derives tags
+    (AC10/AC11). Energy/valence are estimated when absent (AC8).
+
+    ``classifier``/``tidal_client`` may be injected so a batch enricher builds
+    them once (see :func:`make_enricher`); when omitted they are constructed
+    lazily. ``refresh=True`` re-runs enrichment even when fields are already
+    populated (bypasses the fill-only-if-null skip guards).
     """
     from tuneshift.enrichment.pipeline import classify_track_grounded
     from tuneshift.sequencer.classifier import TrackClassifier
 
-    classifier = TrackClassifier()
+    if classifier is None:
+        classifier = TrackClassifier()
     track = db.get_track(track_id)
     if not track:
         return
 
     # Enrich artist first (so we have genre context for track classification)
     artist = db.get_artist_by_name(artist_name)
-    if artist and not artist.genres and not artist.enriched_at:
+    if artist and (refresh or (not artist.genres and not artist.enriched_at)):
         _enrich_artist_via_llm(db, artist, classifier)
         artist = db.get_artist_by_name(artist_name)  # reload
 
     # Classify track if missing vibes/themes (using grounded pipeline)
     metadata = track.metadata or {}
-    if not metadata.get("vibes") and not metadata.get("narrator_stance"):
+    if refresh or (not metadata.get("vibes") and not metadata.get("narrator_stance")):
         artist_genres = artist.genres if artist else []
         result = classify_track_grounded(
             track.title,
@@ -59,6 +75,45 @@ def enrich_track(db: Database, track_id: int, artist_name: str) -> None:
                 (json.dumps(metadata), track_id),
             )
             db.conn.commit()
+            logger.info("classified track: %s - %s", track.title, track.artist)
+
+    # Atmos / Tidal catalog capture (AC10/AC11): any Tidal-mapped track captures
+    # audio-quality + catalog metadata and derives the atmos-available tag,
+    # automatically (no manual `enrich --catalog`). Best-effort, non-fatal.
+    _capture_tidal_catalog(db, track_id, client=tidal_client, refresh=refresh)
+
+    # Energy/valence (AC8): estimate when absent so the wave sequencer is not
+    # ordering blind. Uses the injected classifier for the LLM estimate.
+    _ensure_energy_valence(db, track_id, classifier=classifier, refresh=refresh)
+
+
+def make_enricher(
+    *,
+    classifier=None,
+    tidal_client=None,
+):
+    """Build the resolution worker's ``enricher`` callback (AC-D7 wiring).
+
+    Constructs the classifier (and reuses the Tidal client already loaded for
+    resolution) ONCE, then returns a ``(db, track) -> None`` closure so a batch
+    resolve does not re-detect the backend or re-login per track. This is the
+    seam FL1 left as ``None``; wiring it here is what makes ``resolve``
+    actually enrich (artist genres + classification + Atmos + energy/valence).
+    """
+    from tuneshift.sequencer.classifier import TrackClassifier
+
+    shared_classifier = classifier if classifier is not None else TrackClassifier()
+
+    def _enrich(db: Database, track) -> None:
+        enrich_track(
+            db,
+            track.id,
+            track.artist,
+            classifier=shared_classifier,
+            tidal_client=tidal_client,
+        )
+
+    return _enrich
 
 
 def _enrich_artist_via_llm(db: Database, artist, classifier) -> None:
@@ -140,3 +195,67 @@ def _enrich_artist_via_llm(db: Database, artist, classifier) -> None:
             pass
 
     db.update_artist(artist.id, **update_fields)
+
+
+def _capture_tidal_catalog(
+    db: Database, track_id: int, *, client=None, refresh: bool = False
+) -> None:
+    """Capture Atmos/catalog metadata when the track has a Tidal mapping (AC10/AC11).
+
+    Best-effort and non-fatal. No-ops silently when no Tidal client is available
+    (e.g. an add-path enrich before resolution) or the track has no Tidal
+    mapping yet -- capture then happens on the next resolve/mapping pass.
+    """
+    if client is None:
+        return
+    mapping = db.get_platform_mapping(track_id, "tidal")
+    if not mapping or not mapping.platform_track_id:
+        return
+    try:
+        from tuneshift.enrichment.platform_metadata import enrich_track_from_tidal
+
+        tags = enrich_track_from_tidal(
+            db, track_id, mapping.platform_track_id, client=client, refresh=refresh
+        )
+        if tags:
+            logger.info("derived tidal tags for track=%s: %s", track_id, ", ".join(tags))
+    except Exception:  # noqa: BLE001 - catalog capture is best-effort
+        logger.warning("tidal catalog capture failed: track=%s", track_id, exc_info=True)
+
+
+def _ensure_energy_valence(
+    db: Database, track_id: int, *, classifier=None, refresh: bool = False
+) -> None:
+    """Populate energy/valence when absent so the wave sequencer isn't blind (AC8).
+
+    Fallback chain (Spotify audio-features -> LLM estimate); manual override lives
+    in the edit command. Fill-only-if-null unless ``refresh``. Best-effort.
+    """
+    track = db.get_track(track_id)
+    if track is None:
+        return
+    if not refresh and track.energy is not None and track.valence is not None:
+        return
+
+    from tuneshift.enrichment.audio_features import (
+        estimate_energy_valence,
+        spotify_audio_features_via_isrc,
+    )
+
+    result = spotify_audio_features_via_isrc(track.isrc)
+    if result is None:
+        artist = db.get_artist_by_name(track.artist)
+        result = estimate_energy_valence(
+            track.title,
+            track.artist,
+            genres=artist.genres if artist else None,
+            tempo=track.tempo,
+            classifier=classifier,
+        )
+    if result is None:
+        return
+    energy, valence = result
+    db.set_track_fields(
+        track_id, {"energy": energy, "valence": valence}, source="enrichment"
+    )
+    logger.info("estimated energy/valence for track=%s: e=%.2f v=%.2f", track_id, energy, valence)

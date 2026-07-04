@@ -58,13 +58,21 @@ def run_resolve(args: Namespace, db: Database) -> None:
         print(f"Error: unknown platform '{platform_name}'", file=sys.stderr)
         raise SystemExit(1)
 
+    from tuneshift.library.enrichment import make_enricher
     from tuneshift.library.resolvers import PlatformResolver
     from tuneshift.library.worker import ResolutionWorker
     from tuneshift.platforms.rate_limiter import RateLimiter
 
     resolver = PlatformResolver(db, client)
+    # Wire the enricher (FL1 left this None): resolved tracks get artist genres +
+    # grounded classification + Atmos/catalog capture + energy/valence, out of
+    # the interactive add path (AC-D7). Reuse the client already loaded for
+    # resolution so we don't re-login per track.
     worker = ResolutionWorker(
-        db, resolver, rate_limiter=RateLimiter(max_per_second=3.0)
+        db,
+        resolver,
+        enricher=make_enricher(tidal_client=client if platform_name == "tidal" else None),
+        rate_limiter=RateLimiter(max_per_second=3.0),
     )
 
     # --force / --upgrade both mean "re-resolve tracks already resolved".

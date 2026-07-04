@@ -37,7 +37,7 @@ _TRACK_FIRST_CLASS_COLUMNS = frozenset({
     "album_artist", "album_type", "label", "recording_date", "release_date",
     "remaster_year", "audio_modes", "audio_quality", "tidal_version",
     "language", "composer", "availability", "quarantine_state",
-    "quarantine_reason",
+    "quarantine_reason", "energy", "valence",
 })
 # First-class columns whose Python value is a list, stored as a JSON string.
 _TRACK_JSON_FIELD_COLUMNS = frozenset({"audio_modes"})

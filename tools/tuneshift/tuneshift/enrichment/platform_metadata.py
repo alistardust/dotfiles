@@ -315,6 +315,38 @@ def _fetch_tidal_track_metadata(client, platform_track_id: str) -> dict | None:
     return report["metadata"]
 
 
+def enrich_track_from_tidal(
+    db: Database,
+    track_id: int,
+    platform_track_id: str,
+    *,
+    client,
+    refresh: bool = False,
+) -> list[str]:
+    """Capture Atmos/catalog metadata for ONE Tidal-mapped track (AC10/AC11).
+
+    The per-track counterpart to :func:`enrich_playlist_from_tidal` (which is
+    playlist-scoped and O(n) per call -- wrong for a per-mapping hook, per the
+    review synthesis S1). Fetches the track report, upserts the platform
+    metadata, then calls :func:`derive_tags` so the ``atmos-available`` tag is
+    written automatically instead of only via the manual ``tag derive`` /
+    ``enrich --catalog`` commands.
+
+    Fill-only semantics: skips the network fetch when metadata is already cached
+    unless ``refresh=True``, but ALWAYS (re)derives tags so a track that gained
+    metadata elsewhere still gets tagged. Returns the derived tags. Raises only
+    on a truly unexpected error; the caller treats this as best-effort.
+    """
+    if refresh or db.get_track_platform_metadata(track_id, "tidal") is None:
+        _tidal_limiter.wait()
+        meta = _fetch_tidal_track_metadata(client, platform_track_id)
+        if meta:
+            db.upsert_track_platform_metadata(
+                track_id, "tidal", platform_track_id, **meta
+            )
+    return derive_tags(db, track_id)
+
+
 def derive_tags(db: Database, track_id: int) -> list[str]:
     """Derive tags from platform metadata for a track."""
     meta = db.get_track_platform_metadata(track_id, "tidal")
