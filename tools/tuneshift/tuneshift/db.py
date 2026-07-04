@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from tuneshift.matching.normalize import _WHITESPACE_RE
 from tuneshift.matching.normalize import normalize_artist as _alias_normalize
 from tuneshift.models import (
     Album,
@@ -398,12 +399,26 @@ CREATE INDEX IF NOT EXISTS idx_apply_journal_plan
     ON apply_journal(plan_id, id);
 """
 
+# STORED-KEY edition strip. Intentionally NARROWER than
+# ``matching.normalize._EDITION_PARENS_RE`` (which also strips Deluxe/Mono/
+# Anniversary/Taylor's Version/etc.). This regex feeds the persisted, indexed
+# ``norm_title``/``norm_album`` columns and the ``albums`` UNIQUE constraint, so
+# broadening it would require a full reindex/backfill migration and could merge
+# rows the UNIQUE constraint currently keeps distinct. Do NOT point this at the
+# aggressive comparison regex. See tests/matching/test_normalizer_contracts.py.
 _REMIX_RE = re.compile(r"\s*\((?:remaster(?:ed)?|deluxe edition)[^)]*\)\s*", re.IGNORECASE)
-_WHITESPACE_RE = re.compile(r"\s+")
 
 
 def normalize_title(value: str | None) -> str | None:
-    """Normalize title-like text for indexed identity lookups."""
+    """Normalize title-like text for the STORED, indexed identity key.
+
+    Deliberately light and STABLE: lowercase, ``&``->``and``, strip
+    remaster/deluxe-edition parens, collapse whitespace. It does NOT fold accents
+    or strip feat/explicit -- that is the job of the transient comparison key
+    (``matching.normalize_title``). Changing this function's output requires
+    reindexing every stored ``norm_*`` value; the contract is pinned by
+    tests/matching/test_normalizer_contracts.py.
+    """
     if value is None:
         return None
     normalized = _REMIX_RE.sub(" ", value.strip().lower())
@@ -413,7 +428,11 @@ def normalize_title(value: str | None) -> str | None:
 
 
 def normalize_artist(value: str) -> str:
-    """Normalize artist text for indexed identity lookups."""
+    """Normalize artist text for the STORED, indexed identity key.
+
+    Light and STABLE (see :func:`normalize_title`): lowercase, ``&``->``and``,
+    collapse whitespace, strip a single leading "the ". Does NOT fold accents.
+    """
     normalized = value.strip().lower().replace("&", "and")
     normalized = _WHITESPACE_RE.sub(" ", normalized)
     if normalized.startswith("the "):

@@ -6,21 +6,29 @@ import re
 
 from rapidfuzz import fuzz
 
+# Shared canonical primitive (identical to the copy this module used to define).
+# Centralized in matching.normalize so the leading-"the" rule has one home.
+from tuneshift.matching.normalize import _THE_PREFIX_RE
+
+# SEARCH-QUERY suffix strip: removes a trailing parenthetical version marker so
+# the external query is "Song" not "Song (Remastered 2009)". Distinct from the
+# comparison/stored normalizers: it PRESERVES case and diacritics because
+# external search engines rank on the surface form. Contract pinned by
+# tests/matching/test_normalizer_contracts.py.
 _TITLE_SUFFIX_RE = re.compile(
     r"\s*\(.*?(?:remaster|deluxe|edition|version|mix).*?\)",
     flags=re.IGNORECASE,
 )
-_THE_PREFIX_RE = re.compile(r"^the\s+", flags=re.IGNORECASE)
 
 
 def normalize_title_for_search(title: str) -> str:
-    """Normalize a title for search queries."""
+    """Normalize a title for external-API search queries (preserves surface form)."""
     cleaned = _TITLE_SUFFIX_RE.sub("", title)
     return cleaned.strip()
 
 
 def normalize_artist_for_search(artist: str) -> str:
-    """Normalize an artist name for search queries."""
+    """Normalize an artist name for external-API search queries (preserves surface form)."""
     cleaned = _THE_PREFIX_RE.sub("", artist)
     return cleaned.strip()
 
