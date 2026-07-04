@@ -5,6 +5,7 @@ import os
 import re
 import sqlite3
 from collections.abc import Sequence
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -14,11 +15,22 @@ from tuneshift.models import Album, Artist, PlatformMapping, Playlist, PlaylistP
 if TYPE_CHECKING:
     from tuneshift.matching import ReviewItem
 
-_SCHEMA_VERSION = 14
+_SCHEMA_VERSION = 15
 
 # Columns editable via update_track. Constrains f-string interpolation in the
 # UPDATE statement to a fixed, safe set (no SQL identifier injection).
 _TRACK_EDITABLE_COLUMNS = frozenset({"title", "artist", "album"})
+
+# First-class version-selection metadata columns settable via set_track_fields
+# (spec §4.1). Constrains f-string interpolation in the UPDATE to a safe set.
+_TRACK_FIRST_CLASS_COLUMNS = frozenset({
+    "album_artist", "album_type", "label", "recording_date", "release_date",
+    "remaster_year", "audio_modes", "audio_quality", "tidal_version",
+    "language", "composer", "availability", "quarantine_state",
+    "quarantine_reason",
+})
+# First-class columns whose Python value is a list, stored as a JSON string.
+_TRACK_JSON_FIELD_COLUMNS = frozenset({"audio_modes"})
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS tracks (
@@ -46,7 +58,22 @@ CREATE TABLE IF NOT EXISTS tracks (
     resolved_at TEXT,
     artist_id INTEGER REFERENCES artists(id),
     album_id INTEGER REFERENCES albums(id),
-    preferences TEXT
+    preferences TEXT,
+    album_artist TEXT,
+    album_type TEXT,
+    label TEXT,
+    recording_date TEXT,
+    release_date TEXT,
+    remaster_year INTEGER,
+    audio_modes TEXT,
+    audio_quality TEXT,
+    tidal_version TEXT,
+    language TEXT,
+    composer TEXT,
+    availability TEXT,
+    quarantine_state TEXT,
+    quarantine_reason TEXT,
+    field_provenance TEXT
 );
 
 CREATE TABLE IF NOT EXISTS platform_tracks (
@@ -759,6 +786,38 @@ class Database:
                     "CREATE INDEX IF NOT EXISTS idx_artist_aliases_norm "
                     "ON artist_aliases(norm_member)"
                 )
+
+            if current_version < 15:
+                # First-class version-selection metadata columns (spec §4.1,
+                # AC-D3/D4). These lift audio/version/release fields out of the
+                # opaque metadata JSON so the matching path can read them, plus a
+                # field_provenance JSON column recording (source, timestamp) per
+                # enrichable field. Idempotent ALTERs guarded by PRAGMA.
+                track_cols = {
+                    r[1] for r in self.conn.execute("PRAGMA table_info(tracks)").fetchall()
+                }
+                first_class_columns = {
+                    "album_artist": "TEXT",
+                    "album_type": "TEXT",
+                    "label": "TEXT",
+                    "recording_date": "TEXT",
+                    "release_date": "TEXT",
+                    "remaster_year": "INTEGER",
+                    "audio_modes": "TEXT",
+                    "audio_quality": "TEXT",
+                    "tidal_version": "TEXT",
+                    "language": "TEXT",
+                    "composer": "TEXT",
+                    "availability": "TEXT",
+                    "quarantine_state": "TEXT",
+                    "quarantine_reason": "TEXT",
+                    "field_provenance": "TEXT",
+                }
+                for column_name, column_type in first_class_columns.items():
+                    if column_name not in track_cols:
+                        self.conn.execute(
+                            f"ALTER TABLE tracks ADD COLUMN {column_name} {column_type}"
+                        )
 
             self.conn.execute(
                 "UPDATE schema_meta SET value = ? WHERE key = 'version'",
@@ -1662,6 +1721,13 @@ class Database:
 
     def _row_to_track(self, row: sqlite3.Row) -> Track:
         """Convert a DB row to a Track model."""
+        cols = set(row.keys())
+
+        def _get(name: str) -> Any:
+            return row[name] if name in cols else None
+
+        audio_modes_raw = _get("audio_modes")
+        provenance_raw = _get("field_provenance")
         return Track(
             id=row["id"],
             title=row["title"],
@@ -1675,7 +1741,67 @@ class Database:
             key=row["key"],
             themes=json.loads(row["themes"]) if row["themes"] else [],
             metadata=json.loads(row["metadata"]) if row["metadata"] else {},
+            album_artist=_get("album_artist"),
+            album_type=_get("album_type"),
+            label=_get("label"),
+            recording_date=_get("recording_date"),
+            release_date=_get("release_date"),
+            remaster_year=_get("remaster_year"),
+            audio_modes=json.loads(audio_modes_raw) if audio_modes_raw else [],
+            audio_quality=_get("audio_quality"),
+            tidal_version=_get("tidal_version"),
+            language=_get("language"),
+            composer=_get("composer"),
+            availability=_get("availability"),
+            quarantine_state=_get("quarantine_state"),
+            quarantine_reason=_get("quarantine_reason"),
+            field_provenance=json.loads(provenance_raw) if provenance_raw else {},
         )
+
+    def set_track_fields(
+        self, track_id: int, fields: dict[str, Any], source: str
+    ) -> None:
+        """Set first-class metadata columns on a track and record provenance.
+
+        ``fields`` keys must be in ``_TRACK_FIRST_CLASS_COLUMNS``. Each updated
+        field records ``{"source": source, "at": <utc iso>}`` in the
+        ``field_provenance`` JSON column (AC-D4), merged with any existing
+        provenance so successive enrichment passes accumulate rather than clobber.
+        List-valued columns (audio_modes) are JSON-serialized.
+        """
+        invalid = set(fields) - _TRACK_FIRST_CLASS_COLUMNS
+        if invalid:
+            raise ValueError(f"Cannot set track fields: {sorted(invalid)}")
+        if not fields:
+            return
+
+        row = self.conn.execute(
+            "SELECT field_provenance FROM tracks WHERE id = ?", (track_id,)
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"Track id not found: {track_id}")
+        provenance = json.loads(row["field_provenance"]) if row["field_provenance"] else {}
+
+        now = datetime.now(timezone.utc).isoformat()
+        set_clauses: list[str] = []
+        params: list[Any] = []
+        for column, value in fields.items():
+            # column is constrained to the allowlist above — safe to interpolate.
+            set_clauses.append(f"{column} = ?")
+            if column in _TRACK_JSON_FIELD_COLUMNS:
+                params.append(json.dumps(value) if value is not None else None)
+            else:
+                params.append(value)
+            provenance[column] = {"source": source, "at": now}
+        set_clauses.append("field_provenance = ?")
+        params.append(json.dumps(provenance))
+        set_clauses.append("updated_at = datetime('now')")
+
+        with self.conn:
+            self.conn.execute(
+                f"UPDATE tracks SET {', '.join(set_clauses)} WHERE id = ?",
+                (*params, track_id),
+            )
 
     def update_track_metadata(self, track_id: int, meta: dict) -> None:
         """Update a track's audio metadata fields from enrichment data."""

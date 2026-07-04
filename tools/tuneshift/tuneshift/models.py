@@ -20,6 +20,21 @@ class Track:
     key: str | None = None
     themes: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
+    album_artist: str | None = None
+    album_type: str | None = None
+    label: str | None = None
+    recording_date: str | None = None
+    release_date: str | None = None
+    remaster_year: int | None = None
+    audio_modes: list[str] = field(default_factory=list)
+    audio_quality: str | None = None
+    tidal_version: str | None = None
+    language: str | None = None
+    composer: str | None = None
+    availability: str | None = None
+    quarantine_state: str | None = None
+    quarantine_reason: str | None = None
+    field_provenance: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
