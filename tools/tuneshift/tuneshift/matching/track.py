@@ -12,6 +12,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from tuneshift.matching.base_scoring import (
+    _SUBTITLE_PENALTY,
+    score_signals,
+)
 from tuneshift.matching.confidence import classify_scores
 from tuneshift.matching.engine import Distance
 from tuneshift.matching.normalize import (
@@ -23,7 +27,6 @@ from tuneshift.matching.normalize import (
 )
 from tuneshift.matching.penalties import (
     DEFAULT_WEIGHTS,
-    SignalPenalty,
     Weights,
     album_signal,
     artist_signal,
@@ -38,36 +41,9 @@ if TYPE_CHECKING:
     from tuneshift.matching.aliases import AliasResolver
 
 
-# Residual title cost applied when two titles agree only after trailing
-# descriptive subtitles are removed (a regional/edition retitle). Large enough
-# to keep a gap below an exact-title match so genuinely different songs sharing
-# a base title do not silently merge, small enough to rescue a true retitle
-# that would otherwise fall below the match threshold.
-_SUBTITLE_PENALTY = 10
-
-
-def _blended_title_signal(
-    sim_source: str, sim_result: str, weights: Weights
-) -> SignalPenalty:
-    """Title signal that rescues trailing-subtitle retitles.
-
-    Scores the (already version-stripped, normalized) titles as-is, then again
-    on their base titles (trailing descriptive subtitles removed), and keeps the
-    stronger result minus :data:`_SUBTITLE_PENALTY`. When neither title carries a
-    trailing subtitle the base leg is a no-op and the full signal is returned
-    unchanged, preserving byte-parity for the common case.
-    """
-    full = title_signal(sim_source, sim_result, weights)
-    base_src, base_res = base_title(sim_source), base_title(sim_result)
-    if base_src == sim_source and base_res == sim_result:
-        return full
-    base = title_signal(base_src, base_res, weights)
-    points = base.points - _SUBTITLE_PENALTY
-    if points <= full.points:
-        return full
-    budget = weights.title_exact
-    penalty = max(0.0, min(1.0, 1.0 - points / budget)) if budget > 0 else 0.0
-    return SignalPenalty("title", points, penalty, budget)
+# Residual title cost and the trailing-subtitle title blend now live in
+# ``base_scoring`` (the single scoring sequence); re-exported above for the
+# legacy ``score_match_with_version`` path below.
 
 
 def score_match(
@@ -256,49 +232,16 @@ def score_track_match(
     recommendation. The version signal is *source-aware* (see
     :func:`source_aware_version_signals`): it compares the candidate's recording
     class to the source's, so a live source matches a live take instead of being
-    penalised for it. ``prefer``/``avoid`` are recording-class preference sets.
+    penalised for it.     ``prefer``/``avoid`` are recording-class preference sets.
     """
-    src_title = getattr(source, "title", "") or ""
-    src_album = getattr(source, "album", None)
-    cand_title = getattr(candidate, "title", "") or ""
-    cand_album = getattr(candidate, "album", None) or ""
-    # Drop an album-name parenthetical appended to either title before scoring.
-    src_title = strip_album_from_title(src_title, src_album)
-    cand_title = strip_album_from_title(cand_title, cand_album)
-    distance = Distance()
-    distance.add(_blended_title_signal(
-        normalize_title(strip_version_markers(src_title)),
-        normalize_title(strip_version_markers(cand_title)),
-        weights,
+    return Distance(score_signals(
+        source, candidate,
+        weights=weights,
+        all_durations=all_durations,
+        prefer=prefer,
+        avoid=avoid,
+        alias_resolver=alias_resolver,
     ))
-    distance.add(artist_signal(
-        normalize_artist(getattr(source, "artist", "") or ""),
-        normalize_artist(getattr(candidate, "artist", "") or ""),
-        weights,
-        resolver=alias_resolver,
-    ))
-    distance.add(album_signal(
-        normalize_title(src_album or ""),
-        normalize_title(cand_album),
-        weights,
-        source_present=bool(src_album),
-    ))
-    distance.add(isrc_signal(
-        getattr(source, "isrc", None),
-        getattr(candidate, "isrc", None),
-        weights,
-    ))
-    distance.extend(source_aware_version_signals(
-        src_title, src_album or "", cand_title, cand_album,
-        prefer=prefer, avoid=avoid, weights=weights,
-    ))
-    distance.add(duration_signal(
-        getattr(candidate, "duration_seconds", None),
-        getattr(source, "duration_seconds", None),
-        all_durations,
-        weights,
-    ))
-    return distance
 
 
 def classify_results(scores: list[int]) -> str:
