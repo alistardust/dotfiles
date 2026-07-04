@@ -2002,6 +2002,96 @@ class Database:
             )
         return result
 
+    # --- coverage + quarantine surface (spec §4.4; AC-D1, AC-D6) ---
+
+    # Key first-class fields whose backfill coverage AC-D1 tracks. Fixed
+    # allowlist -> safe to interpolate into the fill-rate query below.
+    _COVERAGE_FIELDS = (
+        "isrc",
+        "duration_seconds",
+        "album_artist",
+        "album_type",
+        "label",
+        "release_date",
+        "audio_modes",
+    )
+
+    def coverage_report(self) -> dict[str, Any]:
+        """Return backfill coverage and per-field fill rates.
+
+        Coverage uses the AC-D1 denominator ``resolved / (resolved +
+        quarantined)`` — ``pending`` tracks are excluded so an in-progress
+        backfill does not depress the number, and quarantined tracks stay in the
+        denominator so quarantine cannot game the floor.
+        """
+        rows = self.conn.execute(
+            "SELECT state, COUNT(*) AS c FROM resolution_queue GROUP BY state"
+        ).fetchall()
+        counts = {row["state"]: row["c"] for row in rows}
+        resolved = counts.get("resolved", 0)
+        quarantined = counts.get("quarantined", 0)
+        pending = counts.get("pending", 0)
+        denom = resolved + quarantined
+        coverage = (resolved / denom) if denom else 0.0
+
+        total = self.conn.execute("SELECT COUNT(*) AS c FROM tracks").fetchone()["c"]
+        fill: dict[str, float] = {}
+        for column in self._COVERAGE_FIELDS:
+            if not total:
+                fill[column] = 0.0
+                continue
+            filled = self.conn.execute(
+                f"SELECT COUNT(*) AS c FROM tracks "
+                f"WHERE {column} IS NOT NULL AND {column} != ''"
+            ).fetchone()["c"]
+            fill[column] = filled / total
+
+        return {
+            "resolved": resolved,
+            "quarantined": quarantined,
+            "pending": pending,
+            "coverage": coverage,
+            "total_tracks": total,
+            "field_fill_rates": fill,
+        }
+
+    def get_quarantined_tracks(self) -> list[dict[str, Any]]:
+        """List quarantined tracks with machine-readable reasons (AC-D6)."""
+        rows = self.conn.execute(
+            """SELECT t.id, t.title, t.artist, t.quarantine_reason,
+                      rq.last_error
+               FROM tracks t
+               LEFT JOIN resolution_queue rq ON rq.track_id = t.id
+               WHERE t.quarantine_state IS NOT NULL
+               ORDER BY t.artist, t.title"""
+        ).fetchall()
+        return [
+            {
+                "track_id": row["id"],
+                "title": row["title"],
+                "artist": row["artist"],
+                "reason": row["quarantine_reason"] or row["last_error"] or "",
+            }
+            for row in rows
+        ]
+
+    def get_selectable_track_ids(self, playlist_id: int) -> list[int]:
+        """Return a playlist's track ids that are eligible for selection.
+
+        Quarantined tracks (``quarantine_state`` set) are excluded until they
+        are resolved or manually approved (AC-D6). Order is preserved.
+        """
+        rows = self.conn.execute(
+            """SELECT pt.track_id
+               FROM playlist_tracks pt
+               JOIN tracks t ON t.id = pt.track_id
+               WHERE pt.playlist_id = ?
+                 AND t.quarantine_state IS NULL
+               ORDER BY pt.position""",
+            (playlist_id,),
+        ).fetchall()
+        return [row[0] for row in rows]
+
     # --- playlist_track_mappings (spec §4.1a: per-playlist release override) ---
 
     def set_playlist_track_mapping(
