@@ -15,7 +15,7 @@ from tuneshift.models import Album, Artist, PlatformMapping, Playlist, PlaylistP
 if TYPE_CHECKING:
     from tuneshift.matching import ReviewItem
 
-_SCHEMA_VERSION = 15
+_SCHEMA_VERSION = 16
 
 # Columns editable via update_track. Constrains f-string interpolation in the
 # UPDATE statement to a fixed, safe set (no SQL identifier injection).
@@ -303,13 +303,14 @@ CREATE TABLE IF NOT EXISTS track_tags (
 CREATE INDEX IF NOT EXISTS idx_track_tags_tag ON track_tags(tag);
 
 CREATE TABLE IF NOT EXISTS match_audits (
+    playlist_id INTEGER NOT NULL DEFAULT 0,
     track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
     platform TEXT NOT NULL,
     availability TEXT NOT NULL,
     reason_code TEXT NOT NULL,
     audit_json TEXT NOT NULL,
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-    PRIMARY KEY (track_id, platform)
+    PRIMARY KEY (playlist_id, track_id, platform)
 );
 
 CREATE TABLE IF NOT EXISTS artist_aliases (
@@ -862,6 +863,44 @@ class Database:
                         self.conn.execute(
                             f"ALTER TABLE tracks ADD COLUMN {column_name} {column_type}"
                         )
+
+            if current_version < 16:
+                # Playlist-scope match_audits (spec §4.1a item 5, AC-CLI3/CLI5):
+                # selection is now playlist-dependent, so an audit is keyed by
+                # (playlist_id, track_id, platform). Rebuild the table (SQLite
+                # cannot alter a PK in place); existing rows land at the global
+                # sentinel playlist_id=0. Idempotent via the column-presence guard.
+                audit_cols = {
+                    r[1]
+                    for r in self.conn.execute(
+                        "PRAGMA table_info(match_audits)"
+                    ).fetchall()
+                }
+                if audit_cols and "playlist_id" not in audit_cols:
+                    self.conn.execute("""
+                        CREATE TABLE match_audits_new (
+                            playlist_id INTEGER NOT NULL DEFAULT 0,
+                            track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+                            platform TEXT NOT NULL,
+                            availability TEXT NOT NULL,
+                            reason_code TEXT NOT NULL,
+                            audit_json TEXT NOT NULL,
+                            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                            PRIMARY KEY (playlist_id, track_id, platform)
+                        )
+                    """)
+                    self.conn.execute("""
+                        INSERT INTO match_audits_new
+                            (playlist_id, track_id, platform, availability,
+                             reason_code, audit_json, updated_at)
+                        SELECT 0, track_id, platform, availability,
+                               reason_code, audit_json, updated_at
+                        FROM match_audits
+                    """)
+                    self.conn.execute("DROP TABLE match_audits")
+                    self.conn.execute(
+                        "ALTER TABLE match_audits_new RENAME TO match_audits"
+                    )
 
             self.conn.execute(
                 "UPDATE schema_meta SET value = ? WHERE key = 'version'",
@@ -1547,48 +1586,64 @@ class Database:
         )
         self.conn.commit()
 
-    def save_match_audit(self, track_id: int, platform: str, audit) -> None:
-        """Persist the explainable MatchAudit for a (track, platform) pair.
+    def save_match_audit(
+        self, track_id: int, platform: str, audit, playlist_id: int = 0
+    ) -> None:
+        """Persist the explainable MatchAudit for a (playlist, track, platform).
 
         Stored for every reconcile outcome — including misses — so ``tuneshift
-        why`` can explain a decision without re-running a live search. The audit
-        is serialized to JSON via ``MatchAudit.to_json``; availability and
+        explain`` can explain a decision without re-running a live search. The
+        audit is serialized to JSON via ``MatchAudit.to_json``; availability and
         reason_code are also stored as plain columns for cheap filtering.
+
+        ``playlist_id`` scopes the audit: selection is playlist-dependent, so the
+        same (track, platform) can carry a distinct audit per playlist. It
+        defaults to the global sentinel ``0`` for legacy/non-playlist call sites.
         """
         if audit is None:
             return
         self.conn.execute(
             """INSERT INTO match_audits
-               (track_id, platform, availability, reason_code, audit_json, updated_at)
-               VALUES (?, ?, ?, ?, ?, datetime('now'))
-               ON CONFLICT(track_id, platform) DO UPDATE SET
+               (playlist_id, track_id, platform, availability, reason_code, audit_json, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+               ON CONFLICT(playlist_id, track_id, platform) DO UPDATE SET
                  availability = excluded.availability,
                  reason_code = excluded.reason_code,
                  audit_json = excluded.audit_json,
                  updated_at = excluded.updated_at""",
-            (track_id, platform, audit.availability, audit.reason_code, audit.to_json()),
+            (playlist_id, track_id, platform, audit.availability, audit.reason_code, audit.to_json()),
         )
         self.conn.commit()
 
-    def get_match_audit(self, track_id: int, platform: str):
-        """Return the persisted ``MatchAudit`` for a (track, platform), or None."""
+    def get_match_audit(self, track_id: int, platform: str, playlist_id: int = 0):
+        """Return the persisted ``MatchAudit`` for a (playlist, track, platform).
+
+        ``playlist_id`` defaults to the global sentinel ``0``.
+        """
         from tuneshift.matching import MatchAudit
 
         row = self.conn.execute(
-            "SELECT audit_json FROM match_audits WHERE track_id = ? AND platform = ?",
-            (track_id, platform),
+            "SELECT audit_json FROM match_audits "
+            "WHERE playlist_id = ? AND track_id = ? AND platform = ?",
+            (playlist_id, track_id, platform),
         ).fetchone()
         if row is None:
             return None
         return MatchAudit.from_json(row["audit_json"])
 
-    def get_match_audits_for_track(self, track_id: int) -> dict[str, object]:
-        """Return all persisted audits for a track, keyed by platform name."""
+    def get_match_audits_for_track(
+        self, track_id: int, playlist_id: int = 0
+    ) -> dict[str, object]:
+        """Return all persisted audits for a (playlist, track), keyed by platform.
+
+        ``playlist_id`` defaults to the global sentinel ``0``.
+        """
         from tuneshift.matching import MatchAudit
 
         rows = self.conn.execute(
-            "SELECT platform, audit_json FROM match_audits WHERE track_id = ?",
-            (track_id,),
+            "SELECT platform, audit_json FROM match_audits "
+            "WHERE track_id = ? AND playlist_id = ?",
+            (track_id, playlist_id),
         ).fetchall()
         return {row["platform"]: MatchAudit.from_json(row["audit_json"]) for row in rows}
 
