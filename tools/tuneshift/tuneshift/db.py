@@ -765,14 +765,63 @@ class Database:
                 (str(_SCHEMA_VERSION),),
             )
 
+    def _get_or_create_artist(self, name: str) -> int:
+        """Return the artists.id for ``name``, creating the row if absent.
+
+        Idempotent via the ``idx_artists_norm`` UNIQUE(norm_name) constraint, so
+        it is consistent with the migration backfill which keys on the same
+        normalized column.
+        """
+        norm = normalize_artist(name)
+        self.conn.execute(
+            "INSERT OR IGNORE INTO artists (name, norm_name) VALUES (?, ?)",
+            (name, norm),
+        )
+        row = self.conn.execute(
+            "SELECT id FROM artists WHERE norm_name = ?", (norm,)
+        ).fetchone()
+        return int(row["id"])
+
+    def _get_or_create_album(self, title: str, artist_id: int) -> int:
+        """Return the albums.id for ``(title, artist_id)`` at the default edition.
+
+        The ``albums`` UNIQUE is ``(norm_title, artist_id, edition)`` and ``edition``
+        defaults to ``'original'``; the INSERT omits it (default applies), so the
+        SELECT filters ``edition='original'`` to key on the same columns and avoid a
+        lookup miss.
+        """
+        norm = normalize_title(title)
+        self.conn.execute(
+            "INSERT OR IGNORE INTO albums (title, norm_title, artist_id) VALUES (?, ?, ?)",
+            (title, norm, artist_id),
+        )
+        row = self.conn.execute(
+            "SELECT id FROM albums WHERE norm_title = ? AND artist_id = ? AND edition = 'original'",
+            (norm, artist_id),
+        ).fetchone()
+        return int(row["id"])
+
     def insert_track(self, track: Track) -> int:
-        """Insert a track and return its ID."""
+        """Insert a track and return its ID.
+
+        Links the track to the normalized ``artists``/``albums`` tables at insert
+        time (get-or-create), so every runtime-added track carries ``artist_id`` and
+        (when an album is present) ``album_id`` — not only tracks touched by the
+        one-time migration backfill. Gate on AC-D1/AC-D3.
+        """
+        artist_id: int | None = None
+        album_id: int | None = None
+        if track.artist:
+            artist_id = self._get_or_create_artist(track.artist)
+            if track.album:
+                album_id = self._get_or_create_album(track.album, artist_id)
         cursor = self.conn.execute(
             """INSERT INTO tracks (
                    title, artist, album, norm_title, norm_artist, norm_album,
-                   duration_seconds, isrc, energy, valence, tempo, key, themes, metadata
+                   duration_seconds, isrc, energy, valence, tempo, key, themes, metadata,
+                   artist_id, album_id
                )
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 track.title,
                 track.artist,
@@ -788,6 +837,8 @@ class Database:
                 track.key,
                 json.dumps(track.themes) if track.themes else None,
                 json.dumps(track.metadata) if track.metadata else None,
+                artist_id,
+                album_id,
             ),
         )
         self.conn.commit()
