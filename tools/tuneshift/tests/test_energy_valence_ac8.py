@@ -86,6 +86,38 @@ def test_estimate_none_when_classifier_unavailable() -> None:
     assert estimate_energy_valence("S", "A", classifier=_Classifier()) is None
 
 
+# --- manual provenance is never clobbered by re-enrichment (review Issue 1) ---
+def test_enrichment_preserves_partial_manual_energy(tmp_path: Path) -> None:
+    """A hand-set energy (valence still null) must survive a later enrich pass.
+
+    Regression: _ensure_energy_valence gated only on both-fields-null, so a
+    partial manual edit triggered estimation that overwrote the manual value and
+    flipped its provenance from "manual" to "enrichment".
+    """
+    from tuneshift.library.enrichment import _ensure_energy_valence
+
+    db = Database(tmp_path / "prov.db")
+    track_id = db.add_track(Track(title="Levitating", artist="Dua Lipa"))
+    db.set_track_fields(track_id, {"energy": 0.42}, source="manual")
+
+    class _Classifier:
+        available = True
+        _model = "test"
+
+        class _backend:  # noqa: N801 - test stub
+            @staticmethod
+            def complete(*_a, **_k):
+                return '{"energy": 0.99, "valence": 0.99}'
+
+    _ensure_energy_valence(db, track_id, classifier=_Classifier())
+
+    track = db.get_track(track_id)
+    assert track.energy == 0.42  # manual value untouched
+    assert track.field_provenance["energy"]["source"] == "manual"
+    assert track.valence == 0.99  # the null field WAS filled
+    assert track.field_provenance["valence"]["source"] == "enrichment"
+
+
 # --- wave-arc coverage warning ----------------------------------------------
 def test_wave_warning_fires_when_sparse(capsys) -> None:
     tracks = [

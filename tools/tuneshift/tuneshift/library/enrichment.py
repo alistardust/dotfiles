@@ -257,12 +257,26 @@ def _ensure_energy_valence(
     """Populate energy/valence when absent so the wave sequencer isn't blind (AC8).
 
     Fallback chain (Spotify audio-features -> LLM estimate); manual override lives
-    in the edit command. Fill-only-if-null unless ``refresh``. Best-effort.
+    in the edit command. Fill-only-if-null unless ``refresh``. A field whose
+    provenance is ``manual`` is NEVER overwritten (even on ``refresh``), and only
+    the field(s) that actually need filling are written, so a partially
+    hand-edited pair (e.g. energy set, valence null) keeps the manual value and
+    its provenance. Best-effort.
     """
     track = db.get_track(track_id)
     if track is None:
         return
-    if not refresh and track.energy is not None and track.valence is not None:
+
+    provenance = track.field_provenance or {}
+
+    def _needs(column: str, value) -> bool:
+        if provenance.get(column, {}).get("source") == "manual":
+            return False  # never clobber a manual value or flip its provenance
+        return refresh or value is None
+
+    need_energy = _needs("energy", track.energy)
+    need_valence = _needs("valence", track.valence)
+    if not (need_energy or need_valence):
         return
 
     from tuneshift.enrichment.audio_features import (
@@ -283,7 +297,10 @@ def _ensure_energy_valence(
     if result is None:
         return
     energy, valence = result
-    db.set_track_fields(
-        track_id, {"energy": energy, "valence": valence}, source="enrichment"
-    )
-    logger.info("estimated energy/valence for track=%s: e=%.2f v=%.2f", track_id, energy, valence)
+    fields: dict[str, float] = {}
+    if need_energy:
+        fields["energy"] = energy
+    if need_valence:
+        fields["valence"] = valence
+    db.set_track_fields(track_id, fields, source="enrichment")
+    logger.info("estimated energy/valence for track=%s: %s", track_id, fields)

@@ -8,9 +8,12 @@ plan by default (§7.1 mutation routing, AC-L1/AC-P1). ``map``/``unmap`` remain
 the immediate manual path (``map`` additionally captures platform metadata via
 ``--verify``).
 """
+import logging
 import sys
 
 from tuneshift.db import Database
+
+logger = logging.getLogger(__name__)
 
 
 def _load_client(platform: str):
@@ -86,13 +89,16 @@ def handle_map(args, db: Database) -> int:
     if platform == "tidal":
         from tuneshift.library.enrichment import capture_tidal_catalog
 
-        catalog_client = client if args.verify else _load_client(platform)
-        if catalog_client is not None and catalog_client.load_session():
-            tags = capture_tidal_catalog(
-                db, track.id, platform, platform_id, client=catalog_client
-            )
-            if "atmos-available" in tags:
-                print("  Captured catalog metadata (Atmos available)")
+        try:
+            catalog_client = client if args.verify else _load_client(platform)
+            if catalog_client is not None and catalog_client.load_session():
+                tags = capture_tidal_catalog(
+                    db, track.id, platform, platform_id, client=catalog_client
+                )
+                if "atmos-available" in tags:
+                    print("  Captured catalog metadata (Atmos available)")
+        except Exception:  # noqa: BLE001 - capture is best-effort; mapping already succeeded
+            logger.warning("catalog capture after mapping failed", exc_info=True)
     return 0
 
 
