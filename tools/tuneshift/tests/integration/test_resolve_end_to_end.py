@@ -178,3 +178,40 @@ def test_resolve_quarantines_when_no_candidate(tmp_path: Path) -> None:
 
     assert db.get_resolution_queue_state(track_id) == "quarantined"
     assert db.get_track(track_id).quarantine_state is not None
+
+
+class _UnauthenticatedClient(_FakeTidalClient):
+    """A client that fails its session load (mirrors an expired Tidal token)."""
+
+    def load_session(self) -> bool:
+        return False
+
+
+def test_resolve_fails_fast_when_not_logged_in(tmp_path: Path, capsys) -> None:
+    """An unauthenticated client must error out, not silently quarantine.
+
+    Regression for the real-data bug where `resolve` built a TidalClient but
+    never loaded its session, so every track quarantined as "no candidate"
+    despite a valid stored login.
+    """
+    db = Database(tmp_path / "e2e3.db")
+    add_args = Namespace(
+        playlist="EndToEnd", title="Blinding Lights", artist="The Weeknd",
+        album=None, replace=None,
+    )
+    assert handle_add(add_args, db) == 0
+    playlist = db.find_playlist_by_name("EndToEnd")
+    track_id = db.get_playlist_tracks(playlist.id)[0].id
+
+    fake = _UnauthenticatedClient(_candidates())
+    with patch("tuneshift.commands.resolve._load_client", return_value=fake):
+        try:
+            run_resolve(_resolve_args(), db)
+        except SystemExit as exc:
+            assert exc.code == 1
+        else:
+            raise AssertionError("expected SystemExit when not logged in")
+
+    assert "not logged in" in capsys.readouterr().err.lower()
+    # Never touched the queue: not a silent quarantine.
+    assert db.get_resolution_queue_state(track_id) == "pending"

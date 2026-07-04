@@ -58,6 +58,18 @@ def run_resolve(args: Namespace, db: Database) -> None:
         print(f"Error: unknown platform '{platform_name}'", file=sys.stderr)
         raise SystemExit(1)
 
+    # Authenticate before use: the platform search APIs require a live session and
+    # do not auto-login, so an unauthenticated client silently quarantines every
+    # track as "no candidate". Fakes in tests omit load_session and are skipped.
+    loader = getattr(client, "load_session", None)
+    if loader is not None and not loader():
+        print(
+            f"Error: not logged in to {platform_name}. "
+            f"Run: tuneshift login {platform_name}",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
     from tuneshift.library.enrichment import make_enricher
     from tuneshift.library.resolvers import PlatformResolver
     from tuneshift.library.worker import ResolutionWorker
