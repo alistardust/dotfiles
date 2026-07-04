@@ -156,6 +156,7 @@ class TestMusicBrainzLanguageComposer:
         candidate = source._recording_to_candidate(recording)
         assert candidate.language == "deu"
         assert candidate.composer == "Carlo Karges"
+        assert candidate.mb_work_id == "work-1"
 
     def test_recording_to_candidate_missing_language_composer_is_none(self):
         source = MusicBrainzSource()
@@ -168,3 +169,4 @@ class TestMusicBrainzLanguageComposer:
         candidate = source._recording_to_candidate(recording)
         assert candidate.language is None
         assert candidate.composer is None
+        assert candidate.mb_work_id is None

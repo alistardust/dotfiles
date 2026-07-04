@@ -420,4 +420,60 @@ def test_m6_language_and_composer_are_known_axes():
     assert "composer" in KNOWN_AXES
 
 
+# --- M2: MB work-entity (cover-vs-original + re-recordings) (AC-M2) -----------
+
+
+def _work_rel(pid, *, mb_work_id=None, title="Wildest Dreams", available=True):
+    # Same title/artist strings; candidates differ by MB WORK identity (a
+    # same-titled DIFFERENT composition) or by a re-recording marker in the
+    # raw title ("Taylor's Version").
+    return SimpleNamespace(
+        platform_id=pid,
+        title=title,
+        artist="Taylor Swift",
+        album="1989",
+        isrc=None,
+        duration_seconds=219,
+        available=available,
+        mb_work_id=mb_work_id,
+    )
+
+
+def test_m2_require_original_selects_same_work_rejects_different_work():
+    # Two candidates share the source's title/artist, but one is a DIFFERENT
+    # composition (work W2 — a same-title different song). require-original keys
+    # on the source's work-id, so the wrong composition is hard-filtered out.
+    src = _work_rel("src", mb_work_id="W1")
+    same_work = _work_rel("same", mb_work_id="W1")
+    other_work = _work_rel("other", mb_work_id="W2")
+    specs = [PreferenceSpec(axis="work", target="original",
+                            strength=Strength.REQUIRE, scope="playlist")]
+    active = resolve_active_preferences(specs)
+    result = select_version(src, [other_work, same_work], active=active)
+    assert result.winner is same_work
+    assert any(
+        fc.candidate is other_work and fc.reason.startswith("hard:work")
+        for fc in result.filtered
+    )
+
+
+def test_m2_taylors_version_preference_selects_rerecording():
+    # Same work (same composition), but one candidate is the "Taylor's Version"
+    # re-recording. A prefer-taylors-version preference selects the re-recording
+    # over the original, even though both normalize to the same title.
+    src = _work_rel("src", mb_work_id="W1")
+    original = _work_rel("orig", mb_work_id="W1", title="Wildest Dreams")
+    taylors = _work_rel("tv", mb_work_id="W1",
+                        title="Wildest Dreams (Taylor's Version)")
+    specs = [PreferenceSpec(axis="work", target="taylors version",
+                            strength=Strength.PREFER, scope="playlist")]
+    active = resolve_active_preferences(specs)
+    result = select_version(src, [original, taylors], active=active)
+    assert result.winner is taylors
+
+
+def test_m2_work_is_a_known_axis():
+    assert "work" in KNOWN_AXES
+
+
 

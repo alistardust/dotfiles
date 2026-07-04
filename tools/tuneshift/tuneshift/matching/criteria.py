@@ -705,6 +705,86 @@ class ComposerCriterion:
         return _soft_signal(self.name, self.weight, verdict)
 
 
+@dataclass
+class WorkCriterion:
+    """A MusicBrainz WORK-entity criterion (M2, AC-M2).
+
+    Distinguishes the original recording of a composition from covers and
+    deliberate re-recordings by the MB *work* identity, not by fuzzy strings.
+    Two aspects are compared:
+
+    * **Work identity** — the MB ``mb_work_id`` ties a recording to its
+      composition. A same-titled candidate with a DIFFERENT work-id is a
+      different song, not a cover; ``target="original"`` requires the candidate
+      to share the source's work-id.
+    * **Re-recording marker** — a canonical marker parsed from the RAW title
+      (``"taylors version"`` / ``"re-recorded"``) via
+      :func:`normalize.extract_rerecording_marker`, captured before the edition
+      strip removes the parenthetical. ``target="original"`` is satisfied only
+      when the candidate carries NO re-recording marker; a specific target such
+      as ``"taylors version"`` is satisfied only when the candidate carries that
+      marker — so a playlist can prefer the re-recording over the original.
+
+    Work identity is structured, so a verdict is confident and a ``require`` may
+    hard-filter. When neither side exposes a work-id nor a marker there is
+    nothing to compare -> NO_VERDICT -> no signal (parity rule §5.1). KNOWN
+    COVERAGE GAP (spec §11): MB work-ids are populated on identity-resolved
+    candidates; raw platform search results seldom carry them, so this fires
+    where the candidate has been hydrated with MB data — a low fire-rate on
+    un-hydrated candidates is expected, not a bug.
+    """
+
+    name: str
+    target: str = "original"
+    weight: int = 15
+    hard_cap: HardCapPolicy = HardCapPolicy.NONE
+
+    _ORIGINAL = "original"
+
+    def extract(self, meta: object) -> CriterionValue | None:
+        from tuneshift.matching.normalize import extract_rerecording_marker
+
+        work_id = getattr(meta, "mb_work_id", None)
+        title = getattr(meta, "title", None)
+        marker = extract_rerecording_marker(str(title) if title else None)
+        if work_id is None and marker is None:
+            return None
+        tokens = frozenset({marker}) if marker else frozenset()
+        return CriterionValue(raw=(work_id, marker), tokens=tokens, structured=True)
+
+    def compare(
+        self,
+        source: CriterionValue,
+        candidate: CriterionValue,
+        strength: Strength | None,
+    ) -> Verdict:
+        if not isinstance(source.raw, tuple) or not isinstance(candidate.raw, tuple):
+            return Verdict.NO_VERDICT
+        src_work, _src_marker = source.raw
+        cand_work, cand_marker = candidate.raw
+        target = self.target.strip().lower()
+        if target == self._ORIGINAL:
+            # The original recording of the SOURCE's composition: same work-id
+            # and no re-recording marker. Without both work-ids we cannot
+            # confirm the composition, so emit no signal rather than guess.
+            if src_work is None or cand_work is None:
+                return Verdict.NO_VERDICT
+            satisfied = src_work == cand_work and cand_marker is None
+        else:
+            # A specific re-recording (e.g. "taylors version"): the candidate
+            # must carry that marker, and — when both work-ids are known — be the
+            # same composition (a re-recording of a DIFFERENT work is rejected).
+            if src_work is not None and cand_work is not None and src_work != cand_work:
+                satisfied = False
+            else:
+                satisfied = cand_marker is not None and target == cand_marker
+        # Work identity is structured -> confident; a hard verdict stays hard.
+        return resolve_strength_verdict(strength, satisfied=satisfied)
+
+    def to_signal(self, verdict: Verdict) -> SignalPenalty | None:
+        return _soft_signal(self.name, self.weight, verdict)
+
+
 class CriterionRegistry:
     """An ordered, name-unique collection of registered criteria.
 

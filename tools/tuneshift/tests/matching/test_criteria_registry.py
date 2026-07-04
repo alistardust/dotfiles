@@ -379,4 +379,54 @@ def test_composer_criterion_absent_composer_no_verdict():
     assert crit.compare(empty, src, Strength.REQUIRE) is Verdict.NO_VERDICT
 
 
+# --- M2: MB work-entity (cover-vs-original + re-recordings) --------------------
+
+
+def _work_meta(mb_work_id=None, title="Wildest Dreams"):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(mb_work_id=mb_work_id, title=title)
+
+
+def test_work_criterion_prefer_original_same_work_matches_different_work_rejected():
+    from tuneshift.matching.registry import criterion_for
+
+    crit = criterion_for("work", "original")
+    src = crit.extract(_work_meta(mb_work_id="W1"))
+    same = crit.extract(_work_meta(mb_work_id="W1"))
+    diff = crit.extract(_work_meta(mb_work_id="W2"))
+    assert crit.compare(src, same, Strength.REQUIRE) is Verdict.HARD_PASS
+    assert crit.compare(src, diff, Strength.REQUIRE) is Verdict.HARD_REJECT
+
+
+def test_work_criterion_original_rejects_rerecording():
+    from tuneshift.matching.registry import criterion_for
+
+    crit = criterion_for("work", "original")
+    src = crit.extract(_work_meta(mb_work_id="W1"))
+    tv = crit.extract(_work_meta(mb_work_id="W1",
+                                 title="Wildest Dreams (Taylor's Version)"))
+    # Same composition but a deliberate re-recording -> not the original.
+    assert crit.compare(src, tv, Strength.REQUIRE) is Verdict.HARD_REJECT
+
+
+def test_work_criterion_taylors_version_selects_rerecording():
+    from tuneshift.matching.registry import criterion_for
+
+    crit = criterion_for("work", "taylors version")
+    src = crit.extract(_work_meta(mb_work_id="W1"))
+    original = crit.extract(_work_meta(mb_work_id="W1"))
+    tv = crit.extract(_work_meta(mb_work_id="W1",
+                                 title="Wildest Dreams (Taylor's Version)"))
+    assert crit.compare(src, tv, Strength.PREFER) is Verdict.SOFT_BONUS
+    assert crit.compare(src, original, Strength.PREFER) is Verdict.SOFT_PENALTY
+
+
+def test_work_criterion_missing_work_and_marker_no_verdict():
+    from tuneshift.matching.registry import criterion_for
+
+    crit = criterion_for("work", "original")
+    assert crit.extract(_work_meta(mb_work_id=None, title="Some Song")) is None
+
+
 

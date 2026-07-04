@@ -31,6 +31,7 @@ class Track:
     tidal_version: str | None = None
     language: str | None = None
     composer: str | None = None
+    mb_work_id: str | None = None
     availability: str | None = None
     quarantine_state: str | None = None
     quarantine_reason: str | None = None
@@ -107,6 +108,7 @@ class TrackResult:
     remaster_year: int | None = None
     language: str | None = None
     composer: str | None = None
+    mb_work_id: str | None = None
 
 
 @dataclass(frozen=True)

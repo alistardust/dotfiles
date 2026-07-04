@@ -135,7 +135,24 @@ class MusicBrainzSource:
             release_groups=release_groups,
             language=self._extract_language(recording),
             composer=self._extract_composer(recording),
+            mb_work_id=self._extract_work_id(recording),
         )
+
+    @staticmethod
+    def _extract_work_id(recording: dict[str, Any]) -> str | None:
+        """Pull the MB WORK id (composition identity) from a recording (M2, AC-M2).
+
+        Returns the id of the first related work in ``work-relation-list`` (present
+        when ``inc=work-rels`` was requested). The work-id ties covers and
+        re-recordings of the same composition together and separates same-titled
+        different songs. Returns ``None`` when no work relation is present (parity
+        rule §5.1) — MB work coverage is inconsistent, so absence is expected.
+        """
+        for relation in recording.get("work-relation-list", []):
+            work_id = relation.get("work", {}).get("id")
+            if work_id:
+                return str(work_id)
+        return None
 
     @staticmethod
     def _extract_language(recording: dict[str, Any]) -> str | None:

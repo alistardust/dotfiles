@@ -168,6 +168,36 @@ def split_artist_roles(
     return main, featured - main
 
 
+# Re-recording markers a title may carry (M2, AC-M2). Matched on the RAW title
+# BEFORE `_EDITION_PARENS_RE` strips "(Taylor's Version)", so the deliberate
+# re-recording stays selectable. Each pattern maps to a canonical marker token
+# a preference can target (e.g. ``prefer work=taylors version``).
+_RERECORDING_MARKERS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"taylor'?s\s+version", re.IGNORECASE), "taylors version"),
+    (re.compile(r"re-?recorded", re.IGNORECASE), "re-recorded"),
+    (re.compile(r"re-?recording", re.IGNORECASE), "re-recorded"),
+)
+
+
+def extract_rerecording_marker(title: str | None) -> str | None:
+    """Return the canonical re-recording marker in a raw title, else ``None`` (M2).
+
+    Scans the *raw* title for deliberate re-recording markers ("Taylor's
+    Version", "Re-Recorded", "Re-Recording") and returns a canonical token
+    (``"taylors version"`` / ``"re-recorded"``) that a ``work``-axis preference
+    can target. Runs on the unmodified title so the marker is captured before
+    :data:`_EDITION_PARENS_RE` strips the parenthetical during title
+    normalization. A title with no such marker is an original recording and
+    returns ``None``.
+    """
+    if not title:
+        return None
+    for pattern, marker in _RERECORDING_MARKERS:
+        if pattern.search(title):
+            return marker
+    return None
+
+
 # A parenthetical or bracketed group anywhere in a title.
 _PAREN_GROUP_RE = re.compile(r"\s*[\(\[]([^\)\]]*)[\)\]]")
 

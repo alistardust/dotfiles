@@ -33,6 +33,7 @@ from tuneshift.matching.criteria import (
     TitleTokenCriterion,
     TokenCriterion,
     TokenWhitelist,
+    WorkCriterion,
     load_token_whitelist,
 )
 from tuneshift.matching.precedence import PreferenceRef
@@ -120,6 +121,11 @@ def criterion_for(
         # Source-vs-candidate composer identity match; target is a mode selector
         # ("match"), not a whitelist token (M6).
         return ComposerCriterion(name=axis, target=target)
+    if axis == "work":
+        # MB work-entity: original vs cover/re-recording. Target is "original"
+        # or a re-recording marker ("taylors version"), not a whitelist token
+        # (M2).
+        return WorkCriterion(name=axis, target=target)
     field = STRUCTURED_AXIS_FIELDS.get(axis)
     if field is not None:
         return TokenCriterion(
@@ -135,12 +141,12 @@ def criterion_for(
 
 
 #: All criterion axes a preference may target (structured + title-derived + date
-#: + duration-tolerance + role-aware artist + language/composer identity axes).
+#: + duration-tolerance + role-aware artist + language/composer + work-entity axes).
 KNOWN_AXES: frozenset[str] = (
     frozenset(STRUCTURED_AXIS_FIELDS)
     | TITLE_AXES
     | frozenset(DATE_AXIS_FIELDS)
-    | frozenset({"duration", "artist_role", "language", "composer"})
+    | frozenset({"duration", "artist_role", "language", "composer", "work"})
 )
 
 #: Scope name each cascade layer maps onto for engine precedence
