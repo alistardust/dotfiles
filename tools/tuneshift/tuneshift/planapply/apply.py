@@ -53,6 +53,28 @@ _TABLE_SPECS: dict[str, _TableSpec] = {
         pk=("playlist_id", "track_id", "criterion"),
         columns=("strength", "target"),
     ),
+    # Global default lock lives on platform_tracks (spec §8, AC-L1).
+    "platform_tracks": _TableSpec(
+        name="platform_tracks",
+        pk=("track_id", "platform"),
+        columns=("platform_track_id", "status", "user_approved"),
+    ),
+    # Enrichment overwrites of matcher-read fields are routed + journaled
+    # (routing table row "Enrichment metadata overwrite"). Only the fields the
+    # matcher actually reads are writable through plan/apply.
+    "tracks": _TableSpec(
+        name="tracks",
+        pk=("id",),
+        columns=(
+            "isrc",
+            "duration_seconds",
+            "album_artist",
+            "album_type",
+            "label",
+            "release_date",
+            "audio_modes",
+        ),
+    ),
 }
 
 
@@ -95,14 +117,18 @@ def _read_row(db: Database, spec: _TableSpec, pk_values: dict[str, Any]) -> dict
     return {col: row[col] for col in spec.all_columns}
 
 
-def _write_row(db: Database, spec: _TableSpec, proposed: dict[str, Any]) -> None:
+def _insert_row(db: Database, spec: _TableSpec, proposed: dict[str, Any]) -> None:
+    """Insert a full row, upserting on the primary key.
+
+    Used for op=insert and for restoring a row that was deleted (its prior state
+    carries the full set of spec columns). Not safe for partial updates of tables
+    with NOT NULL columns outside the spec (e.g. ``tracks``) — use ``_update_row``.
+    """
     _validate_columns(spec, proposed)
     cols = [c for c in spec.all_columns if c in proposed]
     placeholders = ", ".join("?" for _ in cols)
     col_list = ", ".join(cols)
-    updates = ", ".join(
-        f"{c} = excluded.{c}" for c in cols if c not in spec.pk
-    )
+    updates = ", ".join(f"{c} = excluded.{c}" for c in cols if c not in spec.pk)
     pk_list = ", ".join(spec.pk)
     conflict = (
         f" ON CONFLICT({pk_list}) DO UPDATE SET {updates}"
@@ -113,6 +139,34 @@ def _write_row(db: Database, spec: _TableSpec, proposed: dict[str, Any]) -> None
         f"INSERT INTO {spec.name} ({col_list}) VALUES ({placeholders}){conflict}"  # noqa: S608
     )
     db.conn.execute(sql, tuple(proposed[c] for c in cols))
+
+
+def _update_row(db: Database, spec: _TableSpec, proposed: dict[str, Any]) -> None:
+    """Update only the supplied non-PK columns of an existing row.
+
+    Partial-column safe: tables like ``tracks`` have NOT NULL columns outside the
+    spec, so an enrichment overwrite must not go through an INSERT.
+    """
+    _validate_columns(spec, proposed)
+    set_cols = [c for c in spec.columns if c in proposed]
+    if not set_cols:
+        return
+    assignments = ", ".join(f"{c} = ?" for c in set_cols)
+    where = " AND ".join(f"{col} = ?" for col in spec.pk)
+    params = [proposed[c] for c in set_cols] + [proposed[col] for col in spec.pk]
+    db.conn.execute(
+        f"UPDATE {spec.name} SET {assignments} WHERE {where}",  # noqa: S608 - identifiers from allowlist
+        tuple(params),
+    )
+
+
+def _restore_row(db: Database, spec: _TableSpec, prior: dict[str, Any]) -> None:
+    """Restore a row to its prior state, whether it currently exists or not."""
+    pk_values = {col: prior[col] for col in spec.pk}
+    if _read_row(db, spec, pk_values) is not None:
+        _update_row(db, spec, prior)
+    else:
+        _insert_row(db, spec, prior)
 
 
 def _delete_row(db: Database, spec: _TableSpec, pk_values: dict[str, Any]) -> None:
@@ -129,10 +183,15 @@ def _apply_one(db: Database, plan_id: str, change: PlanChange) -> None:
     pk_values = json.loads(change.row_key)
     prior = _read_row(db, spec, pk_values)
 
-    if change.op in ("insert", "update"):
+    if change.op == "insert":
         if change.proposed is None:
-            raise ApplyError(f"{change.op} change has no proposed state")
-        _write_row(db, spec, change.proposed)
+            raise ApplyError("insert change has no proposed state")
+        _insert_row(db, spec, change.proposed)
+        new_value = change.proposed
+    elif change.op == "update":
+        if change.proposed is None:
+            raise ApplyError("update change has no proposed state")
+        _update_row(db, spec, change.proposed)
         new_value = change.proposed
     elif change.op == "delete":
         _delete_row(db, spec, pk_values)
@@ -170,7 +229,9 @@ def apply_plan(
             continue
         if change.locked and not include_locked:
             report.skipped_locked += 1
-            change.status = "skipped"
+            # AC-P3 lock exclusion is a per-run gate, not a permanent status:
+            # leave the change pending so an explicit include_locked re-apply of
+            # the SAME plan can act on it.
             continue
         try:
             with db.conn:
@@ -213,7 +274,7 @@ def _reverse_one(db: Database, entry: Any) -> None:
     if entry.prior_value is None:
         _delete_row(db, spec, pk_values)
     else:
-        _write_row(db, spec, entry.prior_value)
+        _restore_row(db, spec, entry.prior_value)
 
 
 def rollback_plan(db: Database, plan_id: str) -> RollbackReport:
