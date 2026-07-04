@@ -256,3 +256,45 @@ def test_preference_resolved_near_tie_is_not_ambiguous():
     assert result.winner is atmos
     assert result.decided_by == "spatial"
     assert result.needs_review is False
+
+
+# --- Task 3.5: no confident live/cover/karaoke match (AC-S4) ---
+
+
+def _rec(pid, title, *, album, dur, available=True):
+    return SimpleNamespace(platform_id=pid, title=title, artist="Christina Aguilera",
+                           album=album, isrc=None, duration_seconds=dur,
+                           available=available, audio_modes=[])
+
+
+def test_live_version_down_ranked_out_of_winning_vs_studio():
+    # "I Turn to You" studio intent; a live re-recording must not win when the
+    # studio version is available.
+    source = _rec("src", "I Turn to You", album="Christina Aguilera", dur=260)
+    studio = _rec("A", "I Turn to You", album="Christina Aguilera", dur=260)
+    live = _rec("B", "I Turn to You (Live - Anniversary Version)", album="Live", dur=265)
+    result = select_version(source, [live, studio])
+
+    assert result.winner is studio
+    assert result.needs_review is False
+
+
+def test_only_live_available_never_records_confident():
+    # When the ONLY candidate is a version-mismatch (live vs studio intent) it is
+    # surfaced for review, never recorded as a confident match (AC-S4).
+    source = _rec("src", "I Turn to You", album="Christina Aguilera", dur=260)
+    live = _rec("B", "I Turn to You (Live - Anniversary Version)", album="Live", dur=265)
+    result = select_version(source, [live])
+
+    assert result.needs_review is True
+    assert result.review_reason == "version_mismatch"
+
+
+def test_karaoke_never_wins_over_studio():
+    source = _rec("src", "I Want It That Way", album="Millennium", dur=213)
+    studio = _rec("A", "I Want It That Way", album="Millennium", dur=213)
+    karaoke = _rec("B", "I Want It That Way (Karaoke Version)", album="Karaoke Hits", dur=210)
+    result = select_version(source, [karaoke, studio])
+
+    assert result.winner is studio
+    assert result.needs_review is False

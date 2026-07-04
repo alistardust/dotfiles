@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING, Any
 
 from tuneshift.matching.base_scoring import score_signals
 from tuneshift.matching.criteria import Criterion, CriterionValue, Verdict
-from tuneshift.matching.engine import Distance
+from tuneshift.matching.engine import Distance, Recommendation
 from tuneshift.matching.penalties import DEFAULT_WEIGHTS, Weights
 from tuneshift.matching.precedence import (
     PreferenceRef,
@@ -129,6 +129,17 @@ def _extract(criterion: Criterion, meta: object) -> CriterionValue | None:
 
 
 _EMPTY_VALUE = CriterionValue(raw=None)
+
+
+def _hard_capped(distance: Distance) -> bool:
+    """True when a candidate carries a hard version-reject cap (AC-S4).
+
+    A source-aware version mismatch (live/cover/karaoke/instrumental vs the
+    source's studio-original intent) caps the recommendation to REJECT; such a
+    candidate must never be recorded as a confident winner.
+    """
+
+    return distance.capped_recommendation() is Recommendation.REJECT
 
 
 def _phase1_filter(
@@ -400,17 +411,42 @@ def select_version(
         alias_resolver=alias_resolver,
     )
 
-    winner_index, decided_by, ambiguous = _resolve_winner(scored, soft)
-    ranked = [(cand, dist) for cand, dist, _ in scored]
+    # AC-S4: a source-aware version mismatch (live/cover/karaoke/instrumental vs
+    # studio-original intent) carries a hard REJECT cap. Such a candidate must
+    # never win confidently over a clean survivor — down-rank all capped rows
+    # below the clean ones. Only when NO clean survivor exists is a capped row a
+    # provisional winner, and then the result is flagged for review, never
+    # recorded as a confident match.
+    clean = [row for row in scored if not _hard_capped(row[1])]
+    capped = [row for row in scored if _hard_capped(row[1])]
 
-    if winner_index >= 0:
-        winner, winner_distance = ranked[winner_index]
-        # Surface the resolved winner at the head of the ranking for the plan/
-        # explain surfaces, keeping the remaining survivors in distance order.
-        if winner_index != 0:
-            ranked.insert(0, ranked.pop(winner_index))
+    version_mismatch = False
+    if clean:
+        winner_index, decided_by, ambiguous = _resolve_winner(clean, soft)
+        chosen = clean[winner_index] if winner_index >= 0 else None
+        ordered = [chosen, *[r for r in clean if r is not chosen], *capped] if chosen else [*clean, *capped]
+    elif capped:
+        winner_index, decided_by, ambiguous = 0, None, False
+        version_mismatch = True
+        chosen = capped[0]
+        ordered = capped
+    else:
+        winner_index, decided_by, ambiguous = -1, None, False
+        chosen = None
+        ordered = []
+
+    ranked = [(cand, dist) for cand, dist, _ in ordered]
+    if chosen is not None:
+        winner, winner_distance = chosen[0], chosen[1]
     else:
         winner, winner_distance = None, None
+
+    if version_mismatch:
+        needs_review, review_reason = True, "version_mismatch"
+    elif ambiguous:
+        needs_review, review_reason = True, "ambiguous"
+    else:
+        needs_review, review_reason = False, None
 
     return SelectionResult(
         winner=winner,
@@ -418,8 +454,8 @@ def select_version(
         ranked=ranked,
         filtered=filtered,
         decided_by=decided_by,
-        needs_review=ambiguous,
-        review_reason="ambiguous" if ambiguous else None,
+        needs_review=needs_review,
+        review_reason=review_reason,
     )
 
 
