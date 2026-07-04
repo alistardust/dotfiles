@@ -91,6 +91,60 @@ def criterion_for(
     raise ValueError(f"unknown preference axis {axis!r}")
 
 
+#: All criterion axes a preference may target (structured + title-derived).
+KNOWN_AXES: frozenset[str] = frozenset(STRUCTURED_AXIS_FIELDS) | TITLE_AXES
+
+#: Scope name each cascade layer maps onto for engine precedence
+#: (:data:`tuneshift.matching.precedence.SCOPE_RANK`). The most-specific
+#: playlist-track layer maps onto ``"track"`` (rank 0, resolved first).
+_SCOPE_NAMES = ("global", "playlist", "track")
+
+
+def resolve_scoped_specs(
+    global_prefs: list[dict] | tuple[dict, ...] | None,
+    playlist_prefs: list[dict] | tuple[dict, ...] | None,
+    playlist_track_prefs: list[dict] | tuple[dict, ...] | None,
+    *,
+    whitelist: TokenWhitelist | None = None,
+) -> list[PreferenceSpec]:
+    """Cascade typed preferences from three scopes into engine-ready specs.
+
+    Each input is a list of ``{"criterion", "strength", "target"}`` dicts read
+    from a storage layer (``criterion`` names the axis; ``target`` a token in any
+    surface form). Precedence is ``global < playlist < playlist-track`` — the
+    most specific scope wins (AC-CLI1). Two preferences that address the *same*
+    ``(axis, canonical-target)`` collapse to the most-specific scope's entry, so
+    a per-playlist-track ``spatial require atmos`` overrides a global ``spatial
+    avoid atmos`` rather than fighting it in phase-1 as contradictory hard
+    filters. Different targets on the same axis (e.g. ``content avoid karaoke``
+    and ``content avoid instrumental``) coexist.
+
+    Unknown axes and unknown strengths are skipped defensively (the CLI validates
+    loudly at set-time; this keeps a stray stored row from crashing a match).
+    """
+
+    wl = whitelist or load_token_whitelist()
+    # Keyed by (axis, canonical target); a later (more specific) scope overwrites,
+    # giving most-specific-wins collapse while preserving distinct targets.
+    collapsed: dict[tuple[str, str], PreferenceSpec] = {}
+    for scope, layer in zip(_SCOPE_NAMES, (global_prefs, playlist_prefs, playlist_track_prefs)):
+        for row in layer or ():
+            axis = row.get("criterion")
+            target = row.get("target")
+            raw_strength = row.get("strength")
+            if axis not in KNOWN_AXES or not target:
+                continue
+            try:
+                strength = Strength(raw_strength)
+            except ValueError:
+                continue
+            canonical = wl.canonical(target)
+            collapsed[(axis, canonical)] = PreferenceSpec(
+                axis=axis, target=target, strength=strength, scope=scope
+            )
+    return list(collapsed.values())
+
+
 def resolve_active_preferences(
     specs: list[PreferenceSpec] | tuple[PreferenceSpec, ...],
     *,
@@ -117,7 +171,9 @@ def resolve_active_preferences(
 __all__ = [
     "STRUCTURED_AXIS_FIELDS",
     "TITLE_AXES",
+    "KNOWN_AXES",
     "PreferenceSpec",
     "criterion_for",
+    "resolve_scoped_specs",
     "resolve_active_preferences",
 ]

@@ -39,6 +39,7 @@ from tuneshift.matching.registry import (
     STRUCTURED_AXIS_FIELDS,
     PreferenceSpec,
     resolve_active_preferences,
+    resolve_scoped_specs,
 )
 from tuneshift.matching.selection import (
     AMBIGUITY_DELTA,
@@ -158,6 +159,75 @@ def _typed_active_prefs(prefs, resolver: AliasResolver | None = None) -> list[Ac
     if not specs:
         return []
     return resolve_active_preferences(specs, whitelist=whitelist)
+
+
+def _scoped_active_prefs(
+    db: Database,
+    track_id: int,
+    playlist_id: int | None,
+    prefs,
+) -> list[ActivePreference]:
+    """All active typed preferences for this track+playlist, across every scope.
+
+    Reads the general ``(criterion, strength, target)`` model (AC-CLI1) stored at
+    three scopes — global (``schema_meta`` ``criteria``), playlist
+    (``playlists.preferences`` ``criteria``) and playlist-track
+    (``playlist_track_prefs``) — cascades them most-specific-wins via
+    :func:`resolve_scoped_specs`, and turns them into engine-ready
+    :class:`ActivePreference` objects the two-phase engine fires on.
+
+    The legacy free-text ``prefer``/``avoid`` audio-format bridge is merged in for
+    backward compatibility, but only for an ``(axis, target)`` a typed criterion
+    has not already claimed (the typed model is authoritative). Returns an empty
+    list when nothing is configured, preserving byte-parity (AC-C5): with no
+    ``criteria`` rows and default ``prefs`` the engine sees no active preference
+    and cannot perturb the ranking.
+    """
+    global_criteria = (db.get_global_preferences() or {}).get("criteria")
+    playlist_criteria = None
+    playlist_track_criteria = None
+    if playlist_id is not None:
+        playlist_criteria = (db.get_preferences(playlist_id) or {}).get("criteria")
+        playlist_track_criteria = db.get_playlist_track_prefs(playlist_id, track_id)
+
+    specs = resolve_scoped_specs(
+        global_criteria, playlist_criteria, playlist_track_criteria
+    )
+    active = resolve_active_preferences(specs)
+
+    typed_pairs = {(ap.ref.criterion, ap.ref.target) for ap in active}
+    for ap in _typed_active_prefs(prefs):
+        key = (ap.ref.criterion, ap.ref.target)
+        if key not in typed_pairs:
+            active.append(ap)
+            typed_pairs.add(key)
+    return active
+
+
+def _legacy_intent(prefs, active: list[ActivePreference]):
+    """Free-text prefer/avoid intent, minus tokens a typed criterion already owns.
+
+    The legacy keyword lists feed the source-aware recording-class / lyric /
+    edition scoring (:func:`scoring_intent`). A token that is ALSO expressed as a
+    typed criterion (e.g. ``performance avoid live`` and a legacy ``avoid: live``)
+    would otherwise be counted twice — once as a typed soft signal and once as a
+    recording-class penalty. Drop such tokens here so the typed criterion is the
+    single source of truth. Returns empty sets for default prefs (byte-parity).
+    """
+    if prefs.is_default():
+        return frozenset(), frozenset()
+    prefer_classes, avoid_classes = scoring_intent(prefs.prefer, prefs.avoid)
+    if not active:
+        return prefer_classes, avoid_classes
+    whitelist = load_token_whitelist()
+    covered = {ap.ref.target for ap in active}
+    prefer_classes = frozenset(
+        t for t in prefer_classes if whitelist.canonical(t) not in covered
+    )
+    avoid_classes = frozenset(
+        t for t in avoid_classes if whitelist.canonical(t) not in covered
+    )
+    return prefer_classes, avoid_classes
 
 
 def _build_audit(
@@ -631,7 +701,7 @@ def check_lock_downgrade(
         db.get_preferences(playlist_id) if playlist_id is not None else None,
         db.get_track_preferences(track_id),
     )
-    active = _typed_active_prefs(prefs)
+    active = _scoped_active_prefs(db, track_id, playlist_id, prefs)
     if not active:
         return []
     live = _live_locked_track(client, locked_id)
@@ -752,15 +822,18 @@ def reconcile_track(
         db.get_preferences(playlist_id) if playlist_id is not None else None,
         db.get_track_preferences(track_id),
     )
+    # Typed preferences (the general (criterion, strength, target) model) resolved
+    # across every scope — global < playlist < playlist-track. These drive the
+    # two-phase engine's hard filters (require/forbid) and soft precedence.
+    active_prefs = _scoped_active_prefs(db, track_id, playlist_id, prefs)
     # Combined scoring intent from the effective prefs: recording classes and
     # lyric axis feed the source-aware version verdict; edition buckets
     # (radio/single, deluxe/expanded/anniversary, compilation) feed the residual
     # edition penalties. Empty when prefs are the built-in defaults, so scoring
     # stays purely source-aware (a live source is not rejected as "avoided").
-    if prefs.is_default():
-        prefer_classes, avoid_classes = frozenset(), frozenset()
-    else:
-        prefer_classes, avoid_classes = scoring_intent(prefs.prefer, prefs.avoid)
+    # Any token already expressed as a typed criterion is dropped here so it is
+    # not counted twice (see _legacy_intent).
+    prefer_classes, avoid_classes = _legacy_intent(prefs, active_prefs)
 
     # Two-level composite identity lock (AC-L1/L4): a per-playlist override wins
     # over the library-wide default lock. Resolved regardless of ``force`` so the
@@ -895,7 +968,7 @@ def reconcile_track(
     # (classify_scores reads the score multiset, independent of order).
     selection = select_version(
         track, all_candidates,
-        active=_typed_active_prefs(prefs, resolver),
+        active=active_prefs,
         lock=_identity_lock_from_effective(effective_lock, track) if effective_lock else None,
         prefer=prefer_classes, avoid=avoid_classes,
         all_durations=all_durations or None,
