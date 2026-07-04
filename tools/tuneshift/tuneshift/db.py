@@ -14,8 +14,9 @@ from tuneshift.models import Album, Artist, PlatformMapping, Playlist, PlaylistP
 
 if TYPE_CHECKING:
     from tuneshift.matching import ReviewItem
+    from tuneshift.planapply.models import JournalEntry
 
-_SCHEMA_VERSION = 17
+_SCHEMA_VERSION = 18
 
 # Columns editable via update_track. Constrains f-string interpolation in the
 # UPDATE statement to a fixed, safe set (no SQL identifier injection).
@@ -366,6 +367,19 @@ CREATE TABLE IF NOT EXISTS playlist_track_prefs (
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (playlist_id, track_id, criterion)
 );
+
+CREATE TABLE IF NOT EXISTS apply_journal (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    plan_id TEXT NOT NULL,
+    table_name TEXT NOT NULL,
+    row_key TEXT NOT NULL,
+    op TEXT NOT NULL,
+    prior_value TEXT,
+    new_value TEXT,
+    applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_apply_journal_plan
+    ON apply_journal(plan_id, id);
 """
 
 _REMIX_RE = re.compile(r"\s*\((?:remaster(?:ed)?|deluxe edition)[^)]*\)\s*", re.IGNORECASE)
@@ -918,6 +932,26 @@ class Database:
                         "ALTER TABLE resolution_queue "
                         "ADD COLUMN transient_attempts INTEGER NOT NULL DEFAULT 0"
                     )
+
+            if current_version < 18:
+                # Plan/apply journal (§7, AC-P4): records every applied write so
+                # a LOCAL apply is reversible in one step by reverse-replay.
+                self.conn.execute("""
+                    CREATE TABLE IF NOT EXISTS apply_journal (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        plan_id TEXT NOT NULL,
+                        table_name TEXT NOT NULL,
+                        row_key TEXT NOT NULL,
+                        op TEXT NOT NULL,
+                        prior_value TEXT,
+                        new_value TEXT,
+                        applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+                    )
+                """)
+                self.conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_apply_journal_plan "
+                    "ON apply_journal(plan_id, id)"
+                )
 
             self.conn.execute(
                 "UPDATE schema_meta SET value = ? WHERE key = 'version'",
@@ -2085,6 +2119,76 @@ class Database:
                 }
             )
         return result
+
+    # --- apply_journal (spec §7, AC-P4: reversible plan/apply) ---
+
+    def record_journal_entry(
+        self,
+        *,
+        plan_id: str,
+        table_name: str,
+        row_key: str,
+        op: str,
+        prior_value: dict[str, Any] | None,
+        new_value: dict[str, Any] | None,
+    ) -> None:
+        """Record one applied write so the plan can be reversed (AC-P4).
+
+        ``prior_value``/``new_value`` are JSON-serialized row snapshots; either
+        may be ``None`` (insert has no prior, delete has no new).
+        """
+        with self.conn:
+            self.conn.execute(
+                """INSERT INTO apply_journal
+                       (plan_id, table_name, row_key, op, prior_value, new_value)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (
+                    plan_id,
+                    table_name,
+                    row_key,
+                    op,
+                    json.dumps(prior_value) if prior_value is not None else None,
+                    json.dumps(new_value) if new_value is not None else None,
+                ),
+            )
+
+    def get_journal_entries(self, plan_id: str) -> list["JournalEntry"]:
+        """Return a plan's journal entries newest-first (reverse-replay order)."""
+        from tuneshift.planapply.models import JournalEntry
+
+        rows = self.conn.execute(
+            """SELECT id, plan_id, table_name, row_key, op,
+                      prior_value, new_value, applied_at
+               FROM apply_journal WHERE plan_id = ? ORDER BY id DESC""",
+            (plan_id,),
+        ).fetchall()
+        return [
+            JournalEntry(
+                id=row["id"],
+                plan_id=row["plan_id"],
+                table_name=row["table_name"],
+                row_key=row["row_key"],
+                op=row["op"],
+                prior_value=json.loads(row["prior_value"]) if row["prior_value"] else None,
+                new_value=json.loads(row["new_value"]) if row["new_value"] else None,
+                applied_at=row["applied_at"],
+            )
+            for row in rows
+        ]
+
+    def has_journal(self, plan_id: str) -> bool:
+        """Whether any journal entries exist for ``plan_id``."""
+        row = self.conn.execute(
+            "SELECT 1 FROM apply_journal WHERE plan_id = ? LIMIT 1", (plan_id,)
+        ).fetchone()
+        return row is not None
+
+    def clear_journal(self, plan_id: str) -> None:
+        """Remove a plan's journal entries (after a successful rollback)."""
+        with self.conn:
+            self.conn.execute(
+                "DELETE FROM apply_journal WHERE plan_id = ?", (plan_id,)
+            )
 
     # --- coverage + quarantine surface (spec §4.4; AC-D1, AC-D6) ---
 
