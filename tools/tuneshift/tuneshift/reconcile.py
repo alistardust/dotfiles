@@ -28,6 +28,7 @@ from tuneshift.matching import (
     score_track_match,
     scoring_intent,
 )
+from tuneshift.matching.aliases import AliasResolver
 from tuneshift.models import AlbumResult, ArtistResult, PlatformMapping, TrackResult
 
 logger = logging.getLogger(__name__)
@@ -73,14 +74,17 @@ _UNTRUSTED_ABSENCE = frozenset({"ytmusic"})
 
 
 def _decisive_signal(track, candidate: TrackResult,
-                     prefer: frozenset[str], avoid: frozenset[str]) -> str | None:
+                     prefer: frozenset[str], avoid: frozenset[str],
+                     resolver: AliasResolver | None = None) -> str | None:
     """Name the signal that most drove a candidate's distance (worst-first).
 
     Reuses the engine-native scorer so the reason shown to a human matches the
     real scoring, e.g. ``version:reject`` for a wrong recording or ``duration``
     for a suspicious length.
     """
-    distance = score_track_match(track, candidate, prefer=prefer, avoid=avoid)
+    distance = score_track_match(
+        track, candidate, prefer=prefer, avoid=avoid, alias_resolver=resolver,
+    )
     rows = distance.breakdown
     return rows[0].name if rows else None
 
@@ -108,6 +112,7 @@ def _build_audit(
     confidence: str,
     prefer: frozenset[str],
     avoid: frozenset[str],
+    resolver: AliasResolver | None = None,
 ) -> MatchAudit:
     """Construct the explainable audit + availability verdict for a reconcile.
 
@@ -131,12 +136,12 @@ def _build_audit(
             artist=r.artist,
             album=r.album,
             score=s,
-            decisive_signal=_decisive_signal(track, r, prefer, avoid),
+            decisive_signal=_decisive_signal(track, r, prefer, avoid, resolver),
         )
         for s, _, r in scored[1:4]
     ]
     distance = round((100 - best_score) / 100, 4)
-    best_signal = _decisive_signal(track, best, prefer, avoid)
+    best_signal = _decisive_signal(track, best, prefer, avoid, resolver)
 
     # Known-but-blocked takes precedence: the exact recording exists, just not
     # playable here. Surface it as held, never as a silent miss.
@@ -360,6 +365,42 @@ _STRATEGIES = [
     (_strategy_album_in_query, None),
     (_strategy_artist_browse, None),
 ]
+
+
+def build_alias_resolver(db: Database) -> AliasResolver:
+    """Build the seed + DB artist-alias resolver for a reconcile run.
+
+    Reads the user-curated alias classes from the database and merges them with
+    the static seed. Called once per reconcile so a run sees a consistent alias
+    view; artists in no class map to themselves (zero behavioural change).
+    """
+    return AliasResolver(db_classes=db.get_artist_alias_classes())
+
+
+def _alias_expanded_candidates(
+    track, client, resolver: AliasResolver
+) -> list[TrackResult]:
+    """Retrieve candidates under each equivalent artist surface form.
+
+    Platform search indexes a specific spelling, so an artist published as
+    ``98\u00ba`` on one platform never surfaces when we query ``98 Degrees``.
+    For an artist that belongs to an alias class this issues one extra
+    ``search_track`` per *raw* variant spelling (the exact strings the platform
+    may have indexed) and returns the merged candidates. Gated on the artist
+    having variants, so a non-aliased artist costs zero extra API calls.
+    """
+    variants = resolver.variants_for_query(track.artist)
+    if not variants:
+        return []
+    results: list[TrackResult] = []
+    for variant in variants:
+        try:
+            results.extend(
+                client.search_track(f"{track.title} {variant}", limit=10)
+            )
+        except _PLATFORM_ERRORS as exc:
+            logger.warning("alias_expansion strategy failed for %r: %s", variant, exc)
+    return results
 
 
 def _fingerprint_for_track(track, mapping: PlatformMapping) -> TrackFingerprint:
@@ -631,6 +672,10 @@ def reconcile_track(
                 audit=audit,
             )
 
+    # Alias resolver (seed + user-curated DB classes), built once per run so an
+    # aliased artist scores and is retrieved under every equivalent surface form.
+    resolver = build_alias_resolver(db)
+
     # Multi-strategy candidate collection with strategy tracking
     all_candidates: list[TrackResult] = []
     candidate_strategies: dict[str, str] = {}  # platform_id -> strategy_name
@@ -650,14 +695,27 @@ def reconcile_track(
         if threshold is not None and threshold >= 100 and all_candidates:
             top_score = _quick_top_score(
                 track, all_candidates, prefer=prefer_classes, avoid=avoid_classes,
+                resolver=resolver,
             )
             if top_score >= threshold:
                 break
+
+    # Alias-expanded retrieval: for an artist in an alias class, query each
+    # equivalent surface spelling so a track indexed under a variant (e.g. the
+    # platform lists "98\u00ba" while the source says "98 Degrees") still
+    # surfaces. Runs once, after the cascade, and is a no-op for non-aliased
+    # artists (zero extra API calls).
+    for c in _alias_expanded_candidates(track, client, resolver):
+        if c.platform_id not in seen_ids:
+            seen_ids.add(c.platform_id)
+            all_candidates.append(c)
+            candidate_strategies[c.platform_id] = "alias_expansion"
 
     if not all_candidates:
         audit = _build_audit(
             track=track, platform_name=platform_name, scored=[],
             confidence="not_found", prefer=prefer_classes, avoid=avoid_classes,
+            resolver=resolver,
         )
         return ReconcileResult(
             confidence="not_found",
@@ -678,6 +736,7 @@ def reconcile_track(
             all_durations=all_durations,
             prefer=prefer_classes,
             avoid=avoid_classes,
+            alias_resolver=resolver,
         )
         s = min(100, s + duration_proximity_bonus(r.duration_seconds, track.duration_seconds))
         ed = edition_cost(r.album or "")
@@ -698,6 +757,7 @@ def reconcile_track(
     audit = _build_audit(
         track=track, platform_name=platform_name, scored=scored,
         confidence=confidence, prefer=prefer_classes, avoid=avoid_classes,
+        resolver=resolver,
     )
 
     if confidence == "not_found":
@@ -725,11 +785,16 @@ def reconcile_track(
             f"{best_result.duration_seconds}s vs expected ~{track.duration_seconds}s"
         )
 
-    # Artist mismatch check: if best result has a completely different artist, flag it
+    # Artist mismatch check: if best result has a completely different artist, flag it.
+    # Canonicalize through the alias resolver first so equivalent surface forms
+    # (98\u00ba / 98 Degrees) are not falsely flagged as a mismatch.
     from tuneshift.matching import normalize_artist as _norm_artist
     from difflib import SequenceMatcher as _SM
-    src_artist_norm = _norm_artist(track.artist)
-    res_artist_norm = _norm_artist(best_result.artist) if best_result.artist else ""
+    src_artist_norm = resolver.canonical(_norm_artist(track.artist))
+    res_artist_norm = (
+        resolver.canonical(_norm_artist(best_result.artist))
+        if best_result.artist else ""
+    )
     if src_artist_norm and res_artist_norm:
         artist_ratio = _SM(None, src_artist_norm, res_artist_norm).ratio()
         if artist_ratio < 0.4:
@@ -764,6 +829,7 @@ def _quick_top_score(
     *,
     prefer: frozenset[str] = frozenset(),
     avoid: frozenset[str] = frozenset(),
+    resolver: AliasResolver | None = None,
 ) -> int:
     """Quick score check for short-circuit decision."""
     best = 0
@@ -775,6 +841,7 @@ def _quick_top_score(
             reference_duration=track.duration_seconds,
             prefer=prefer,
             avoid=avoid,
+            alias_resolver=resolver,
         )
         s = min(100, s + duration_proximity_bonus(c.duration_seconds, track.duration_seconds))
         if s > best:

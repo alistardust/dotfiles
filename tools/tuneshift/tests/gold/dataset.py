@@ -454,6 +454,25 @@ def gold_cases() -> list[GoldCase]:
             note="Leading asterisk in '*NSYNC' must not prevent matching 'NSYNC'.",
             tags=("artist-normalization", "leading-asterisk"),
         ),
+        GoldCase(
+            id="artist-alias-98-ordinal",
+            source_title="The Hardest Thing",
+            source_artist="98 Degrees",
+            source_album="98 Degrees and Rising",
+            candidates=[
+                Candidate("98-ordinal-right", "The Hardest Thing", "98\u00ba",
+                          "98 Degrees And Rising", 275),
+                Candidate("98-ordinal-wrong", "The Hardest Thing", "Gorillaz",
+                          "Demon Days", 268),
+            ],
+            expected_platform_id="98-ordinal-right",
+            source_duration_seconds=275,
+            note="Tidal indexes this artist as '98\u00ba' with the ordinal indicator "
+                 "(U+00BA), which normalization cannot fold to '98 degrees' the way "
+                 "the degree sign (U+00B0) is. The curated alias class bridges canonical "
+                 "'98 Degrees' to the ordinal spelling. Verified real Tidal track 2530094.",
+            tags=("artist-normalization", "alias-bridge", "unicode-ordinal"),
+        ),
         # --- Featured artist in the title, not the artist field ----------
         GoldCase(
             id="feat-in-title-dirrty",

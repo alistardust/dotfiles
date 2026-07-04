@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 
+from tuneshift.matching.aliases import AliasResolver, default_resolver
 from tuneshift.matching.similarity import ratio
 
 
@@ -139,11 +140,29 @@ def title_signal(source_title: str, result_title: str, weights: Weights = DEFAUL
     return SignalPenalty("title", points, _bonus_penalty(points, budget), budget)
 
 
-def artist_signal(source_artist: str, result_artist: str, weights: Weights = DEFAULT_WEIGHTS) -> SignalPenalty:
-    """Score artist similarity. Empty on either side yields no signal."""
+def artist_signal(
+    source_artist: str,
+    result_artist: str,
+    weights: Weights = DEFAULT_WEIGHTS,
+    *,
+    resolver: AliasResolver | None = None,
+) -> SignalPenalty:
+    """Score artist similarity. Empty on either side yields no signal.
+
+    ``source_artist``/``result_artist`` are expected already normalized. Each is
+    mapped through the alias resolver's canonical key before comparison so that
+    equivalent surface forms (``98\u00ba`` / ``98 Degrees``, ``Ke$ha`` / ``Kesha``)
+    score as an exact artist match. ``resolver`` defaults to the seed-only
+    :func:`default_resolver`; reconcile passes a seed+DB resolver so user-curated
+    alias classes also apply. Non-member artists map to themselves, so the score
+    is byte-identical to the historical scorer for every un-aliased artist.
+    """
     budget = weights.artist_exact
     if not source_artist or not result_artist:
         return SignalPenalty("artist", 0, 1.0, budget)
+    resolver = resolver or default_resolver()
+    source_artist = resolver.canonical(source_artist)
+    result_artist = resolver.canonical(result_artist)
     if source_artist == result_artist:
         points = weights.artist_exact
     else:

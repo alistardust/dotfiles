@@ -4,15 +4,17 @@ import json
 import os
 import re
 import sqlite3
+from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from tuneshift.matching.normalize import normalize_artist as _alias_normalize
 from tuneshift.models import Album, Artist, PlatformMapping, Playlist, PlaylistPin, Track
 
 if TYPE_CHECKING:
     from tuneshift.matching import ReviewItem
 
-_SCHEMA_VERSION = 13
+_SCHEMA_VERSION = 14
 
 # Columns editable via update_track. Constrains f-string interpolation in the
 # UPDATE statement to a fixed, safe set (no SQL identifier injection).
@@ -282,6 +284,15 @@ CREATE TABLE IF NOT EXISTS match_audits (
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (track_id, platform)
 );
+
+CREATE TABLE IF NOT EXISTS artist_aliases (
+    class_id INTEGER NOT NULL,
+    member TEXT NOT NULL,
+    norm_member TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (class_id, member)
+);
+CREATE INDEX IF NOT EXISTS idx_artist_aliases_norm ON artist_aliases(norm_member);
 """
 
 _REMIX_RE = re.compile(r"\s*\((?:remaster(?:ed)?|deluxe edition)[^)]*\)\s*", re.IGNORECASE)
@@ -731,6 +742,23 @@ class Database:
                     self.conn.execute(
                         "ALTER TABLE tracks ADD COLUMN preferences TEXT"
                     )
+
+            if current_version < 14:
+                # Artist-alias equivalence: user-curated classes of equivalent
+                # artist surface forms (98\u00ba / 98 Degrees, Ke$ha / Kesha).
+                self.conn.execute("""
+                    CREATE TABLE IF NOT EXISTS artist_aliases (
+                        class_id INTEGER NOT NULL,
+                        member TEXT NOT NULL,
+                        norm_member TEXT NOT NULL,
+                        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                        PRIMARY KEY (class_id, member)
+                    )
+                """)
+                self.conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_artist_aliases_norm "
+                    "ON artist_aliases(norm_member)"
+                )
 
             self.conn.execute(
                 "UPDATE schema_meta SET value = ? WHERE key = 'version'",
@@ -1808,6 +1836,93 @@ class Database:
             "SELECT preferences FROM tracks WHERE id = ?", (track_id,)
         ).fetchone()
         return json.loads(row[0]) if row and row[0] else None
+
+    def add_artist_alias(self, members: Sequence[str]) -> None:
+        """Add (or extend) an artist-alias equivalence class.
+
+        ``members`` are raw surface forms (e.g. ``["98 Degrees", "98\u00ba"]``);
+        surrounding whitespace is trimmed but case and glyphs are preserved so
+        the exact spelling is retained for retrieval query expansion. At least
+        two *distinct* raw members are required. If any member's normalized key
+        already belongs to an existing class, the new members are merged into it
+        (bridging several classes into the lowest ``class_id`` when they
+        overlap); duplicate ``(class_id, member)`` rows are ignored. Idempotent.
+        """
+        trimmed = [m.strip() for m in members if m and m.strip()]
+        distinct = set(trimmed)
+        if len(distinct) < 2:
+            raise ValueError("an alias class needs at least two distinct members")
+        norms = {_alias_normalize(m) for m in distinct}
+        placeholders = ",".join("?" * len(norms))
+        with self.conn:
+            rows = self.conn.execute(
+                f"SELECT DISTINCT class_id FROM artist_aliases "
+                f"WHERE norm_member IN ({placeholders})",
+                tuple(norms),
+            ).fetchall()
+            existing = sorted(r[0] for r in rows)
+            if existing:
+                target = existing[0]
+                for other in existing[1:]:
+                    self.conn.execute(
+                        "UPDATE OR IGNORE artist_aliases SET class_id = ? "
+                        "WHERE class_id = ?",
+                        (target, other),
+                    )
+                    self.conn.execute(
+                        "DELETE FROM artist_aliases WHERE class_id = ?", (other,)
+                    )
+            else:
+                target = self.conn.execute(
+                    "SELECT COALESCE(MAX(class_id), 0) + 1 FROM artist_aliases"
+                ).fetchone()[0]
+            for member in distinct:
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO artist_aliases "
+                    "(class_id, member, norm_member) VALUES (?, ?, ?)",
+                    (target, member, _alias_normalize(member)),
+                )
+
+    def get_artist_alias_classes(self) -> list[frozenset[str]]:
+        """Return every user-curated alias class as a frozenset of raw members."""
+        rows = self.conn.execute(
+            "SELECT class_id, member FROM artist_aliases ORDER BY class_id"
+        ).fetchall()
+        classes: dict[int, set[str]] = {}
+        for class_id, member in rows:
+            classes.setdefault(class_id, set()).add(member)
+        return [frozenset(members) for members in classes.values()]
+
+    def remove_artist_alias(self, member: str) -> bool:
+        """Remove a raw alias member; drop the class if it falls below 2 members.
+
+        Matches ``member`` exactly after trimming surrounding whitespace. Returns
+        True if a row was removed, False if the member is absent from the DB
+        (e.g. a seed-only member, which is read-only).
+        """
+        target = (member or "").strip()
+        if not target:
+            return False
+        with self.conn:
+            row = self.conn.execute(
+                "SELECT class_id FROM artist_aliases WHERE member = ?", (target,)
+            ).fetchone()
+            if row is None:
+                return False
+            class_id = row[0]
+            self.conn.execute(
+                "DELETE FROM artist_aliases WHERE class_id = ? AND member = ?",
+                (class_id, target),
+            )
+            remaining = self.conn.execute(
+                "SELECT COUNT(DISTINCT member) FROM artist_aliases WHERE class_id = ?",
+                (class_id,),
+            ).fetchone()[0]
+            if remaining < 2:
+                self.conn.execute(
+                    "DELETE FROM artist_aliases WHERE class_id = ?", (class_id,)
+                )
+        return True
 
     def set_playlist_type(self, playlist_id: int, playlist_type: str | None) -> None:
         """Set the playlist type."""

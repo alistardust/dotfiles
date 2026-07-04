@@ -246,6 +246,19 @@ def build_parser() -> argparse.ArgumentParser:
     prefs_scope.add_argument("--playlist", help="Target a playlist by name")
     prefs_scope.add_argument("--track", type=int, help="Target a track by id")
 
+    # alias
+    p_alias = sub.add_parser(
+        "alias", help="Manage artist-alias equivalence classes (98\u00b0 / 98 Degrees)"
+    )
+    alias_sub = p_alias.add_subparsers(dest="action", required=True)
+    alias_sub.add_parser("list", help="List all alias classes")
+    p_alias_show = alias_sub.add_parser("show", help="Show the class an artist belongs to")
+    p_alias_show.add_argument("artist", help="Artist name to look up")
+    p_alias_add = alias_sub.add_parser("add", help="Create/extend a class from >=2 members")
+    p_alias_add.add_argument("members", nargs="+", help="Two or more artist surface forms")
+    p_alias_remove = alias_sub.add_parser("remove", help="Remove a member from its class")
+    p_alias_remove.add_argument("member", help="Artist surface form to remove")
+
     # share
     p_share = sub.add_parser("share", help="Generate shareable links for a playlist")
     p_share.add_argument("name", help="Playlist name")
@@ -695,6 +708,9 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "prefs":
             from tuneshift.commands.prefs_cmd import handle_prefs
             return handle_prefs(args, db)
+        elif args.command == "alias":
+            from tuneshift.commands.alias_cmd import handle_alias
+            return handle_alias(args, db)
         elif args.command == "share":
             from tuneshift.commands.share_cmd import handle_share
             return handle_share(args, db)

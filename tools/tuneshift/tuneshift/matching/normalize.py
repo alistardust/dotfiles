@@ -9,6 +9,10 @@ scorers in `track.py`. Keeping the patterns in one place prevents the
 """
 import re
 import unicodedata
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from tuneshift.matching.aliases import AliasResolver
 
 _EDITION_PARENS_RE = re.compile(
     r"\s*\("
@@ -80,30 +84,49 @@ def fold_accents(text: str) -> str:
     return unicodedata.normalize("NFC", stripped)
 
 
-def split_artists(name: str) -> set[str]:
+def split_artists(name: str, *, resolver: "AliasResolver | None" = None) -> set[str]:
     """Split a multi-artist credit into a set of normalized artist tokens.
 
     "Jay-Z & Alicia Keys" and "Alicia Keys & Jay-Z" both yield
     {"jay-z", "alicia keys"}, so collaborator order does not matter when
     comparing. Splits on commas, ampersands, "and", feat/ft/featuring/with, "x",
     "\u00d7", and slashes. Each token is accent-folded and casefolded.
+
+    Each token is then mapped through the alias resolver's canonical key so an
+    aliased collaborator (e.g. ``98\u00ba``) collapses onto its canonical form
+    before set comparison. ``resolver`` defaults to the seed-only resolver; a
+    non-member token maps to itself, leaving un-aliased credits unchanged.
     """
     if not name:
         return set()
+    from tuneshift.matching.aliases import default_resolver
+
+    resolver = resolver or default_resolver()
     folded = fold_accents(name).translate(_PUNCT_NORMALIZE)
     parts = _ARTIST_SPLIT_RE.split(folded)
-    return {p.strip().casefold() for p in parts if p and p.strip()}
+    return {
+        resolver.canonical(p.strip().casefold())
+        for p in parts
+        if p and p.strip()
+    }
 
 
-def artist_set_overlap(source_name: str, candidate_name: str) -> float:
+def artist_set_overlap(
+    source_name: str,
+    candidate_name: str,
+    *,
+    resolver: "AliasResolver | None" = None,
+) -> float:
     """Fraction of the source's artists also credited on the candidate.
 
     Returns overlap of the source artist set with the candidate set, in
     [0.0, 1.0]. 1.0 means every source artist appears on the candidate
-    regardless of order; 0.0 means no shared artist. Order-independent.
+    regardless of order; 0.0 means no shared artist. Order-independent. Tokens
+    are alias-canonicalized (see :func:`split_artists`) so a credit that names an
+    aliased collaborator still overlaps its equivalent surface form.
     """
-    src = split_artists(source_name)
-    cand = split_artists(candidate_name)
+    src = split_artists(source_name, resolver=resolver)
+    cand = split_artists(candidate_name, resolver=resolver)
     if not src or not cand:
         return 0.0
     return len(src & cand) / len(src)

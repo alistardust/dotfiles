@@ -10,6 +10,8 @@ want the distance, breakdown and recommendation (not just an integer).
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from tuneshift.matching.confidence import classify_scores
 from tuneshift.matching.engine import Distance
 from tuneshift.matching.normalize import (
@@ -31,6 +33,9 @@ from tuneshift.matching.penalties import (
     title_signal,
     version_signals,
 )
+
+if TYPE_CHECKING:
+    from tuneshift.matching.aliases import AliasResolver
 
 
 # Residual title cost applied when two titles agree only after trailing
@@ -73,13 +78,18 @@ def score_match(
     result_artist: str | None = None,
     result_album: str | None = None,
     weights: Weights = DEFAULT_WEIGHTS,
+    *,
+    alias_resolver: "AliasResolver | None" = None,
 ) -> int:
     """Score a search result against source metadata. Returns 0-100.
 
     Accepts either six explicit fields or, when the three result fields are all
     omitted, two track-like objects (``source_title`` = canonical,
     ``source_artist`` = candidate); the object form additionally applies the
-    ISRC bonus.
+    ISRC bonus. ``alias_resolver`` is forwarded to the artist signal so
+    equivalent artist surface forms score as an exact match; when omitted the
+    signal falls back to the seed-only resolver, leaving un-aliased artists
+    byte-identical to the historical scorer.
     """
     canonical = None
     candidate = None
@@ -105,7 +115,10 @@ def score_match(
         raise TypeError("score_match requires complete candidate metadata")
 
     title = title_signal(normalize_title(source_title), normalize_title(result_title), weights)
-    artist = artist_signal(normalize_artist(source_artist), normalize_artist(result_artist), weights)
+    artist = artist_signal(
+        normalize_artist(source_artist), normalize_artist(result_artist), weights,
+        resolver=alias_resolver,
+    )
     album = album_signal(
         normalize_title(source_album or ""),
         normalize_title(result_album),
@@ -172,6 +185,7 @@ def score_match_with_version(
     *,
     prefer: frozenset[str] = frozenset(),
     avoid: frozenset[str] = frozenset(),
+    alias_resolver: "AliasResolver | None" = None,
 ) -> int:
     """Score a search result with source-aware version + duration penalties.
 
@@ -198,6 +212,7 @@ def score_match_with_version(
         sim_source, source_artist, source_album,
         sim_result, result_artist, result_album,
         weights,
+        alias_resolver=alias_resolver,
     )
     # Rescue regional/edition retitles that differ only in a trailing descriptive
     # subtitle ("(All I Wanna Do)" vs "(All I Want Is You)"): re-score on the base
@@ -210,6 +225,7 @@ def score_match_with_version(
             base_source, source_artist, source_album,
             base_result, result_artist, result_album,
             weights,
+            alias_resolver=alias_resolver,
         )
         base = max(base, base_only - _SUBTITLE_PENALTY)
     vsignals = source_aware_version_signals(
@@ -229,6 +245,7 @@ def score_track_match(
     all_durations: list[int] | None = None,
     prefer: frozenset[str] = frozenset(),
     avoid: frozenset[str] = frozenset(),
+    alias_resolver: "AliasResolver | None" = None,
 ) -> Distance:
     """Engine-native track scorer: build the full Distance for one candidate.
 
@@ -258,6 +275,7 @@ def score_track_match(
         normalize_artist(getattr(source, "artist", "") or ""),
         normalize_artist(getattr(candidate, "artist", "") or ""),
         weights,
+        resolver=alias_resolver,
     ))
     distance.add(album_signal(
         normalize_title(src_album or ""),
