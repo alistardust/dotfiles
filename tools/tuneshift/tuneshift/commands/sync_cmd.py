@@ -89,12 +89,21 @@ def _sync_one(db, playlist, platforms, args) -> int:
             )
             db.save_match_audit(track.id, platform_name, result.audit)
 
-            # A verified lock whose platform id has gone dead is HELD for a routed
-            # heal (AC-L3), never overwritten inline — wiping it to "unavailable"
-            # here would destroy the lock and make the heal impossible. Surface it
-            # and leave the mapping intact; the track is simply omitted from this
-            # push (no silent substitute) until Alice routes the heal.
-            if result.reason_code == ReasonCode.LOCK_HELD:
+            # Resolve the effective lock once; reused for the hold guard below and
+            # the global-default guard on the success path.
+            effective_lock = db.get_effective_lock(track.id, platform_name, playlist.id)
+
+            # A locked track that resolves to "not found" must NEVER be wiped
+            # inline — that would overwrite the durable lock (id -> "") and make
+            # AC-L3's routed self-heal impossible. This covers both a freshly
+            # detected dead lock (LOCK_HELD, via --verify-locks) and a lock
+            # already held in the "unavailable, no live equivalent" state that
+            # `plan heal` produced (reason_code LOCKED). Hold it, leave the
+            # mapping intact, and omit it from this push (no silent substitute)
+            # until Alice routes/re-routes the heal.
+            if result.confidence == "not_found" and (
+                result.reason_code == ReasonCode.LOCK_HELD or effective_lock is not None
+            ):
                 held_dead.append(f"  ! {track.title} - {track.artist}")
                 continue
 
@@ -143,7 +152,6 @@ def _sync_one(db, playlist, platforms, args) -> int:
             # or syncing one playlist would clobber the global default every OTHER
             # playlist resolves against. Only the global cache is refreshed here;
             # the playlist override row is already authoritative and untouched.
-            effective_lock = db.get_effective_lock(track.id, platform_name, playlist.id)
             if (
                 effective_lock is not None
                 and effective_lock.scope == "playlist"

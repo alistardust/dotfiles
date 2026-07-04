@@ -178,3 +178,45 @@ def test_verify_locks_holds_dead_lock_without_wiping_mapping(
     assert mapping.platform_track_id == "DEAD_LOCK"
     assert mapping.status == "matched"
     assert _pushed_ids(client) == []
+
+
+@patch("tuneshift.sequencer.sequence_playlist")
+@patch("tuneshift.commands.sync_cmd.reconcile_track")
+@patch("tuneshift.commands.ingest_cmd._load_client")
+def test_ordinary_sync_does_not_wipe_held_unavailable_lock(
+    mock_load, mock_reconcile, mock_sequence, tmp_db: Path
+) -> None:
+    """Regression: an ordinary (non --verify-locks) sync must not destroy a lock
+    already held in the ``unavailable`` state that ``plan heal`` produced.
+
+    A dead lock with no live equivalent is held as ``status='unavailable'``,
+    ``user_approved=1`` with the locked id retained. On the next ordinary sync
+    ``reconcile_track`` returns ``confidence='not_found'`` with reason_code
+    ``LOCKED`` (not ``LOCK_HELD``). Without a lock-aware guard this hits the
+    not-found handler and overwrites the id to ``""``, permanently destroying the
+    lock and leaving nothing for a future heal. It must be held, never wiped.
+    """
+    db, pid, tid = _setup(tmp_db)
+    # The held-unavailable global lock state produced by `plan heal`.
+    db.upsert_platform_mapping(PlatformMapping(
+        track_id=tid, platform="tidal", platform_track_id="HELD_LOCK",
+        match_score=0, status="unavailable", user_approved=True,
+    ))
+    client = _mock_client()
+    mock_load.return_value = client
+    mock_sequence.return_value = [tid]
+    # Ordinary sync of a held-unavailable lock: not_found + reason_code LOCKED.
+    mock_reconcile.return_value = ReconcileResult(
+        platform_track_id="", score=0, confidence="not_found",
+        reason_code=ReasonCode.LOCKED,
+    )
+
+    args = Namespace(playlist="Reorder Me", platform="tidal", all=False,
+                     reconcile=False, auto=False)
+    handle_sync(args, db)
+
+    # The locked id survives (not wiped to ""), so a future heal can still act.
+    mapping = db.get_platform_mapping(tid, "tidal")
+    assert mapping.platform_track_id == "HELD_LOCK"
+    assert db.get_effective_lock(tid, "tidal", pid) is not None
+    assert _pushed_ids(client) == []
