@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from tuneshift.commands.lock_cmd import handle_lock, handle_unlock
+from tuneshift.commands.lock_cmd import handle_lock, handle_lock_list, handle_unlock
 from tuneshift.db import Database
 from tuneshift.models import Track
 from tuneshift.planapply.plan import list_plans
@@ -143,3 +143,62 @@ class TestUnlockCLI:
         assert rc == 0
         # Still locked — a plan was written but not applied.
         assert db.get_platform_mapping(tid, "tidal").user_approved is True
+
+
+def _list_args(**over):
+    base = dict(playlist=None, list_locks=True)
+    base.update(over)
+    return SimpleNamespace(**base)
+
+
+class TestLockListCLI:
+    """AC-CLI4: list effective locks with precedence (global < playlist)."""
+
+    def test_global_list_shows_active_lock(self, tmp_path, capsys):
+        db, _pid, tid = _seed(tmp_path)
+        handle_lock(_lock_args(track_id=tid, tidal="GID", apply=True), db)
+        rc = handle_lock_list(_list_args(), db)
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "locks (global default)" in out
+        assert f"* #{tid} Beg For You" in out
+        assert "tidal:GID" in out
+
+    def test_empty_global_list(self, tmp_path, capsys):
+        db, _pid, _tid = _seed(tmp_path)
+        rc = handle_lock_list(_list_args(), db)
+        assert rc == 0
+        assert "No locks set." in capsys.readouterr().out
+
+    def test_playlist_list_shows_precedence_and_override(self, tmp_path, capsys):
+        db, _pid, tid = _seed(tmp_path)
+        handle_lock(_lock_args(track_id=tid, tidal="GLOBAL", apply=True), db)
+        handle_lock(
+            _lock_args(playlist="Atmos Sessions", title="Beg", tidal="OVERRIDE",
+                       scope="playlist", apply=True),
+            db,
+        )
+        rc = handle_lock_list(_list_args(playlist="Atmos Sessions"), db)
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "precedence global < playlist" in out
+        # Global row is shadowed by the per-playlist override.
+        assert "tidal:GLOBAL  (overridden)" in out
+        # The override row is the active winner.
+        assert "* " in out and "tidal:OVERRIDE" in out
+
+    def test_playlist_list_unknown_playlist_errors(self, tmp_path, capsys):
+        db, _pid, _tid = _seed(tmp_path)
+        rc = handle_lock_list(_list_args(playlist="Nope"), db)
+        assert rc == 1
+        assert "Playlist not found" in capsys.readouterr().err
+
+    def test_playlist_list_global_only_marks_active(self, tmp_path, capsys):
+        db, _pid, tid = _seed(tmp_path)
+        handle_lock(_lock_args(track_id=tid, tidal="GID", apply=True), db)
+        rc = handle_lock_list(_list_args(playlist="Atmos Sessions"), db)
+        assert rc == 0
+        out = capsys.readouterr().out
+        # No override for this playlist → the global lock is the active winner.
+        assert f"* #{tid} Beg For You" in out
+        assert "(overridden)" not in out

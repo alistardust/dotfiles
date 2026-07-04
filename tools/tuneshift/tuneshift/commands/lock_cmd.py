@@ -33,6 +33,58 @@ from tuneshift.planapply.models import Plan, PlanChange
 from tuneshift.planapply.plan import write_plan
 
 
+def handle_lock_list(args, db: Database) -> int:
+    """List effective identity locks with precedence order (AC-CLI4).
+
+    Without ``--playlist`` it lists the library-wide default locks. With
+    ``--playlist NAME`` it shows both layers (global default + that playlist's
+    override) and marks the effective winner per (track, platform): the
+    per-playlist override wins over the global default (precedence
+    global < playlist), mirroring ``prefs list``.
+    """
+    global_locks = db.get_global_locks()
+
+    name = getattr(args, "playlist", None)
+    if not name:
+        _print_lock_layer("locks (global default)", global_locks, overridden=set())
+        if not global_locks:
+            print("No locks set.")
+        return 0
+
+    playlist = db.find_playlist_by_name(name)
+    if playlist is None:
+        print(f'Playlist not found: "{name}"', file=sys.stderr)
+        return 1
+    playlist_locks = db.get_playlist_locks(playlist.id)
+
+    # A per-playlist override wins over the global default for the same
+    # (track, platform); mark the shadowed global rows as overridden.
+    override_keys = {(row["track_id"], row["platform"]) for row in playlist_locks}
+
+    print(f'Effective locks (playlist "{name}"), precedence '
+          "global < playlist (most specific wins):")
+    _print_lock_layer("global default", global_locks, overridden=override_keys)
+    _print_lock_layer(f'playlist "{name}" override', playlist_locks, overridden=set())
+    if not global_locks and not playlist_locks:
+        print("  No locks set.")
+    return 0
+
+
+def _print_lock_layer(title: str, locks: list[dict], *, overridden: set) -> None:
+    """Render one lock layer; mark rows shadowed by a more-specific override."""
+    print(f"  [{title}]")
+    if not locks:
+        print("    (none)")
+        return
+    for lock in locks:
+        key = (lock["track_id"], lock["platform"])
+        shadowed = key in overridden
+        marker = " " if shadowed else "*"
+        note = "  (overridden)" if shadowed else ""
+        print(f"    {marker} #{lock['track_id']} {lock['title']} — {lock['artist']}: "
+              f"{lock['platform']}:{lock['platform_track_id']}{note}")
+
+
 def handle_lock(args, db: Database) -> int:
     """Create an identity lock (global default or per-playlist override)."""
     track = _resolve_target_track(args, db)

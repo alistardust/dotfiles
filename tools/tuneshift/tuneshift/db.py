@@ -2403,6 +2403,61 @@ class Database:
             )
         return None
 
+    def get_global_locks(self) -> list[dict]:
+        """All library-wide default locks (``platform_tracks`` ``user_approved=1``).
+
+        Returns one dict per (track, platform) lock with the track title/artist
+        for display, ordered by track then platform. Drives ``locks list``
+        (AC-CLI4) at global scope.
+        """
+        rows = self.conn.execute(
+            """SELECT pt.track_id, pt.platform, pt.platform_track_id, pt.status,
+                      t.title, t.artist
+               FROM platform_tracks pt
+               JOIN tracks t ON t.id = pt.track_id
+               WHERE pt.user_approved = 1 AND pt.platform_track_id != ''
+               ORDER BY t.title, pt.platform"""
+        ).fetchall()
+        return [
+            {
+                "track_id": r["track_id"],
+                "platform": r["platform"],
+                "platform_track_id": r["platform_track_id"],
+                "status": r["status"],
+                "title": r["title"],
+                "artist": r["artist"],
+            }
+            for r in rows
+        ]
+
+    def get_playlist_locks(self, playlist_id: int) -> list[dict]:
+        """All per-playlist override locks for a playlist (``user_approved=1``).
+
+        Returns one dict per (track, platform) override lock. These win over the
+        global default for the playlist; ``locks list --playlist`` renders both
+        layers with precedence (AC-CLI4).
+        """
+        rows = self.conn.execute(
+            """SELECT m.track_id, m.platform, m.platform_track_id,
+                      t.title, t.artist
+               FROM playlist_track_mappings m
+               JOIN tracks t ON t.id = m.track_id
+               WHERE m.playlist_id = ? AND m.user_approved = 1
+                     AND m.platform_track_id != ''
+               ORDER BY t.title, m.platform""",
+            (playlist_id,),
+        ).fetchall()
+        return [
+            {
+                "track_id": r["track_id"],
+                "platform": r["platform"],
+                "platform_track_id": r["platform_track_id"],
+                "title": r["title"],
+                "artist": r["artist"],
+            }
+            for r in rows
+        ]
+
     # --- playlist_track_prefs (spec §4.1a: most-specific preference scope) ---
 
     def set_playlist_track_pref(

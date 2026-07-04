@@ -196,6 +196,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_lock.add_argument("--ytmusic", help="YouTube Music video ID to lock to")
     p_lock.add_argument("--scope", choices=["global", "playlist"], default="global",
                         help="global default lock (default) or per-playlist override")
+    p_lock.add_argument("--list", action="store_true", dest="list_locks",
+                        help="List effective locks with precedence (optionally scoped "
+                             "to the positional playlist); ignores other lock args")
     p_lock.add_argument("--apply", action="store_true", help="Apply immediately instead of writing a plan")
     p_lock.add_argument("--interactive", action="store_true", help="Step through the change before applying")
 
@@ -802,7 +805,9 @@ def main(argv: list[str] | None = None) -> int:
             from tuneshift.commands.map_cmd import handle_unmap
             return handle_unmap(args, db)
         elif args.command == "lock":
-            from tuneshift.commands.lock_cmd import handle_lock
+            from tuneshift.commands.lock_cmd import handle_lock, handle_lock_list
+            if getattr(args, "list_locks", False):
+                return handle_lock_list(args, db)
             return handle_lock(args, db)
         elif args.command == "unlock":
             from tuneshift.commands.lock_cmd import handle_unlock
