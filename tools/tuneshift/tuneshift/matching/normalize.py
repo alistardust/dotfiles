@@ -265,6 +265,23 @@ _SPED_UP_RE = re.compile(
     r"\b(sped[\s-]?up|slowed(?:\s+down)?|nightcore|daycore)\b",
     re.IGNORECASE,
 )
+# M1 — DJ/continuous-mix markers safe to read from FREE TEXT (title/album):
+# only unambiguous phrases, never a bare "mixed" (which is a song word, e.g.
+# "Mixed Emotions"). A crossfaded/beatmatched mix track ruins standalone
+# playback, so it is a distinct recording that must be avoided by default.
+_CONTINUOUS_MIX_RE = re.compile(
+    r"\b(continuous(?:\s+dj)?\s+mix|dj\s+mix|non[\s-]?stop\s+mix|"
+    r"mega\s?mix|gapless(?:\s+mix)?|mixed\s+by)\b",
+    re.IGNORECASE,
+)
+# The Tidal `version` field is a controlled vocabulary where a bare "Mixed" or
+# "Continuous" denotes a continuous DJ mix. It is a STRUCTURED field, so these
+# broader tokens are trusted from it (but never inferred from a free-text
+# title/album — see ``infer_version``).
+_CONTINUOUS_MIX_VERSION_RE = re.compile(
+    r"\b(mixed|continuous|dj\s+mix|non[\s-]?stop|mega\s?mix|gapless)\b",
+    re.IGNORECASE,
+)
 
 # Recording/edition version markers whose presence in a *title* should not
 # reduce title similarity: the source-aware version axis (which reads the raw
@@ -273,7 +290,7 @@ _SPED_UP_RE = re.compile(
 _VERSION_MARKER_REGEXES = (
     _LIVE_RE, _REMIX_RE, _REMASTER_RE, _ACOUSTIC_RE, _KARAOKE_RE,
     _INSTRUMENTAL_RE, _TRIBUTE_RE, _RADIO_EDIT_RE, _DELUXE_RE, _COMPILATION_RE,
-    _SPED_UP_RE,
+    _SPED_UP_RE, _CONTINUOUS_MIX_RE,
 )
 _DASH_SUFFIX_RE = re.compile(r"\s+[-\u2013\u2014]\s+([^-\u2013\u2014]+)$")
 _TRAILING_PAREN_RE = re.compile(r"\s*[\(\[][^\(\)\[\]]*[\)\]]\s*$")

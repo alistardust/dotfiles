@@ -333,3 +333,41 @@ def test_identity_lock_isrc_match_is_case_insensitive():
     assert result.lock_applied is True
     assert result.winner is reidentified
     assert result.needs_review is False
+
+
+def _track_v(pid, title, artist, album, *, version=None, available=True):
+    return TrackResult(
+        platform_id=pid, title=title, artist=artist, album=album,
+        available=available, tidal_version=version,
+    )
+
+
+def test_m1_continuous_mix_candidate_downranked_below_standalone():
+    """M1: a crossfaded DJ/continuous mix must not win over a standalone take.
+
+    The mix is detected from the STRUCTURED Tidal `version` field ("Continuous
+    Mix"), so it is classed CONTINUOUS_MIX and source-aware-rejected against a
+    standalone studio source, ranking below the clean standalone candidate.
+    """
+    source = _track_v("src", "Insomnia", "Faithless", "Reverence")
+    mix = _track_v("MIX", "Insomnia", "Faithless", "Clubland", version="Continuous Mix")
+    standalone = _track_v("STD", "Insomnia", "Faithless", "Reverence")
+
+    result = select_version(source, [mix, standalone])
+
+    assert result.winner is standalone
+    ranked_ids = [c.platform_id for c, _ in result.ranked]
+    assert ranked_ids.index("STD") < ranked_ids.index("MIX")
+
+
+def test_m1_continuous_mix_only_option_surfaces_for_review():
+    """When the ONLY candidate is a continuous mix, it is a provisional pick
+    flagged for review (AC-S4), never silently recorded as a confident match."""
+    source = _track_v("src", "Insomnia", "Faithless", "Reverence")
+    mix = _track_v("MIX", "Insomnia", "Faithless", "Clubland", version="Mixed")
+
+    result = select_version(source, [mix])
+
+    assert result.winner is mix
+    assert result.needs_review is True
+    assert result.review_reason == "version_mismatch"

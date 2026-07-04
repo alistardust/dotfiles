@@ -98,6 +98,8 @@ class ScoringContext:
     raw_cand_title: str
     raw_src_album: str
     raw_cand_album: str
+    raw_src_version: str | None
+    raw_cand_version: str | None
     src_duration: int | None
     cand_duration: int | None
     all_durations: list[int] | None
@@ -137,6 +139,8 @@ def build_context(
         raw_cand_title=cand_title,
         raw_src_album=src_album or "",
         raw_cand_album=cand_album,
+        raw_src_version=getattr(source, "tidal_version", None),
+        raw_cand_version=getattr(candidate, "tidal_version", None),
         src_duration=getattr(source, "duration_seconds", None),
         cand_duration=getattr(candidate, "duration_seconds", None),
         all_durations=all_durations,
@@ -173,6 +177,7 @@ def _isrc_emit(ctx: ScoringContext, weights: Weights) -> list[SignalPenalty]:
 def _version_emit(ctx: ScoringContext, weights: Weights) -> list[SignalPenalty]:
     return source_aware_version_signals(
         ctx.raw_src_title, ctx.raw_src_album, ctx.raw_cand_title, ctx.raw_cand_album,
+        source_version=ctx.raw_src_version, cand_version=ctx.raw_cand_version,
         prefer=ctx.prefer, avoid=ctx.avoid, weights=weights,
     )
 

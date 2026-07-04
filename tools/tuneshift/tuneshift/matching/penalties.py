@@ -313,6 +313,8 @@ def source_aware_version_signals(
     source_title: str, source_album: str,
     cand_title: str, cand_album: str,
     *,
+    source_version: str | None = None,
+    cand_version: str | None = None,
     prefer: frozenset[str] = frozenset(),
     avoid: frozenset[str] = frozenset(),
     weights: Weights = DEFAULT_WEIGHTS,
@@ -324,6 +326,11 @@ def source_aware_version_signals(
     single ``version:<verdict>`` signal whose name drives the engine's
     recommendation cap (REJECT / SUBSTITUTE), so callers get correct intent
     fidelity in both the distance and legacy-point projections.
+
+    ``source_version`` / ``cand_version`` are the platforms' STRUCTURED version
+    fields (Tidal ``tidal_version``); they let a controlled-vocabulary marker
+    (e.g. a continuous-mix "Mixed") classify the recording even when the free
+    title does not carry it (M1).
     """
     from tuneshift.matching.version import (
         VersionVerdict,
@@ -332,8 +339,8 @@ def source_aware_version_signals(
     )
 
     vw = weights.version
-    src = infer_version(source_title, source_album)
-    cand = infer_version(cand_title, cand_album)
+    src = infer_version(source_title, source_album, source_version)
+    cand = infer_version(cand_title, cand_album, cand_version)
     verdict = compare_version(src, cand, prefer=prefer, avoid=avoid)
 
     signals: list[SignalPenalty] = []

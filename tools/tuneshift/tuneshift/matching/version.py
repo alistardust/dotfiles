@@ -41,6 +41,7 @@ class RecordingClass(str, Enum):
     ACOUSTIC = "acoustic"
     TRIBUTE = "tribute"
     ALTERED = "altered"
+    CONTINUOUS_MIX = "continuous_mix"
 
 
 # Recording-identity classes in DETECTION PRIORITY order (most specific first);
@@ -50,6 +51,7 @@ _CLASS_REGEXES: tuple[tuple[RecordingClass, str], ...] = (
     (RecordingClass.INSTRUMENTAL, "_INSTRUMENTAL_RE"),
     (RecordingClass.TRIBUTE, "_TRIBUTE_RE"),
     (RecordingClass.ALTERED, "_SPED_UP_RE"),
+    (RecordingClass.CONTINUOUS_MIX, "_CONTINUOUS_MIX_RE"),
     (RecordingClass.REMIX, "_REMIX_RE"),
     (RecordingClass.ACOUSTIC, "_ACOUSTIC_RE"),
     (RecordingClass.LIVE, "_LIVE_RE"),
@@ -73,19 +75,38 @@ class VersionProfile:
     is_clean: bool = False
 
 
-def infer_version(title: str | None, album: str | None = None) -> VersionProfile:
-    """Infer a :class:`VersionProfile` from a track's title and album text."""
+def infer_version(
+    title: str | None, album: str | None = None, version: str | None = None
+) -> VersionProfile:
+    """Infer a :class:`VersionProfile` from a track's title, album and version.
+
+    ``version`` is the platform's STRUCTURED version field (e.g. Tidal's
+    ``version`` / ``tidal_version``: "Live", "Radio Edit", "Continuous Mix",
+    "Mixed"). Because it is a controlled vocabulary it is trusted for markers
+    that would be ambiguous in free text — notably a bare "Mixed"/"Continuous"
+    that denotes a continuous DJ mix (M1) but is an ordinary word in a title.
+    """
     combined = f"{title or ''} {album or ''}"
+    version_text = version or ""
+    full = f"{combined} {version_text}".strip()
     recording = RecordingClass.STUDIO
     for cls, regex_name in _CLASS_REGEXES:
-        if getattr(_norm, regex_name).search(combined):
+        if getattr(_norm, regex_name).search(full):
             recording = cls
             break
+    # Structured version field: a bare "Mixed"/"Continuous" is a continuous DJ
+    # mix. Only the structured field may assert this (never free-text title).
+    if (
+        recording is RecordingClass.STUDIO
+        and version_text
+        and _norm._CONTINUOUS_MIX_VERSION_RE.search(version_text)
+    ):
+        recording = RecordingClass.CONTINUOUS_MIX
     return VersionProfile(
         recording=recording,
-        is_remaster=bool(_norm._REMASTER_RE.search(combined)),
-        is_explicit=bool(_EXPLICIT_RE.search(combined)),
-        is_clean=bool(_CLEAN_RE.search(combined)),
+        is_remaster=bool(_norm._REMASTER_RE.search(full)),
+        is_explicit=bool(_EXPLICIT_RE.search(full)),
+        is_clean=bool(_CLEAN_RE.search(full)),
     )
 
 
