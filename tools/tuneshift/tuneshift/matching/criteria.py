@@ -121,6 +121,83 @@ class Criterion(Protocol):
     def to_signal(self, verdict: Verdict) -> SignalPenalty | None: ...
 
 
+def resolve_strength_verdict(
+    strength: Strength | None, *, satisfied: bool
+) -> Verdict:
+    """Map an active preference strength + candidate satisfaction to a verdict.
+
+    ``satisfied`` means "the candidate has the property the preference is about"
+    (e.g. it carries the atmos token for a ``spatial=atmos`` preference). This is
+    the single routing table every criterion shares, so a new criterion needs
+    only supply extraction + a satisfaction test — never bespoke verdict logic.
+    """
+
+    if strength is None:
+        return Verdict.NO_VERDICT
+    if strength is Strength.REQUIRE:
+        return Verdict.HARD_PASS if satisfied else Verdict.HARD_REJECT
+    if strength is Strength.FORBID:
+        return Verdict.HARD_REJECT if satisfied else Verdict.HARD_PASS
+    if strength is Strength.PREFER:
+        return Verdict.SOFT_BONUS if satisfied else Verdict.SOFT_PENALTY
+    # AVOID
+    return Verdict.SOFT_PENALTY if satisfied else Verdict.SOFT_BONUS
+
+
+@dataclass
+class TokenCriterion:
+    """A reusable token-membership criterion (audio-mode, edition, class, ...).
+
+    Extraction reads a token list off ``field_name`` on the metadata object; the
+    candidate is *satisfied* when it carries ``target`` (case-insensitive,
+    non-alphanumerics folded so ``DOLBY_ATMOS`` matches ``dolby_atmos``). Verdict
+    routing is delegated to :func:`resolve_strength_verdict`; soft verdicts
+    project to a :class:`SignalPenalty` with the criterion's ``weight`` while
+    hard verdicts carry no soft signal (they cap via ``hard_cap``).
+
+    ``structured`` marks values as coming from a structured field so they may
+    drive a hard filter under the AC-C3 confidence gate.
+    """
+
+    name: str
+    field_name: str
+    target: str
+    weight: int = 10
+    hard_cap: HardCapPolicy = HardCapPolicy.NONE
+    structured: bool = True
+
+    def _norm(self, token: object) -> str:
+        return "".join(ch for ch in str(token).lower() if ch.isalnum())
+
+    def extract(self, meta: object) -> CriterionValue | None:
+        raw = getattr(meta, self.field_name, None)
+        if not raw:
+            return None
+        if isinstance(raw, (list, tuple, set, frozenset)):
+            tokens = frozenset(self._norm(t) for t in raw if t)
+        else:
+            tokens = frozenset({self._norm(raw)})
+        if not tokens:
+            return None
+        return CriterionValue(raw=raw, tokens=tokens, structured=self.structured)
+
+    def compare(
+        self,
+        source: CriterionValue,
+        candidate: CriterionValue,
+        strength: Strength | None,
+    ) -> Verdict:
+        satisfied = self._norm(self.target) in candidate.tokens
+        return resolve_strength_verdict(strength, satisfied=satisfied)
+
+    def to_signal(self, verdict: Verdict) -> SignalPenalty | None:
+        if verdict is Verdict.SOFT_PENALTY:
+            return SignalPenalty(self.name, -self.weight, 1.0, self.weight)
+        if verdict is Verdict.SOFT_BONUS:
+            return SignalPenalty(self.name, self.weight, 0.0, self.weight)
+        return None
+
+
 class CriterionRegistry:
     """An ordered, name-unique collection of registered criteria.
 
