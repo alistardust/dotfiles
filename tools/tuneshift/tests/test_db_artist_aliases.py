@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from tuneshift.db import Database
+from tuneshift.db import _SCHEMA_VERSION, Database
 
 DEG = "\u00b0"  # U+00B0 degree sign
 ORD = "\u00ba"  # U+00BA masculine ordinal indicator
@@ -24,11 +24,14 @@ def _flatten(classes):
 
 
 class TestSchema:
-    def test_migrated_version_is_14(self, db: Database):
+    def test_schema_at_current_version(self, db: Database):
         version = db.conn.execute(
             "SELECT value FROM schema_meta WHERE key='version'"
         ).fetchone()[0]
-        assert int(version) == 14
+        # Pin to the live constant so a legitimate schema bump does not require
+        # hand-editing a magic number; artist_aliases landed at v14 (floor).
+        assert int(version) == _SCHEMA_VERSION
+        assert int(version) >= 14
 
     def test_artist_aliases_table_and_index_exist(self, db: Database):
         cols = {r[1] for r in db.conn.execute(
