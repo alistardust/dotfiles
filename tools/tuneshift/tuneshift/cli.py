@@ -1,6 +1,7 @@
 """Command-line entry point for tuneshift."""
 
 import argparse
+import logging
 import os
 import sys
 
@@ -22,6 +23,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--db", type=str, default=None,
         help="Path to database file (default: auto-detect)",
+    )
+    parser.add_argument(
+        "-v", "--verbose", action="count", default=0,
+        help="Show per-source detail (MB / Last.fm / Genius / LLM); repeatable",
+    )
+    parser.add_argument(
+        "-q", "--quiet", action="store_true",
+        help="Suppress progress output; show only warnings and errors",
     )
 
     sub = parser.add_subparsers(dest="command")
@@ -743,6 +752,24 @@ def _handle_ban(args, db) -> int:
     return 0
 
 
+def _configure_logging(args) -> None:
+    """Route enrichment/progress logs to stderr at the requested verbosity (AC6).
+
+    Enrichment was silent because nothing configured the root logger. Progress
+    (INFO) is visible by default; ``-v`` drops to DEBUG and annotates each line
+    with its source logger; ``-q`` suppresses everything below WARNING.
+    """
+    verbose = getattr(args, "verbose", 0)
+    if getattr(args, "quiet", False):
+        level = logging.WARNING
+    elif verbose:
+        level = logging.DEBUG
+    else:
+        level = logging.INFO
+    fmt = "%(levelname)s %(name)s: %(message)s" if verbose else "%(message)s"
+    logging.basicConfig(level=level, stream=sys.stderr, format=fmt, force=True)
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run the tuneshift CLI."""
     parser = build_parser()
@@ -751,6 +778,8 @@ def main(argv: list[str] | None = None) -> int:
     if not args.command:
         parser.print_help()
         return 0
+
+    _configure_logging(args)
 
     from pathlib import Path
     db_path = Path(args.db) if args.db else None
