@@ -340,6 +340,21 @@ class TidalClient:
                     meta["key_scale"] = str(track.key_scale)
             if track.isrc:
                 meta["isrc"] = str(track.isrc)
+            # Native version/audio metadata (spec §4.2, BUILD-FIRST): these settle
+            # the Atmos/named-mix/fidelity axes without string-parsing. Read
+            # defensively — tidalapi may omit them on some tracks/versions.
+            audio_modes = getattr(track, "audio_modes", None)
+            if audio_modes:
+                meta["audio_modes"] = list(audio_modes)
+            audio_quality = getattr(track, "audio_quality", None)
+            if audio_quality:
+                meta["audio_quality"] = str(audio_quality)
+            version = getattr(track, "version", None)
+            if version:
+                meta["tidal_version"] = str(version)
+            media_tags = getattr(track, "media_metadata_tags", None)
+            if media_tags:
+                meta["media_metadata_tags"] = list(media_tags)
             return meta if meta else None
 
         return self._call_with_retry(_fetch)

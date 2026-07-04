@@ -81,6 +81,11 @@ class TrackResult:
     isrc: str | None = None
     available: bool | None = None
     tier_restricted: bool = False
+    audio_modes: list[str] | None = None
+    audio_quality: str | None = None
+    tidal_version: str | None = None
+    album_artist: str | None = None
+    album_type: str | None = None
 
 
 @dataclass
