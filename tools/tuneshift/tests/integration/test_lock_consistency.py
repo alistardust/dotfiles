@@ -87,9 +87,14 @@ def test_interactive_reject_pushes_nothing(
     push nothing — the reorder cannot resurrect it because there is a single push.
     """
     db, pid, tid = _setup(tmp_db)
+    # A second track so the arc order (reversed below) differs from playlist
+    # order — this makes the "local order unchanged" assertion an independent
+    # discriminator for a wrongly-persisted reorder, not a tautology.
+    tid2 = db.insert_track(Track(title="Song B", artist="Artist"))
+    db.add_track_to_playlist(pid, tid2, 1)
     client = _mock_client()
     mock_load.return_value = client
-    mock_sequence.return_value = [tid]
+    mock_sequence.return_value = [tid2, tid]  # arc order != playlist order
     mock_reconcile.return_value = ReconcileResult(
         platform_track_id="DIVERGENT_ID", score=90, confidence="high",
         is_divergent=True, divergence_note="live version", from_cache=False,
@@ -104,7 +109,7 @@ def test_interactive_reject_pushes_nothing(
     # A rejected push must not record the playlist as synced nor persist the
     # auto-reorder locally — otherwise local/remote silently diverge with no push.
     assert db.get_last_synced(pid, "tidal") is None
-    assert [t.id for t in db.get_playlist_tracks(pid)] == [tid]
+    assert [t.id for t in db.get_playlist_tracks(pid)] == [tid, tid2]
 
 
 @patch("tuneshift.sequencer.sequence_playlist")
