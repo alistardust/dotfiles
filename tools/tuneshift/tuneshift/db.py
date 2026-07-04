@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from tuneshift.matching import ReviewItem
     from tuneshift.planapply.models import JournalEntry
 
-_SCHEMA_VERSION = 19
+_SCHEMA_VERSION = 20
 
 # Columns editable via update_track. Constrains f-string interpolation in the
 # UPDATE statement to a fixed, safe set (no SQL identifier injection).
@@ -67,7 +67,6 @@ CREATE TABLE IF NOT EXISTS tracks (
     resolved_at TEXT,
     artist_id INTEGER REFERENCES artists(id),
     album_id INTEGER REFERENCES albums(id),
-    preferences TEXT,
     album_artist TEXT,
     album_type TEXT,
     label TEXT,
@@ -367,15 +366,23 @@ CREATE TABLE IF NOT EXISTS playlist_track_mappings (
 );
 
 CREATE TABLE IF NOT EXISTS playlist_track_prefs (
-    playlist_id INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    playlist_id INTEGER REFERENCES playlists(id) ON DELETE CASCADE,
     track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
     criterion TEXT NOT NULL,
     strength TEXT NOT NULL,
     target TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-    PRIMARY KEY (playlist_id, track_id, criterion)
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+-- A preference is unique per (scope, criterion, target) so multiple targets on
+-- one axis coexist (e.g. content avoid karaoke + content avoid instrumental).
+-- COALESCE normalises the NULLable playlist_id (NULL = playlist-agnostic
+-- per-track scope) and target so uniqueness is NULL-safe.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_playlist_track_prefs_scope
+    ON playlist_track_prefs(
+        COALESCE(playlist_id, -1), track_id, criterion, COALESCE(target, '')
+    );
 
 CREATE TABLE IF NOT EXISTS apply_journal (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -979,6 +986,78 @@ class Database:
                         "ALTER TABLE track_candidates "
                         "ADD COLUMN discovery_rank INTEGER NOT NULL DEFAULT 0"
                     )
+
+            if current_version < 20:
+                # FL3: unify the preference model. playlist_track_prefs gains a
+                # surrogate id + a NULL-safe unique index on
+                # (playlist_id, track_id, criterion, target) so multiple targets
+                # on one axis coexist (Alice's bug: could not avoid karaoke AND
+                # instrumental), and playlist_id becomes NULLable so a NULL row
+                # is a playlist-agnostic per-track preference. The orphan
+                # tracks.preferences blob is folded in and dropped.
+                self.conn.execute(
+                    "ALTER TABLE playlist_track_prefs RENAME TO _ptp_old_v20"
+                )
+                self.conn.execute("""
+                    CREATE TABLE playlist_track_prefs (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        playlist_id INTEGER REFERENCES playlists(id) ON DELETE CASCADE,
+                        track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+                        criterion TEXT NOT NULL,
+                        strength TEXT NOT NULL,
+                        target TEXT,
+                        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+                    )
+                """)
+                self.conn.execute("""
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_playlist_track_prefs_scope
+                        ON playlist_track_prefs(
+                            COALESCE(playlist_id, -1), track_id, criterion,
+                            COALESCE(target, '')
+                        )
+                """)
+                self.conn.execute("""
+                    INSERT INTO playlist_track_prefs
+                        (playlist_id, track_id, criterion, strength, target,
+                         created_at, updated_at)
+                    SELECT playlist_id, track_id, criterion, strength, target,
+                           created_at, updated_at
+                    FROM _ptp_old_v20
+                """)
+                self.conn.execute("DROP TABLE _ptp_old_v20")
+
+                # Fold any typed per-track criteria out of tracks.preferences
+                # into the NULL-playlist (playlist-agnostic) scope, then drop the
+                # orphan column. Legacy prefer/avoid keyword blobs (never wired to
+                # the typed engine) are not carried over.
+                track_cols = {
+                    r[1]
+                    for r in self.conn.execute("PRAGMA table_info(tracks)").fetchall()
+                }
+                if "preferences" in track_cols:
+                    rows = self.conn.execute(
+                        "SELECT id, preferences FROM tracks "
+                        "WHERE preferences IS NOT NULL AND preferences != ''"
+                    ).fetchall()
+                    for row in rows:
+                        try:
+                            blob = json.loads(row[1])
+                        except (ValueError, TypeError):
+                            continue
+                        for crit in (blob or {}).get("criteria") or ():
+                            criterion = crit.get("criterion")
+                            strength = crit.get("strength")
+                            if not criterion or not strength:
+                                continue
+                            self.conn.execute(
+                                """INSERT OR IGNORE INTO playlist_track_prefs
+                                       (playlist_id, track_id, criterion,
+                                        strength, target)
+                                   VALUES (NULL, ?, ?, ?, ?)""",
+                                (row[0], criterion, strength, crit.get("target")),
+                            )
+                    self.conn.execute("ALTER TABLE tracks DROP COLUMN preferences")
 
             self.conn.execute(
                 "UPDATE schema_meta SET value = ? WHERE key = 'version'",
@@ -2614,33 +2693,53 @@ class Database:
 
     def set_playlist_track_pref(
         self,
-        playlist_id: int,
+        playlist_id: int | None,
         track_id: int,
         criterion: str,
         strength: str,
         target: str | None = None,
     ) -> None:
-        """Set a playlist+track+criterion preference (upsert on PK)."""
+        """Upsert one preference at the ``(playlist_id, track_id, criterion,
+        target)`` scope.
+
+        A ``None`` ``playlist_id`` denotes a playlist-agnostic per-track
+        preference (it applies to the track on every playlist). Keying on
+        ``target`` (not just ``criterion``) is what lets multiple targets coexist
+        on one axis — e.g. ``content avoid karaoke`` and ``content avoid
+        instrumental`` — instead of the second overwriting the first. Re-setting
+        the same ``(scope, criterion, target)`` replaces its strength in place.
+
+        Uses a NULL-safe delete-then-insert (``IS`` matches NULL) rather than
+        ``ON CONFLICT`` so the ``COALESCE`` unique index and the NULLable
+        ``playlist_id`` are both honoured.
+        """
         with self.conn:
             self.conn.execute(
+                """DELETE FROM playlist_track_prefs
+                   WHERE playlist_id IS ? AND track_id = ?
+                     AND criterion = ? AND target IS ?""",
+                (playlist_id, track_id, criterion, target),
+            )
+            self.conn.execute(
                 """INSERT INTO playlist_track_prefs
-                       (playlist_id, track_id, criterion, strength, target, updated_at)
-                   VALUES (?, ?, ?, ?, ?, datetime('now'))
-                   ON CONFLICT(playlist_id, track_id, criterion)
-                   DO UPDATE SET strength = excluded.strength,
-                                 target = excluded.target,
-                                 updated_at = excluded.updated_at""",
+                       (playlist_id, track_id, criterion, strength, target)
+                   VALUES (?, ?, ?, ?, ?)""",
                 (playlist_id, track_id, criterion, strength, target),
             )
 
     def get_playlist_track_prefs(
-        self, playlist_id: int, track_id: int
+        self, playlist_id: int | None, track_id: int
     ) -> list[dict[str, Any]]:
-        """Return all playlist+track-scoped preferences for a track."""
+        """Return the preferences stored at exactly this scope for the track.
+
+        ``playlist_id=None`` returns the playlist-agnostic per-track rows (see
+        :meth:`get_track_global_prefs`); a concrete id returns only that
+        playlist's own rows (NULL rows are a distinct scope and never leak in).
+        """
         rows = self.conn.execute(
             """SELECT criterion, strength, target FROM playlist_track_prefs
-               WHERE playlist_id = ? AND track_id = ?
-               ORDER BY criterion""",
+               WHERE playlist_id IS ? AND track_id = ?
+               ORDER BY criterion, target""",
             (playlist_id, track_id),
         ).fetchall()
         return [
@@ -2648,17 +2747,41 @@ class Database:
             for r in rows
         ]
 
+    def get_track_global_prefs(self, track_id: int) -> list[dict[str, Any]]:
+        """Return the playlist-agnostic per-track preferences (NULL playlist).
+
+        These apply to the track on every playlist and form the folded successor
+        to the retired ``tracks.preferences`` blob (FL3 decision #4).
+        """
+        return self.get_playlist_track_prefs(None, track_id)
+
     def remove_playlist_track_pref(
-        self, playlist_id: int, track_id: int, criterion: str
+        self,
+        playlist_id: int | None,
+        track_id: int,
+        criterion: str,
+        target: str | None = None,
     ) -> bool:
-        """Delete a playlist+track+criterion preference. Returns True if a row
-        was removed (False when nothing matched)."""
+        """Delete preference(s) for a criterion at the given scope.
+
+        With ``target`` omitted, every target on the criterion is removed; with a
+        ``target`` given, only that exact ``(criterion, target)`` row. Returns
+        True if at least one row was deleted. NULL-safe on ``playlist_id``.
+        """
         with self.conn:
-            cur = self.conn.execute(
-                """DELETE FROM playlist_track_prefs
-                   WHERE playlist_id = ? AND track_id = ? AND criterion = ?""",
-                (playlist_id, track_id, criterion),
-            )
+            if target is None:
+                cur = self.conn.execute(
+                    """DELETE FROM playlist_track_prefs
+                       WHERE playlist_id IS ? AND track_id = ? AND criterion = ?""",
+                    (playlist_id, track_id, criterion),
+                )
+            else:
+                cur = self.conn.execute(
+                    """DELETE FROM playlist_track_prefs
+                       WHERE playlist_id IS ? AND track_id = ?
+                         AND criterion = ? AND target IS ?""",
+                    (playlist_id, track_id, criterion, target),
+                )
         return cur.rowcount > 0
 
     def update_track_metadata(self, track_id: int, meta: dict) -> None:
@@ -2856,19 +2979,6 @@ class Database:
         """Get the account-wide default preferences, or None if unset."""
         row = self.conn.execute(
             "SELECT value FROM schema_meta WHERE key = 'global_preferences'"
-        ).fetchone()
-        return json.loads(row[0]) if row and row[0] else None
-
-    def set_track_preferences(self, track_id: int, prefs: dict | None) -> None:
-        """Set the per-track preferences (highest-precedence override layer)."""
-        val = json.dumps(prefs) if prefs else None
-        self.conn.execute("UPDATE tracks SET preferences = ? WHERE id = ?", (val, track_id))
-        self.conn.commit()
-
-    def get_track_preferences(self, track_id: int) -> dict | None:
-        """Get the per-track preferences, or None if unset."""
-        row = self.conn.execute(
-            "SELECT preferences FROM tracks WHERE id = ?", (track_id,)
         ).fetchone()
         return json.loads(row[0]) if row and row[0] else None
 

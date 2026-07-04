@@ -176,8 +176,9 @@ def _scoped_active_prefs(
 
     Reads the general ``(criterion, strength, target)`` model (AC-CLI1) stored at
     three scopes — global (``schema_meta`` ``criteria``), playlist
-    (``playlists.preferences`` ``criteria``) and playlist-track
-    (``playlist_track_prefs``) — cascades them most-specific-wins via
+    (``playlists.preferences`` ``criteria``) and per-track
+    (``playlist_track_prefs``: playlist-specific rows plus playlist-agnostic
+    NULL-playlist rows) — cascades them most-specific-wins via
     :func:`resolve_scoped_specs`, and turns them into engine-ready
     :class:`ActivePreference` objects the two-phase engine fires on.
 
@@ -190,13 +191,23 @@ def _scoped_active_prefs(
     """
     global_criteria = (db.get_global_preferences() or {}).get("criteria")
     playlist_criteria = None
-    playlist_track_criteria = None
+    playlist_track_rows: list[dict] = []
     if playlist_id is not None:
         playlist_criteria = (db.get_preferences(playlist_id) or {}).get("criteria")
-        playlist_track_criteria = db.get_playlist_track_prefs(playlist_id, track_id)
+        playlist_track_rows = db.get_playlist_track_prefs(playlist_id, track_id)
+
+    # Playlist-agnostic per-track preferences (NULL playlist) are read
+    # unconditionally — they apply to the track on every playlist and are the
+    # folded successor to the retired ``tracks.preferences`` blob (FL3 #4). They
+    # live in the most-specific "track" layer alongside the playlist-track rows;
+    # a playlist-specific row for the same ``(axis, canonical target)`` wins
+    # because it is appended later (``resolve_scoped_specs`` keeps the last row
+    # per key within a layer).
+    track_global_rows = db.get_track_global_prefs(track_id)
+    merged_track_rows = [*track_global_rows, *playlist_track_rows]
 
     specs = resolve_scoped_specs(
-        global_criteria, playlist_criteria, playlist_track_criteria
+        global_criteria, playlist_criteria, merged_track_rows
     )
     active = resolve_active_preferences(specs)
 
@@ -961,7 +972,7 @@ def check_lock_downgrade(
     prefs = resolve_preferences(
         db.get_global_preferences(),
         db.get_preferences(playlist_id) if playlist_id is not None else None,
-        db.get_track_preferences(track_id),
+        None,
     )
     active = _scoped_active_prefs(db, track_id, playlist_id, prefs)
     if not active:
@@ -1082,7 +1093,7 @@ def reconcile_track(
     prefs = resolve_preferences(
         db.get_global_preferences(),
         db.get_preferences(playlist_id) if playlist_id is not None else None,
-        db.get_track_preferences(track_id),
+        None,
     )
     # Typed preferences (the general (criterion, strength, target) model) resolved
     # across every scope — global < playlist < playlist-track. These drive the

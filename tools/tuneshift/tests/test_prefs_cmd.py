@@ -25,10 +25,9 @@ class TestGlobalScope:
     def test_show_defaults_when_unset(self, db, capsys):
         assert handle_prefs(_args("show"), db) == 0
         out = capsys.readouterr().out
+        # Typed cascade is authoritative; empty state renders "(none set)".
         assert "(none set)" in out
-        assert "Effective preferences (global" in out
-        # Effective falls back to the built-in defaults.
-        assert "studio" in out
+        assert "Effective version preferences (global" in out
 
     def test_set_and_show_prefer_list(self, db, capsys):
         assert handle_prefs(_args("set", "version.prefer", "radio, single, studio"), db) == 0
@@ -87,10 +86,21 @@ class TestPlaylistScope:
 
 
 class TestTrackScope:
-    def test_set_writes_track_layer(self, db):
+    def test_set_writes_track_global_layer(self, db):
+        # `--track` alone (no `--playlist`) targets the playlist-agnostic
+        # per-track scope, stored under a NULL playlist_id.
         tid = db.add_track(Track(title="Song", artist="Artist", album="Album"))
-        assert handle_prefs(_args("set", "version.prefer", "expanded", track=tid), db) == 0
-        assert db.get_track_preferences(tid) == {"prefer": ["expanded"]}
+        assert handle_prefs(_args("set", "spatial", "prefer", "atmos", track=tid), db) == 0
+        assert db.get_track_global_prefs(tid) == [
+            {"criterion": "spatial", "strength": "prefer", "target": "atmos"}
+        ]
+        # Not stored as a playlist-specific row.
+        assert db.get_global_preferences() is None
+
+    def test_legacy_per_track_is_retired(self, db, capsys):
+        tid = db.add_track(Track(title="Song", artist="Artist", album="Album"))
+        assert handle_prefs(_args("set", "version.prefer", "expanded", track=tid), db) == 1
+        assert "retired" in capsys.readouterr().out
 
     def test_unknown_track_errors(self, db, capsys):
         assert handle_prefs(_args("show", track=99999), db) == 1
@@ -131,13 +141,16 @@ class TestTypedGrammar:
             {"criterion": "spatial", "strength": "prefer", "target": "atmos"}
         ]
 
-    def test_track_without_playlist_is_rejected(self, db, capsys):
+    def test_track_without_playlist_is_track_global(self, db):
         from tuneshift.models import Track
         tid = db.add_track(Track(title="S", artist="A", album="Al"))
         assert handle_prefs(
             _args("set", "spatial", "prefer", "atmos", track=tid), db
-        ) == 1
-        assert "need a playlist too" in capsys.readouterr().out
+        ) == 0
+        # Stored as a playlist-agnostic per-track row (NULL playlist_id).
+        assert db.get_track_global_prefs(tid) == [
+            {"criterion": "spatial", "strength": "prefer", "target": "atmos"}
+        ]
 
     def test_set_rejects_unknown_criterion(self, db, capsys):
         assert handle_prefs(_args("set", "bogus", "prefer", "atmos"), db) == 1
@@ -148,13 +161,34 @@ class TestTypedGrammar:
         out = capsys.readouterr().out
         assert "may never match" in out
 
-    def test_set_replaces_existing_criterion_at_same_scope(self, db):
+    def test_set_replaces_same_polarity_at_same_scope(self, db):
+        # Re-setting the same (criterion, target) with the SAME polarity
+        # replaces the strength in place (prefer -> require).
         handle_prefs(_args("set", "spatial", "prefer", "atmos"), db)
-        handle_prefs(_args("set", "spatial", "avoid", "atmos"), db)
+        handle_prefs(_args("set", "spatial", "require", "atmos"), db)
         criteria = db.get_global_preferences()["criteria"]
         assert criteria == [
-            {"criterion": "spatial", "strength": "avoid", "target": "atmos"}
+            {"criterion": "spatial", "strength": "require", "target": "atmos"}
         ]
+
+    def test_set_rejects_opposite_polarity_conflict(self, db, capsys):
+        # Opposite polarity on the same (criterion, target) at the same scope is
+        # a contradiction and is rejected loudly (FL3 conflict rule).
+        handle_prefs(_args("set", "spatial", "prefer", "atmos"), db)
+        capsys.readouterr()
+        assert handle_prefs(_args("set", "spatial", "avoid", "atmos"), db) == 1
+        assert "Conflict" in capsys.readouterr().out
+        # Original pref is preserved.
+        assert db.get_global_preferences()["criteria"] == [
+            {"criterion": "spatial", "strength": "prefer", "target": "atmos"}
+        ]
+
+    def test_multi_target_coexist_at_same_scope(self, db):
+        # Two different targets on one axis coexist (the historical overwrite bug).
+        handle_prefs(_args("set", "content", "avoid", "karaoke"), db)
+        handle_prefs(_args("set", "content", "avoid", "instrumental"), db)
+        targets = {c["target"] for c in db.get_global_preferences()["criteria"]}
+        assert targets == {"karaoke", "instrumental"}
 
     def test_unset_removes_global_criterion(self, db, capsys):
         handle_prefs(_args("set", "spatial", "prefer", "atmos"), db)
@@ -207,5 +241,6 @@ class TestLegacyGrammarStillWorks:
         handle_prefs(_args("set", "spatial", "prefer", "atmos"), db)
         assert handle_prefs(_args("show"), db) == 0
         out = capsys.readouterr().out
-        assert "criteria:" in out
+        # `show` renders the authoritative typed cascade.
+        assert "[global]" in out
         assert "spatial prefer atmos" in out

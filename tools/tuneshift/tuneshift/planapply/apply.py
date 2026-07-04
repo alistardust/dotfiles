@@ -65,11 +65,13 @@ _TABLE_SPECS: dict[str, _TableSpec] = {
         pk=("playlist_id", "track_id", "platform"),
         columns=("platform_track_id", "source", "user_approved"),
     ),
-    "playlist_track_prefs": _TableSpec(
-        name="playlist_track_prefs",
-        pk=("playlist_id", "track_id", "criterion"),
-        columns=("strength", "target"),
-    ),
+    # NOTE: playlist_track_prefs is intentionally NOT routed through plan/apply.
+    # Preferences are configuration set directly via the `prefs` CLI, not a
+    # playlist mutation. Its storage now uses a surrogate id PK with a nullable
+    # (playlist_id, target) logical key enforced by a COALESCE unique index —
+    # shapes the generic engine's NULL-unsafe `col = ?` WHERE and
+    # `ON CONFLICT(raw-columns)` arbiter cannot address. A future task that wants
+    # planned pref changes must add NULL-safe key handling before re-listing it.
     # Global default lock lives on platform_tracks (spec §8, AC-L1). A routed
     # self-heal (planapply/heal.py, AC-L3) re-binds the locked id and refreshes
     # the same-recording fingerprint, so both are writable through plan/apply.
