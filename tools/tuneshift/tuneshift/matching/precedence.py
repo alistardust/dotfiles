@@ -104,16 +104,20 @@ def _favor(verdict: Verdict) -> int:
 
 
 def resolve_conflict(
-    candidate_verdicts: dict[Hashable, dict[str, Verdict]],
+    candidate_verdicts: dict[Hashable, dict[PreferenceRef, Verdict]],
     precedence: list[PreferenceRef],
 ) -> ConflictDecision:
     """Resolve which candidate wins by lexicographic precedence, with a trace.
 
-    ``candidate_verdicts`` maps each candidate to the verdict every criterion
-    assigned it. Walking ``precedence`` highest-first, each criterion keeps only
-    the contenders it favours most; the first criterion that yields a unique
-    survivor decides. If the order is exhausted with more than one survivor the
-    decision is ``unresolved`` and the caller applies the tie-break.
+    ``candidate_verdicts`` maps each candidate to the verdict *each active
+    preference* assigned it, keyed by the :class:`PreferenceRef` itself (NOT by
+    criterion name — two preferences may reference the same criterion at
+    different scopes/targets, e.g. a track override of a global default, and
+    those must stay distinct). Walking ``precedence`` highest-first, each
+    preference keeps only the contenders it favours most; the first preference
+    that yields a unique survivor decides. If the order is exhausted with more
+    than one survivor the decision is ``unresolved`` and the caller applies the
+    tie-break.
     """
 
     contenders: list[Hashable] = list(candidate_verdicts)
@@ -122,7 +126,7 @@ def resolve_conflict(
     for ref in precedence:
         if len(contenders) <= 1:
             break
-        ranks = {c: _favor(candidate_verdicts[c].get(ref.criterion, Verdict.NO_VERDICT)) for c in contenders}
+        ranks = {c: _favor(candidate_verdicts[c].get(ref, Verdict.NO_VERDICT)) for c in contenders}
         best = max(ranks.values())
         favored = [c for c in contenders if ranks[c] == best]
         if 0 < len(favored) < len(contenders):

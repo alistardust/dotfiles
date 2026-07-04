@@ -52,17 +52,19 @@ def test_derive_precedence_preserves_declared_order_within_scope():
 
 def test_conflict_higher_precedence_dominates_atmos_over_original():
     # Two candidates: A = Atmos remaster, B = stereo original.
+    spatial = _ref("spatial", "atmos", "playlist")
+    origin = _ref("release_context", "original", "playlist")
     verdicts = {
         "atmos_remaster": {
-            "spatial": Verdict.SOFT_BONUS,
-            "release_context": Verdict.SOFT_PENALTY,
+            spatial: Verdict.SOFT_BONUS,
+            origin: Verdict.SOFT_PENALTY,
         },
         "stereo_original": {
-            "spatial": Verdict.SOFT_PENALTY,
-            "release_context": Verdict.SOFT_BONUS,
+            spatial: Verdict.SOFT_PENALTY,
+            origin: Verdict.SOFT_BONUS,
         },
     }
-    precedence = [_ref("spatial", "atmos", "playlist"), _ref("release_context", "original", "playlist")]
+    precedence = [spatial, origin]
     decision = resolve_conflict(verdicts, precedence)
     assert isinstance(decision, ConflictDecision)
     assert decision.winner == "atmos_remaster"
@@ -74,17 +76,19 @@ def test_conflict_higher_precedence_dominates_atmos_over_original():
 
 
 def test_conflict_flips_when_precedence_flips():
+    spatial = _ref("spatial", "atmos", "playlist")
+    origin = _ref("release_context", "original", "playlist")
     verdicts = {
         "atmos_remaster": {
-            "spatial": Verdict.SOFT_BONUS,
-            "release_context": Verdict.SOFT_PENALTY,
+            spatial: Verdict.SOFT_BONUS,
+            origin: Verdict.SOFT_PENALTY,
         },
         "stereo_original": {
-            "spatial": Verdict.SOFT_PENALTY,
-            "release_context": Verdict.SOFT_BONUS,
+            spatial: Verdict.SOFT_PENALTY,
+            origin: Verdict.SOFT_BONUS,
         },
     }
-    precedence = [_ref("release_context", "original", "playlist"), _ref("spatial", "atmos", "playlist")]
+    precedence = [origin, spatial]
     decision = resolve_conflict(verdicts, precedence)
     assert decision.winner == "stereo_original"
     assert decision.decided_by == "release_context"
@@ -92,23 +96,76 @@ def test_conflict_flips_when_precedence_flips():
 
 def test_conflict_no_averaging_never_picks_unwanted_candidate():
     # C is neutral on both axes; a weighted-average scheme might let it sneak in.
+    spatial = _ref("spatial", "atmos", "playlist")
+    origin = _ref("release_context", "original", "playlist")
     verdicts = {
-        "atmos_remaster": {"spatial": Verdict.SOFT_BONUS, "release_context": Verdict.SOFT_PENALTY},
-        "stereo_original": {"spatial": Verdict.SOFT_PENALTY, "release_context": Verdict.SOFT_BONUS},
-        "neutral_comp": {"spatial": Verdict.NEUTRAL, "release_context": Verdict.NEUTRAL},
+        "atmos_remaster": {spatial: Verdict.SOFT_BONUS, origin: Verdict.SOFT_PENALTY},
+        "stereo_original": {spatial: Verdict.SOFT_PENALTY, origin: Verdict.SOFT_BONUS},
+        "neutral_comp": {spatial: Verdict.NEUTRAL, origin: Verdict.NEUTRAL},
     }
-    precedence = [_ref("spatial", "atmos", "playlist"), _ref("release_context", "original", "playlist")]
+    precedence = [spatial, origin]
     decision = resolve_conflict(verdicts, precedence)
     assert decision.winner == "atmos_remaster"
 
 
 def test_conflict_unresolved_when_precedence_cannot_distinguish():
+    spatial = _ref("spatial", "atmos", "playlist")
     verdicts = {
-        "a": {"spatial": Verdict.SOFT_BONUS},
-        "b": {"spatial": Verdict.SOFT_BONUS},
+        "a": {spatial: Verdict.SOFT_BONUS},
+        "b": {spatial: Verdict.SOFT_BONUS},
     }
-    precedence = [_ref("spatial", "atmos", "playlist")]
+    precedence = [spatial]
     decision = resolve_conflict(verdicts, precedence)
     assert decision.winner is None
     assert decision.unresolved
     assert set(decision.contenders) == {"a", "b"}
+
+
+def test_same_criterion_different_scope_track_overrides_global():
+    """Regression (Chunk 2 review, finding 2): two active preferences on the
+    SAME criterion at different scopes must remain distinct so precedence can
+    enforce the track override. Global prefers ``original``; the track pref
+    prefers ``remaster``. The track scope outranks global, so the remaster wins
+    — and the outcome must NOT depend on dict/merge ordering."""
+
+    track_remaster = _ref("release_context", "remaster", "track")
+    global_original = _ref("release_context", "original", "global")
+    precedence = derive_precedence(
+        global_refs=[global_original],
+        playlist_refs=[],
+        track_refs=[track_remaster],
+    )
+    # After derive, refs carry corrected scope; key verdicts by those refs.
+    track_ref, global_ref = precedence[0], precedence[1]
+    verdicts = {
+        "remaster_2024": {track_ref: Verdict.SOFT_BONUS, global_ref: Verdict.SOFT_PENALTY},
+        "original_1998": {track_ref: Verdict.SOFT_PENALTY, global_ref: Verdict.SOFT_BONUS},
+    }
+    decision = resolve_conflict(verdicts, precedence)
+    assert decision.winner == "remaster_2024"
+    assert decision.decided_by == "release_context"
+
+
+def test_same_criterion_conflict_is_order_independent():
+    """The two same-criterion refs must not clobber each other regardless of the
+    order the verdict sub-dict is built in (the exact merge-order bug found)."""
+
+    track_remaster = _ref("release_context", "remaster", "track")
+    global_original = _ref("release_context", "original", "global")
+    precedence = derive_precedence(
+        global_refs=[global_original],
+        playlist_refs=[],
+        track_refs=[track_remaster],
+    )
+    track_ref, global_ref = precedence[0], precedence[1]
+
+    rem_then_orig = {
+        "remaster_2024": {track_ref: Verdict.SOFT_BONUS, global_ref: Verdict.SOFT_PENALTY},
+        "original_1998": {track_ref: Verdict.SOFT_PENALTY, global_ref: Verdict.SOFT_BONUS},
+    }
+    orig_then_rem = {
+        "remaster_2024": {global_ref: Verdict.SOFT_PENALTY, track_ref: Verdict.SOFT_BONUS},
+        "original_1998": {global_ref: Verdict.SOFT_BONUS, track_ref: Verdict.SOFT_PENALTY},
+    }
+    assert resolve_conflict(rem_then_orig, precedence).winner == "remaster_2024"
+    assert resolve_conflict(orig_then_rem, precedence).winner == "remaster_2024"

@@ -69,19 +69,20 @@ SPATIAL = TokenCriterion(name="spatial", field_name="audio_modes", target="dolby
 CONTEXT = TokenCriterion(name="release_context", field_name="release_context", target="original")
 
 
-def _verdicts_for(criterion, target_strength) -> dict[str, dict[str, Verdict]]:
-    """Run one criterion at a given strength across both candidates."""
-    out: dict[str, dict[str, Verdict]] = {}
+def _verdicts_for_ref(criterion, ref) -> dict[str, dict[PreferenceRef, Verdict]]:
+    """Run one criterion at ``ref``'s strength across both candidates, keyed by
+    the preference ref (matching the new precedence contract)."""
+    out: dict[str, dict[PreferenceRef, Verdict]] = {}
     src = criterion.extract(ATMOS_REMASTER)  # source value is irrelevant for token membership
     for release in CANDIDATES:
         value = criterion.extract(release)
-        verdict = criterion.compare(src, value, target_strength) if value else Verdict.NO_VERDICT
-        out[release.id] = {criterion.name: verdict}
+        verdict = criterion.compare(src, value, ref.strength) if value else Verdict.NO_VERDICT
+        out[release.id] = {ref: verdict}
     return out
 
 
-def _merge(*verdict_maps: dict[str, dict[str, Verdict]]) -> dict[str, dict[str, Verdict]]:
-    merged: dict[str, dict[str, Verdict]] = {}
+def _merge(*verdict_maps: dict[str, dict[PreferenceRef, Verdict]]) -> dict[str, dict[PreferenceRef, Verdict]]:
+    merged: dict[str, dict[PreferenceRef, Verdict]] = {}
     for vm in verdict_maps:
         for cid, crit_verdicts in vm.items():
             merged.setdefault(cid, {}).update(crit_verdicts)
@@ -89,50 +90,40 @@ def _merge(*verdict_maps: dict[str, dict[str, Verdict]]) -> dict[str, dict[str, 
 
 
 def test_atmos_playlist_selects_atmos_release():
-    verdicts = _verdicts_for(SPATIAL, Strength.PREFER)
-    precedence = derive_precedence(
-        global_refs=[],
-        playlist_refs=[PreferenceRef("spatial", Strength.PREFER, "dolby_atmos", "playlist")],
-        track_refs=[],
-    )
+    ref = PreferenceRef("spatial", Strength.PREFER, "dolby_atmos", "playlist")
+    verdicts = _verdicts_for_ref(SPATIAL, ref)
+    precedence = derive_precedence(global_refs=[], playlist_refs=[ref], track_refs=[])
     decision = resolve_conflict(verdicts, precedence)
     assert decision.winner == "atmos_remaster"
     assert decision.decided_by == "spatial"
 
 
 def test_originals_playlist_selects_stereo_original():
-    verdicts = _verdicts_for(CONTEXT, Strength.PREFER)
-    precedence = derive_precedence(
-        global_refs=[],
-        playlist_refs=[PreferenceRef("release_context", Strength.PREFER, "original", "playlist")],
-        track_refs=[],
-    )
+    ref = PreferenceRef("release_context", Strength.PREFER, "original", "playlist")
+    verdicts = _verdicts_for_ref(CONTEXT, ref)
+    precedence = derive_precedence(global_refs=[], playlist_refs=[ref], track_refs=[])
     decision = resolve_conflict(verdicts, precedence)
     assert decision.winner == "stereo_original"
     assert decision.decided_by == "release_context"
 
 
 def test_conflicting_prefs_resolved_by_precedence_both_ways():
+    spatial_ref = PreferenceRef("spatial", Strength.PREFER, "dolby_atmos", "playlist")
+    context_ref = PreferenceRef("release_context", Strength.PREFER, "original", "playlist")
     verdicts = _merge(
-        _verdicts_for(SPATIAL, Strength.PREFER),
-        _verdicts_for(CONTEXT, Strength.PREFER),
+        _verdicts_for_ref(SPATIAL, spatial_ref),
+        _verdicts_for_ref(CONTEXT, context_ref),
     )
     atmos_first = derive_precedence(
         global_refs=[],
-        playlist_refs=[
-            PreferenceRef("spatial", Strength.PREFER, "dolby_atmos", "playlist"),
-            PreferenceRef("release_context", Strength.PREFER, "original", "playlist"),
-        ],
+        playlist_refs=[spatial_ref, context_ref],
         track_refs=[],
     )
     assert resolve_conflict(verdicts, atmos_first).winner == "atmos_remaster"
 
     context_first = derive_precedence(
         global_refs=[],
-        playlist_refs=[
-            PreferenceRef("release_context", Strength.PREFER, "original", "playlist"),
-            PreferenceRef("spatial", Strength.PREFER, "dolby_atmos", "playlist"),
-        ],
+        playlist_refs=[context_ref, spatial_ref],
         track_refs=[],
     )
     assert resolve_conflict(verdicts, context_first).winner == "stereo_original"
@@ -140,14 +131,16 @@ def test_conflicting_prefs_resolved_by_precedence_both_ways():
 
 def test_track_scope_pref_overrides_playlist_scope():
     # An Atmos playlist, but this ONE track is pinned to the original at track scope.
+    spatial_ref = PreferenceRef("spatial", Strength.PREFER, "dolby_atmos", "playlist")
+    context_ref = PreferenceRef("release_context", Strength.PREFER, "original", "track")
     verdicts = _merge(
-        _verdicts_for(SPATIAL, Strength.PREFER),
-        _verdicts_for(CONTEXT, Strength.PREFER),
+        _verdicts_for_ref(SPATIAL, spatial_ref),
+        _verdicts_for_ref(CONTEXT, context_ref),
     )
     precedence = derive_precedence(
         global_refs=[],
-        playlist_refs=[PreferenceRef("spatial", Strength.PREFER, "dolby_atmos", "playlist")],
-        track_refs=[PreferenceRef("release_context", Strength.PREFER, "original", "track")],
+        playlist_refs=[spatial_ref],
+        track_refs=[context_ref],
     )
     # Track scope outranks playlist scope, so the original wins despite the Atmos playlist.
     assert resolve_conflict(verdicts, precedence).winner == "stereo_original"
