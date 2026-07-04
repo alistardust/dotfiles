@@ -146,3 +146,51 @@ def test_hard_verdict_emits_no_soft_signal() -> None:
     verdict = crit.compare(src, cand, Strength.REQUIRE)
     assert verdict is Verdict.HARD_REJECT
     assert crit.to_signal(verdict) is None
+
+
+# --- M7: EditAxisCriterion (album_version as the unmarked default) -----------
+
+
+def _edit_meta(*, title="Song", version=None):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(title=title, tidal_version=version)
+
+
+def test_edit_axis_album_version_satisfied_by_unmarked_release():
+    from tuneshift.matching.criteria import EditAxisCriterion, load_token_whitelist
+
+    crit = EditAxisCriterion(whitelist=load_token_whitelist(), target="album_version")
+    # An unmarked album track carries no edit token at all.
+    val = crit.extract(_edit_meta())
+    assert val is not None and val.tokens == frozenset()
+    # Unmarked => it IS the album version => a prefer is satisfied (bonus).
+    assert crit.compare(val, val, Strength.PREFER) is Verdict.SOFT_BONUS
+
+
+def test_edit_axis_album_version_not_satisfied_by_radio_edit():
+    from tuneshift.matching.criteria import EditAxisCriterion, load_token_whitelist
+
+    crit = EditAxisCriterion(whitelist=load_token_whitelist(), target="album_version")
+    radio = crit.extract(_edit_meta(version="Radio Edit"))
+    assert "radioedit" in radio.tokens
+    # A competing edit marker present => NOT the album version => prefer miss.
+    assert crit.compare(radio, radio, Strength.PREFER) is Verdict.SOFT_PENALTY
+
+
+def test_edit_axis_reads_marker_from_structured_version_field():
+    from tuneshift.matching.criteria import EditAxisCriterion, load_token_whitelist
+
+    crit = EditAxisCriterion(whitelist=load_token_whitelist(), target="radio_edit")
+    val = crit.extract(_edit_meta(version="Radio Edit"))
+    assert val.structured is True
+    assert crit.compare(val, val, Strength.PREFER) is Verdict.SOFT_BONUS
+
+
+def test_edit_axis_require_album_version_hard_rejects_radio_edit():
+    from tuneshift.matching.criteria import EditAxisCriterion, load_token_whitelist
+
+    crit = EditAxisCriterion(whitelist=load_token_whitelist(), target="album_version")
+    radio = crit.extract(_edit_meta(version="Radio Edit"))
+    # A structured marker is confident, so REQUIRE stays hard (not demoted).
+    assert crit.compare(radio, radio, Strength.REQUIRE) is Verdict.HARD_REJECT

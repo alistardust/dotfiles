@@ -24,6 +24,7 @@ from dataclasses import dataclass
 
 from tuneshift.matching.criteria import (
     Criterion,
+    EditAxisCriterion,
     Strength,
     TitleTokenCriterion,
     TokenCriterion,
@@ -86,6 +87,10 @@ def criterion_for(
         return TokenCriterion(
             name=axis, field_name=field, target=canonical, structured=True
         )
+    if axis == "edit":
+        # M7: dual-source (title + structured version) with album_version as the
+        # unmarked default — a plain album track carries no "album version" text.
+        return EditAxisCriterion(whitelist=wl, target=canonical)
     if axis in TITLE_AXES:
         return TitleTokenCriterion(name=axis, target=canonical, whitelist=wl)
     raise ValueError(f"unknown preference axis {axis!r}")

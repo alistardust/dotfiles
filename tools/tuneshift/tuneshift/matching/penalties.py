@@ -266,6 +266,7 @@ def _residual_version_signals(
     *,
     prefer: frozenset[str] = frozenset(),
     avoid: frozenset[str] = frozenset(),
+    owned: frozenset[str] = frozenset(),
 ) -> list[SignalPenalty]:
     """Score packaging/edit (edition) keywords on the candidate.
 
@@ -287,6 +288,13 @@ def _residual_version_signals(
       minor down-rank: penalise only when the candidate carries the marker and
       the source does not. With no configured preferences every bucket falls
       here, preserving byte-for-byte parity.
+
+    ``owned`` names buckets whose axis is governed by an active *typed* criterion
+    (e.g. the ``edit`` axis owns ``radio_edit``). Those buckets are skipped
+    entirely so the typed criterion is the single source of truth for that axis
+    and its default down-rank cannot double-count against — or fight — an
+    explicit typed preference (M7). ``owned`` is empty for default prefs, so
+    byte-parity is preserved.
     """
     from tuneshift.matching import normalize as _norm
 
@@ -295,6 +303,8 @@ def _residual_version_signals(
     sub = weights.version.substitute
     signals: list[SignalPenalty] = []
     for name, attr, regex_name in _RESIDUAL_KEYWORDS:
+        if name in owned:
+            continue
         regex = getattr(_norm, regex_name)
         cand_has = bool(regex.search(cand_combined))
         if name in avoid:
@@ -317,6 +327,7 @@ def source_aware_version_signals(
     cand_version: str | None = None,
     prefer: frozenset[str] = frozenset(),
     avoid: frozenset[str] = frozenset(),
+    owned: frozenset[str] = frozenset(),
     weights: Weights = DEFAULT_WEIGHTS,
 ) -> list[SignalPenalty]:
     """Source-aware version scoring (Chunk 4).
@@ -355,7 +366,7 @@ def source_aware_version_signals(
 
     signals.extend(_residual_version_signals(
         source_title, source_album, cand_title, cand_album, weights,
-        prefer=prefer, avoid=avoid,
+        prefer=prefer, avoid=avoid, owned=owned,
     ))
     return signals
 

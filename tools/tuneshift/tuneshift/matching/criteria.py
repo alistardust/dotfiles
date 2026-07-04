@@ -362,6 +362,95 @@ class TitleTokenCriterion:
         return _soft_signal(self.name, self.weight, verdict)
 
 
+@dataclass
+class EditAxisCriterion:
+    """The single/radio-edit vs album-version axis (M7).
+
+    Two properties distinguish this axis from a plain token criterion:
+
+    * **Dual source.** Edit markers (``radio_edit`` / ``single_version`` /
+      ``extended`` / ``album_version``) are read from BOTH the free-text title
+      and the structured Tidal ``version`` field (``tidal_version``), because a
+      radio edit is as often marked in the version field as in the title.
+    * **Unmarked default.** ``album_version`` is the *absence* of a competing
+      edit marker: a release that carries no radio/single/extended marker IS the
+      album version. So ``prefer album_version`` selects the plain album track
+      (which carries no "album version" text) and down-ranks the radio edit,
+      and ``require album_version`` hard-eliminates the radio edit.
+
+    Title-derived markers pass through the committed-whitelist confidence gate
+    (AC-C3) before they may drive a hard filter; a marker asserted by the
+    structured version field is confident on its own.
+    """
+
+    whitelist: TokenWhitelist
+    target: str = "album_version"
+    name: str = "edit"
+    version_field: str = "tidal_version"
+    title_field: str = "title"
+    weight: int = 10
+    hard_cap: HardCapPolicy = HardCapPolicy.NONE
+
+    #: Edit markers (canonical whitelist form) that mean "NOT the album version".
+    _COMPETING = frozenset({"radioedit", "singleversion", "extended"})
+    #: Canonical form of the unmarked-default target.
+    _ALBUM_VERSION = "albumversion"
+
+    def _axis_tokens(self, text: object) -> frozenset[str]:
+        """Canonical edit-axis tokens found in a free-text string."""
+        return frozenset(
+            self.whitelist.canonical(gram)
+            for gram in _title_ngrams(text)
+            if gram in self.whitelist and self.whitelist.axis(gram) == "edit"
+        )
+
+    def extract(self, meta: object) -> CriterionValue | None:
+        title = getattr(meta, self.title_field, None)
+        version = getattr(meta, self.version_field, None)
+        title_tokens = self._axis_tokens(title) if title else frozenset()
+        version_tokens = frozenset()
+        structured = False
+        if version:
+            canon = self.whitelist.canonical(version)
+            if canon in self.whitelist and self.whitelist.axis(canon) == "edit":
+                version_tokens = frozenset({canon})
+                structured = True
+            else:
+                # A multi-word version string ("Radio Edit") -> scan its n-grams.
+                scanned = self._axis_tokens(version)
+                if scanned:
+                    version_tokens = scanned
+                    structured = True
+        tokens = title_tokens | version_tokens
+        # A release with no edit marker at all is still meaningful evidence: it
+        # is the album version. Represent that with an empty token set (never
+        # None) so ``album_version`` satisfaction can key on the ABSENCE of a
+        # competing marker rather than being treated as unextractable.
+        return CriterionValue(raw=(title, version), tokens=tokens, structured=structured)
+
+    def compare(
+        self,
+        source: CriterionValue,
+        candidate: CriterionValue,
+        strength: Strength | None,
+    ) -> Verdict:
+        target = self.whitelist.canonical(self.target)
+        if target == self._ALBUM_VERSION:
+            satisfied = (
+                self._ALBUM_VERSION in candidate.tokens
+                or not (candidate.tokens & self._COMPETING)
+            )
+        else:
+            satisfied = target in candidate.tokens
+        verdict = resolve_strength_verdict(strength, satisfied=satisfied)
+        return apply_confidence_gate(
+            verdict, value=candidate, target=target, whitelist=self.whitelist
+        )
+
+    def to_signal(self, verdict: Verdict) -> SignalPenalty | None:
+        return _soft_signal(self.name, self.weight, verdict)
+
+
 class CriterionRegistry:
     """An ordered, name-unique collection of registered criteria.
 

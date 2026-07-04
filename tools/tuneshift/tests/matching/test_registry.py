@@ -179,3 +179,69 @@ class TestResolveScopedSpecs:
         result = select_version(SOURCE, [STEREO, ATMOS], active=active)
         assert result.winner is ATMOS
         assert any(fc.candidate is STEREO for fc in result.filtered)
+
+
+# --- M7: single/radio-edit vs album version ----------------------------------
+
+
+def _edit_rel(pid, *, version=None, title="I Want It That Way", available=True):
+    # Same recording identity; differ only by the edit marker (in the structured
+    # Tidal version field) — the "radio edit on a compilation" case.
+    return SimpleNamespace(
+        platform_id=pid,
+        title=title,
+        artist="Backstreet Boys",
+        album="Millennium",
+        isrc="SE1234500002",
+        duration_seconds=213,
+        available=available,
+        tidal_version=version,
+    )
+
+
+M7_SOURCE = _edit_rel("src")
+M7_ALBUM = _edit_rel("album_id")               # unmarked -> IS the album version
+M7_RADIO = _edit_rel("radio_id", version="Radio Edit")
+
+
+def test_m7_prefer_album_version_selects_unmarked_over_radio_edit():
+    # album_version is the UNMARKED default: a candidate with no competing edit
+    # marker IS the album version, so prefer album_version selects it.
+    specs = [PreferenceSpec(axis="edit", target="album_version",
+                            strength=Strength.PREFER, scope="playlist")]
+    active = resolve_active_preferences(specs)
+    result = select_version(M7_SOURCE, [M7_RADIO, M7_ALBUM], active=active)
+
+    assert result.winner is M7_ALBUM
+    assert result.decided_by == "edit"
+
+
+def test_m7_prefer_radio_edit_selects_radio_over_album():
+    specs = [PreferenceSpec(axis="edit", target="radio_edit",
+                            strength=Strength.PREFER, scope="playlist")]
+    active = resolve_active_preferences(specs)
+    result = select_version(M7_SOURCE, [M7_RADIO, M7_ALBUM], active=active)
+
+    assert result.winner is M7_RADIO
+    assert result.decided_by == "edit"
+
+
+def test_m7_require_album_version_hard_filters_radio_edit():
+    specs = [PreferenceSpec(axis="edit", target="album_version",
+                            strength=Strength.REQUIRE, scope="playlist")]
+    active = resolve_active_preferences(specs)
+    result = select_version(M7_SOURCE, [M7_RADIO, M7_ALBUM], active=active)
+
+    assert result.winner is M7_ALBUM
+    assert any(fc.candidate is M7_RADIO for fc in result.filtered)
+
+
+def test_m7_radio_edit_marker_read_from_title_too():
+    # The marker may be in the free title rather than the structured version.
+    radio = _edit_rel("r2", title="I Want It That Way (Radio Edit)")
+    specs = [PreferenceSpec(axis="edit", target="radio_edit",
+                            strength=Strength.PREFER, scope="playlist")]
+    active = resolve_active_preferences(specs)
+    result = select_version(M7_SOURCE, [radio, M7_ALBUM], active=active)
+
+    assert result.winner is radio

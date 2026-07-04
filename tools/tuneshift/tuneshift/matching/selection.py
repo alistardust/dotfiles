@@ -221,6 +221,30 @@ def _soft_prefs(active: list[ActivePreference]) -> list[ActivePreference]:
     return [ap for ap in active if ap.ref.strength.is_soft]
 
 
+def _owned_residuals(active: list[ActivePreference]) -> frozenset[str]:
+    """Residual edition buckets governed by an active typed criterion.
+
+    A residual packaging/edit bucket (``penalties._RESIDUAL_KEYWORDS``:
+    ``radio_edit``/``compilation``/``deluxe``) whose whitelist axis matches an
+    active typed criterion's axis is *owned* by that criterion, so the legacy
+    default down-rank for that bucket is suppressed and the typed criterion is
+    the single authority for the axis (M7 — otherwise the legacy default fights
+    an explicit typed ``prefer``). Empty for default prefs, preserving byte-parity.
+    """
+    if not active:
+        return frozenset()
+    from tuneshift.matching.criteria import load_token_whitelist
+    from tuneshift.matching.penalties import _RESIDUAL_KEYWORDS
+
+    wl = load_token_whitelist()
+    active_axes = {ap.criterion.name for ap in active}
+    return frozenset(
+        name
+        for name, _attr, _regex in _RESIDUAL_KEYWORDS
+        if wl.axis(wl.canonical(name)) in active_axes
+    )
+
+
 def _precedence_of(soft: list[ActivePreference]) -> list[PreferenceRef]:
     """Derive the inspectable per-playlist precedence order from soft prefs.
 
@@ -247,6 +271,7 @@ def _phase2_score(
     all_durations: list[int] | None,
     prefer: frozenset[str],
     avoid: frozenset[str],
+    owned_residuals: frozenset[str] = frozenset(),
     alias_resolver: "AliasResolver | None",
 ) -> list[tuple[Any, Distance, dict[PreferenceRef, Verdict]]]:
     """Score each survivor by base identity distance and record soft verdicts.
@@ -270,6 +295,7 @@ def _phase2_score(
             all_durations=all_durations,
             prefer=prefer,
             avoid=avoid,
+            owned_residuals=owned_residuals,
             alias_resolver=alias_resolver,
         )
         vmap: dict[PreferenceRef, Verdict] = {}
@@ -333,6 +359,7 @@ def _resolve_lock(
     all_durations: list[int] | None,
     prefer: frozenset[str],
     avoid: frozenset[str],
+    owned_residuals: frozenset[str] = frozenset(),
     alias_resolver: "AliasResolver | None",
 ) -> SelectionResult:
     """Short-circuit selection for a locked composite identity (AC-S2 / AC-L1).
@@ -401,6 +428,7 @@ def _resolve_lock(
             all_durations=all_durations,
             prefer=prefer,
             avoid=avoid,
+            owned_residuals=owned_residuals,
             alias_resolver=alias_resolver,
         )
     )
@@ -434,6 +462,9 @@ def select_version(
     (unavailable releases, already dropped, should not skew the cluster).
     """
 
+    active_list = list(active)
+    owned_residuals = _owned_residuals(active_list)
+
     if lock is not None:
         return _resolve_lock(
             source,
@@ -443,10 +474,10 @@ def select_version(
             all_durations=all_durations,
             prefer=prefer,
             avoid=avoid,
+            owned_residuals=owned_residuals,
             alias_resolver=alias_resolver,
         )
 
-    active_list = list(active)
     survivors, filtered = _phase1_filter(source, candidates, active_list)
 
     if all_durations is None:
@@ -463,6 +494,7 @@ def select_version(
         all_durations=all_durations,
         prefer=prefer,
         avoid=avoid,
+        owned_residuals=owned_residuals,
         alias_resolver=alias_resolver,
     )
 

@@ -105,6 +105,7 @@ class ScoringContext:
     all_durations: list[int] | None
     prefer: frozenset[str]
     avoid: frozenset[str]
+    owned_residuals: frozenset[str]
     alias_resolver: "AliasResolver | None"
 
 
@@ -115,6 +116,7 @@ def build_context(
     all_durations: list[int] | None = None,
     prefer: frozenset[str] = frozenset(),
     avoid: frozenset[str] = frozenset(),
+    owned_residuals: frozenset[str] = frozenset(),
     alias_resolver: "AliasResolver | None" = None,
 ) -> ScoringContext:
     """Prepare a :class:`ScoringContext` from two track-like objects."""
@@ -146,6 +148,7 @@ def build_context(
         all_durations=all_durations,
         prefer=prefer,
         avoid=avoid,
+        owned_residuals=owned_residuals,
         alias_resolver=alias_resolver,
     )
 
@@ -178,7 +181,7 @@ def _version_emit(ctx: ScoringContext, weights: Weights) -> list[SignalPenalty]:
     return source_aware_version_signals(
         ctx.raw_src_title, ctx.raw_src_album, ctx.raw_cand_title, ctx.raw_cand_album,
         source_version=ctx.raw_src_version, cand_version=ctx.raw_cand_version,
-        prefer=ctx.prefer, avoid=ctx.avoid, weights=weights,
+        prefer=ctx.prefer, avoid=ctx.avoid, owned=ctx.owned_residuals, weights=weights,
     )
 
 
@@ -210,6 +213,7 @@ def score_signals(
     all_durations: list[int] | None = None,
     prefer: frozenset[str] = frozenset(),
     avoid: frozenset[str] = frozenset(),
+    owned_residuals: frozenset[str] = frozenset(),
     alias_resolver: "AliasResolver | None" = None,
 ) -> list[SignalPenalty]:
     """Produce the full base scoring signal list for one candidate.
@@ -222,7 +226,7 @@ def score_signals(
     ctx = build_context(
         source, candidate,
         all_durations=all_durations, prefer=prefer, avoid=avoid,
-        alias_resolver=alias_resolver,
+        owned_residuals=owned_residuals, alias_resolver=alias_resolver,
     )
     signals: list[SignalPenalty] = []
     for criterion in _DEFAULT_CRITERIA:
