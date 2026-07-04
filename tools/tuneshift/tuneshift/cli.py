@@ -32,16 +32,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_ingest.add_argument("playlist_id", help="Platform-specific playlist ID or URL")
 
     # sync
-    p_sync = sub.add_parser("sync", help="Reconcile and push playlist to platform")
+    p_sync = sub.add_parser("sync", help="Plan (or --apply) a routed push of a playlist to a platform")
     p_sync.add_argument("playlist", nargs="?", help="Playlist name")
     p_sync.add_argument("platform", nargs="?", help="Target platform")
     p_sync.add_argument("--all", action="store_true", help="Sync all playlists")
     p_sync.add_argument("--reconcile", action="store_true", help="Force re-reconciliation")
-    p_sync.add_argument("--auto", action="store_true", help="Accept all best matches without prompting")
     p_sync.add_argument(
-        "--verify-locks", action="store_true",
-        help="Probe locked tracks for liveness and self-heal dead platform ids "
-             "to the same recording (skips the API probe by default)",
+        "--apply", action="store_true",
+        help="Build and apply the push in one step (default writes a plan and "
+             "pushes nothing — AC-P1)",
+    )
+    p_sync.add_argument(
+        "--interactive", action="store_true",
+        help="With --apply, step through each push before applying (AC-P2)",
     )
 
     # diff

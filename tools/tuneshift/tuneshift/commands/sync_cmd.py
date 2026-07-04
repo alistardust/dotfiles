@@ -1,23 +1,43 @@
-"""Sync command: reconcile and push playlist to platform."""
+"""Sync command: route a playlist's remote push through plan/apply (AC-P1).
+
+Under the terraform-style plan/apply model (spec §7.1) a sync's remote push is
+ROUTED, never performed inline. By default ``sync`` writes a reviewable plan and
+pushes NOTHING (AC-P1); ``--apply`` builds and applies the plan in one step for
+daily use; ``--interactive`` (with ``--apply``) steps through each push before
+applying (AC-P2). Rollback of a pushed plan is forward-only via a compensating
+plan (``plan rollback`` → ``plan apply``, AC-P4).
+
+Scope boundary (§7.1): this command owns only the remote push. Local mapping
+reconcile/persist is the ROUTED ``doctor`` / ``plan rematch`` path and durable
+sequencing is the ``order`` command. When a playlist has auto-reorder enabled the
+push honors its arc order (computed read-only here), so the platform still
+receives the sequenced order without this command mutating local state at plan
+time; the durable local reorder is persisted only when ``--apply`` succeeds,
+mirroring the previous inline behaviour.
+"""
 import sys
 
 from tuneshift.db import Database
-from tuneshift.matching.audit import ReasonCode
-from tuneshift.reconcile import reconcile_track
-from tuneshift.models import PlatformMapping
+from tuneshift.planapply.apply import apply_plan
+from tuneshift.planapply.models import Plan, PlanChange
+from tuneshift.planapply.plan import write_plan
+from tuneshift.planapply.sync import build_sync_plan, make_sync_executor
 
 
 def handle_sync(args, db: Database) -> int:
-    """Reconcile tracks and push to platform."""
-
+    """Plan (default) or apply (``--apply``) a routed push of a playlist."""
     if args.all:
         any_failures = False
+        synced_any = False
         for pl in db.list_playlists():
             platforms = db.get_linked_platforms(pl.id)
-            if platforms:
-                rc = _sync_one(db, pl, platforms, args)
-                if rc != 0:
-                    any_failures = True
+            if not platforms:
+                continue
+            synced_any = True
+            if _sync_one(db, pl, platforms, args) != 0:
+                any_failures = True
+        if not synced_any:
+            print("No linked playlists to sync.")
         return 1 if any_failures else 0
 
     if not args.playlist:
@@ -34,219 +54,116 @@ def handle_sync(args, db: Database) -> int:
     else:
         platforms = db.get_linked_platforms(playlist.id)
         if not platforms:
-            print("No platforms linked. Specify: tuneshift sync <playlist> <platform>", file=sys.stderr)
+            print("No platforms linked. Specify: tuneshift sync <playlist> <platform>",
+                  file=sys.stderr)
             return 1
 
     return _sync_one(db, playlist, platforms, args)
 
 
-def _sync_one(db, playlist, platforms, args) -> int:
-    """Sync a single playlist to one or more platforms."""
+def _sync_one(db: Database, playlist, platforms, args) -> int:
+    """Plan/apply the push of one playlist to one or more platforms."""
     from tuneshift.commands.ingest_cmd import _load_client
 
     tracks = db.get_playlist_tracks(playlist.id)
     if not tracks:
-        print(f"Playlist \"{playlist.name}\" is empty.")
+        print(f'Playlist "{playlist.name}" is empty.')
         return 0
 
-    push_failed = False
-    synced_ok: dict[str, bool] = {}
-    # The exact release ids the resolver approved for THIS playlist, per platform,
-    # keyed by track. AC-L4: the auto-reorder re-push mirrors this resolved set
-    # (re-ordered) rather than independently re-reading the global platform_tracks
-    # table, so a rejected substitute / a per-playlist override lock is never
-    # bypassed on the second push.
-    resolved_by_platform: dict[str, dict[int, str]] = {}
+    apply_mode = getattr(args, "apply", False)
+    ordered_ids = _arc_order(db, playlist) if playlist.auto_reorder else None
 
+    failed = False
+    applied_any = False
     for platform_name in platforms:
         client = _load_client(platform_name)
         if not client:
             print(f"Unknown platform: {platform_name}", file=sys.stderr)
             continue
         if not client.load_session():
-            print(f"Not logged in to {platform_name}. Run: tuneshift login {platform_name}", file=sys.stderr)
+            print(f"Not logged in to {platform_name}. "
+                  f"Run: tuneshift login {platform_name}", file=sys.stderr)
             continue
 
-        print(f"\n--- Syncing \"{playlist.name}\" to {platform_name} ---")
-
-        # Batch-load cached mappings
-        cached_mappings = db.get_platform_mappings_for_tracks(
-            [t.id for t in tracks], platform_name
+        plan = build_sync_plan(
+            db, playlist.id, client,
+            platform=platform_name,
+            force=getattr(args, "reconcile", False),
+            ordered_track_ids=ordered_ids,
         )
+        label = f'sync "{playlist.name}" -> {platform_name}'
 
-        canonical_platform_ids: list[str] = []
-        resolved_ids = resolved_by_platform.setdefault(platform_name, {})
-        unavailable: list[str] = []
-        held_dead: list[str] = []
+        if plan.is_empty() or not plan.actionable_changes():
+            print(f"{label}: already in sync (nothing to push).")
+            continue
 
-        for track in tracks:
-            result = reconcile_track(
-                db, track.id, client,
-                force=getattr(args, "reconcile", False),
-                cached_mapping=cached_mappings.get(track.id),
-                playlist_id=playlist.id,
-                verify_locked=getattr(args, "verify_locks", False),
-            )
-            db.save_match_audit(track.id, platform_name, result.audit)
+        if not apply_mode:
+            _write_and_report(db, plan, label, playlist.name, platform_name)
+            continue
 
-            # Resolve the effective lock once; reused for the hold guard below and
-            # the global-default guard on the success path.
-            effective_lock = db.get_effective_lock(track.id, platform_name, playlist.id)
-
-            # A locked track that resolves to "not found" must NEVER be wiped
-            # inline — that would overwrite the durable lock (id -> "") and make
-            # AC-L3's routed self-heal impossible. This covers both a freshly
-            # detected dead lock (LOCK_HELD, via --verify-locks) and a lock
-            # already held in the "unavailable, no live equivalent" state that
-            # `plan heal` produced (reason_code LOCKED). Hold it, leave the
-            # mapping intact, and omit it from this push (no silent substitute)
-            # until Alice routes/re-routes the heal.
-            if result.confidence == "not_found" and (
-                result.reason_code == ReasonCode.LOCK_HELD or effective_lock is not None
-            ):
-                held_dead.append(f"  ! {track.title} - {track.artist}")
-                continue
-
-            if result.confidence == "not_found":
-                unavailable.append(f"  ? {track.title} - {track.artist}")
-                db.upsert_platform_mapping(PlatformMapping(
-                    track_id=track.id, platform=platform_name,
-                    platform_track_id="", match_score=0,
-                    status="unavailable", user_approved=True,
-                ))
-                continue
-
-            if result.confidence == "ambiguous" and not result.from_cache:
-                if not getattr(args, "auto", False):
-                    print(f"\n  Ambiguous match for: {track.title} - {track.artist}")
-                    print(f"    Best: [{result.score}] {result.platform_track_id}")
-                    for i, alt in enumerate(result.alternatives[:3]):
-                        print(f"    {i+1}. {alt.title} - {alt.artist} ({alt.album})")
-                    choice = input("  Accept best match? [Y/n/skip] ").strip().lower()
-                    if choice in ("n", "skip"):
-                        unavailable.append(f"  ? {track.title} (skipped)")
-                        db.upsert_platform_mapping(PlatformMapping(
-                            track_id=track.id, platform=platform_name,
-                            platform_track_id="", match_score=0,
-                            status="unavailable", user_approved=True,
-                        ))
-                        continue
-
-            # Prompt for divergent matches
-            approved = True
-            if result.is_divergent and not result.from_cache:
-                if not getattr(args, "auto", False):
-                    print(f"\n  Divergent match for: {track.title} - {track.artist} ({track.album})")
-                    print(f"    Found: {result.divergence_note}")
-                    choice = input("  Accept substitute? [Y/n] ").strip().lower()
-                    if choice == "n":
-                        unavailable.append(f"  ~ {track.title} (divergent, rejected)")
-                        approved = False
-
-            if approved and result.platform_track_id:
-                canonical_platform_ids.append(result.platform_track_id)
-                resolved_ids[track.id] = result.platform_track_id
-
-            # AC-L4: a per-playlist override lock is playlist-scoped storage. Do
-            # NOT write it back into the library-wide ``platform_tracks`` default,
-            # or syncing one playlist would clobber the global default every OTHER
-            # playlist resolves against. Only the global cache is refreshed here;
-            # the playlist override row is already authoritative and untouched.
-            if (
-                effective_lock is not None
-                and effective_lock.scope == "playlist"
-                and effective_lock.platform_track_id == result.platform_track_id
-            ):
-                continue
-
-            # Persist mapping
-            db.upsert_platform_mapping(PlatformMapping(
-                track_id=track.id, platform=platform_name,
-                platform_track_id=result.platform_track_id,
-                platform_title=result.platform_title,
-                platform_artist=result.platform_artist,
-                platform_album=result.platform_album,
-                match_score=result.score,
-                is_divergent=result.is_divergent,
-                divergence_note=result.divergence_note,
-                status="matched" if not result.is_divergent else "substitute",
-                user_approved=approved,
-            ))
-
-        if unavailable:
-            print(f"\n  Unavailable ({len(unavailable)} tracks):")
-            for line in unavailable:
-                print(line)
-
-        if held_dead:
-            print(f"\n  Locked id gone — held for review ({len(held_dead)} tracks):")
-            for line in held_dead:
-                print(line)
-            print("  Route a heal to re-bind the same recording: "
-                  "tuneshift plan heal --platform " + platform_name)
-
-        # Push to platform
-        platform_playlist_id = db.get_platform_playlist_id(playlist.id, platform_name)
-        if not platform_playlist_id:
-            # Try to find or create on platform
-            existing = client.find_playlist_by_name(playlist.name)
-            if existing:
-                platform_playlist_id = existing.platform_id
-                db.link_platform_playlist(playlist.id, platform_name, platform_playlist_id)
-            else:
-                created = client.create_playlist(playlist.name, playlist.description or "")
-                platform_playlist_id = created.platform_id
-                db.link_platform_playlist(playlist.id, platform_name, platform_playlist_id)
-
-        if canonical_platform_ids:
-            try:
-                client.replace_playlist_tracks(platform_playlist_id, canonical_platform_ids)
-                print(f"  Pushed {len(canonical_platform_ids)} tracks to {platform_name}.")
-                synced_ok[platform_name] = True
-            except Exception as exc:
-                print(f"  Push to {platform_name} failed: {exc}", file=sys.stderr)
-                push_failed = True
-                synced_ok[platform_name] = False
+        rc = _apply_sync_plan(db, client, plan, platform_name, label, args)
+        if rc != 0:
+            failed = True
         else:
-            print(f"  No tracks to push to {platform_name}.")
-
-    # Auto-reorder if enabled for this playlist
-    if playlist.auto_reorder:
-        from tuneshift.sequencer import sequence_playlist
-
-        reordered = sequence_playlist(db, playlist.id, arc=playlist.reorder_arc)
-        db.set_playlist_tracks(playlist.id, reordered)
-        print(f'\n  Auto-reordered "{playlist.name}" (arc={playlist.reorder_arc})')
-
-        # Push reordered tracks only to the platforms we just synced. AC-L4: use
-        # the resolver-approved ids captured above (re-ordered), never a fresh
-        # read of the global platform_tracks table — that would resurrect a
-        # rejected substitute or ignore a per-playlist override lock.
-        reordered_tracks = db.get_playlist_tracks(playlist.id)
-        for platform_name in platforms:
-            client = _load_client(platform_name)
-            if not client or not client.load_session():
-                continue
-            platform_playlist_id = db.get_platform_playlist_id(playlist.id, platform_name)
-            if not platform_playlist_id:
-                continue
-            resolved_ids = resolved_by_platform.get(platform_name, {})
-            platform_ids = [
-                resolved_ids[t.id] for t in reordered_tracks if t.id in resolved_ids
-            ]
-            if platform_ids:
-                try:
-                    client.replace_playlist_tracks(platform_playlist_id, platform_ids)
-                    print(f"  {platform_name}: synced ({len(platform_ids)} tracks)")
-                    synced_ok[platform_name] = True
-                except Exception as exc:
-                    print(f"  {platform_name}: reorder push failed ({exc})", file=sys.stderr)
-                    push_failed = True
-                    synced_ok[platform_name] = False
-
-    # Record the synced marker only for platforms whose push actually succeeded.
-    for platform_name, ok in synced_ok.items():
-        if ok:
+            applied_any = True
             db.mark_playlist_synced(playlist.id, platform_name)
 
-    return 1 if push_failed else 0
+    # Persist the durable local reorder only after a successful --apply, matching
+    # the previous inline "auto-reorder sticks on sync" behaviour. Plan-only runs
+    # never mutate local order.
+    if apply_mode and applied_any and ordered_ids is not None:
+        db.set_playlist_tracks(playlist.id, ordered_ids)
+        print(f'  Auto-reordered "{playlist.name}" (arc={playlist.reorder_arc})')
+
+    return 1 if failed else 0
+
+
+def _arc_order(db: Database, playlist) -> list[int]:
+    """Compute the auto-reorder arc order READ-ONLY (no local mutation)."""
+    from tuneshift.sequencer import sequence_playlist
+
+    return sequence_playlist(db, playlist.id, arc=playlist.reorder_arc)
+
+
+def _write_and_report(db: Database, plan: Plan, label: str,
+                      playlist_name: str, platform_name: str) -> None:
+    """Write the plan and print review/apply guidance (AC-P1, applies nothing)."""
+    path = write_plan(db.path, plan)
+    n = len(plan.actionable_changes())
+    print(f"{label}: wrote plan {plan.plan_id} ({n} push).")
+    print(f"  file: {path}")
+    print(f"  review: tuneshift plan show {plan.plan_id}")
+    print(f"  apply:  tuneshift plan apply {plan.plan_id}")
+    print(f'          (or: tuneshift sync "{playlist_name}" {platform_name} --apply)')
+
+
+def _apply_sync_plan(db: Database, client, plan: Plan, platform_name: str,
+                     label: str, args) -> int:
+    """Apply a sync plan's remote push in one step (``--apply``)."""
+    if getattr(args, "interactive", False):
+        for change in plan.actionable_changes(include_locked=True):
+            print(_describe_push(change))
+            if input("  Apply this push? [Y/n] ").strip().lower() in ("n", "no"):
+                change.status = "rejected"
+
+    executor = make_sync_executor(db, client, platform=platform_name)
+    report = apply_plan(db, plan, remote_executor=executor)
+    write_plan(db.path, plan)
+
+    if report.failed:
+        for err in report.errors:
+            print(f"  error: {err}", file=sys.stderr)
+        print(f"{label}: push failed "
+              f"(applied {report.applied}, failed {report.failed}).", file=sys.stderr)
+        return 1
+    if report.applied:
+        print(f"{label}: applied ({report.applied} push).")
+    else:
+        print(f"{label}: nothing applied (skipped {report.skipped}).")
+    return 0
+
+
+def _describe_push(change: PlanChange) -> str:
+    proposed = change.proposed or {}
+    ids = proposed.get("track_ids") or []
+    return f"  #{change.change_id} push {len(ids)} tracks to {proposed.get('platform')}"

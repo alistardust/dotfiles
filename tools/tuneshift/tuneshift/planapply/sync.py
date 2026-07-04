@@ -39,6 +39,16 @@ def _playlist_meta(db: Database, playlist_id: int) -> tuple[str, str]:
     return row["name"], (row["description"] or "")
 
 
+def _reorder_tracks(tracks: list, ordered_track_ids: list[int]) -> list:
+    """Return ``tracks`` in the given id order; unlisted tracks keep their tail
+    position so a partial order override never drops a track from the push."""
+    by_id = {t.id: t for t in tracks}
+    ordered = [by_id[tid] for tid in ordered_track_ids if tid in by_id]
+    seen = {t.id for t in ordered}
+    ordered.extend(t for t in tracks if t.id not in seen)
+    return ordered
+
+
 def _remote_ids(client: MusicPlatformClient, platform_playlist_id: str) -> list[str] | None:
     try:
         return [t.platform_id for t in client.get_playlist_tracks(platform_playlist_id)]
@@ -53,6 +63,7 @@ def build_sync_plan(
     *,
     platform: str = "tidal",
     force: bool = False,
+    ordered_track_ids: list[int] | None = None,
 ) -> Plan:
     """Plan the forward-only remote push of a playlist's reconciled track list.
 
@@ -61,9 +72,16 @@ def build_sync_plan(
     (matching today's "unavailable tracks aren't pushed" behavior) rather than
     silently dropped from the library. If the remote already holds exactly the
     proposed ids, the plan is a no-op (AC-P4 idempotency).
+
+    ``ordered_track_ids`` optionally overrides the push ORDER (e.g. an
+    auto-reorder arc computed read-only by the caller); it never mutates local
+    playlist order. Unlisted tracks keep their playlist position after the listed
+    ones so nothing is silently dropped.
     """
     name, description = _playlist_meta(db, playlist_id)
     tracks = db.get_playlist_tracks(playlist_id)
+    if ordered_track_ids is not None:
+        tracks = _reorder_tracks(tracks, ordered_track_ids)
     cached = db.get_platform_mappings_for_tracks([t.id for t in tracks], platform)
 
     push_ids: list[str] = []
@@ -102,8 +120,14 @@ def build_sync_plan(
         provenance="sync",
         change_id=1,
     )
+    # Never wipe a remote playlist just because nothing resolved this run: an
+    # all-unavailable result is a no-op, not a destructive empty push. (A playlist
+    # with no local tracks is short-circuited by the caller before we get here, so
+    # an empty push here always means "resolution found nothing to push".)
+    if not push_ids:
+        change.status = "skipped"
     # Idempotent no-op: the remote already holds exactly what we would push.
-    if prior_ids is not None and prior_ids == push_ids:
+    elif prior_ids is not None and prior_ids == push_ids:
         change.status = "skipped"
 
     return Plan(
