@@ -320,6 +320,50 @@ CREATE TABLE IF NOT EXISTS artist_aliases (
     PRIMARY KEY (class_id, member)
 );
 CREATE INDEX IF NOT EXISTS idx_artist_aliases_norm ON artist_aliases(norm_member);
+
+CREATE TABLE IF NOT EXISTS resolution_queue (
+    track_id INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
+    state TEXT NOT NULL DEFAULT 'pending',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at TEXT,
+    last_error TEXT,
+    enqueued_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_resolution_queue_state
+    ON resolution_queue(state, next_attempt_at);
+
+CREATE TABLE IF NOT EXISTS track_candidates (
+    track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+    platform TEXT NOT NULL,
+    platform_track_id TEXT NOT NULL,
+    captured_metadata TEXT,
+    fetched_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (track_id, platform, platform_track_id)
+);
+
+CREATE TABLE IF NOT EXISTS playlist_track_mappings (
+    playlist_id INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+    track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+    platform TEXT NOT NULL,
+    platform_track_id TEXT NOT NULL,
+    source TEXT,
+    user_approved INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (playlist_id, track_id, platform)
+);
+
+CREATE TABLE IF NOT EXISTS playlist_track_prefs (
+    playlist_id INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+    track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+    criterion TEXT NOT NULL,
+    strength TEXT NOT NULL,
+    target TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (playlist_id, track_id, criterion)
+);
 """
 
 _REMIX_RE = re.compile(r"\s*\((?:remaster(?:ed)?|deluxe edition)[^)]*\)\s*", re.IGNORECASE)
@@ -1802,6 +1846,200 @@ class Database:
                 f"UPDATE tracks SET {', '.join(set_clauses)} WHERE id = ?",
                 (*params, track_id),
             )
+
+    # --- resolution_queue (spec §4.1a: resumable enrich/resolve worker) ---
+
+    def enqueue_resolution(self, track_id: int, next_attempt_at: str | None = None) -> None:
+        """Enqueue a track for resolution/enrichment. Idempotent per track."""
+        with self.conn:
+            self.conn.execute(
+                """INSERT INTO resolution_queue (track_id, state, next_attempt_at)
+                   VALUES (?, 'pending', ?)
+                   ON CONFLICT(track_id) DO NOTHING""",
+                (track_id, next_attempt_at),
+            )
+
+    def next_pending_resolution(self) -> int | None:
+        """Return the next track_id whose resolution work is due, or None.
+
+        Due means state='pending' and (no backoff set, or backoff has elapsed).
+        Ordered by enqueue time so the queue drains FIFO.
+        """
+        row = self.conn.execute(
+            """SELECT track_id FROM resolution_queue
+               WHERE state = 'pending'
+                 AND (next_attempt_at IS NULL OR next_attempt_at <= datetime('now'))
+               ORDER BY enqueued_at
+               LIMIT 1"""
+        ).fetchone()
+        return int(row["track_id"]) if row else None
+
+    def set_resolution_state(
+        self,
+        track_id: int,
+        state: str,
+        *,
+        last_error: str | None = None,
+        next_attempt_at: str | None = None,
+        increment_attempts: bool = False,
+    ) -> None:
+        """Update a queued track's resolution state (and optional backoff/error)."""
+        set_clauses = ["state = ?", "last_error = ?", "updated_at = datetime('now')"]
+        params: list[Any] = [state, last_error]
+        if next_attempt_at is not None:
+            set_clauses.append("next_attempt_at = ?")
+            params.append(next_attempt_at)
+        if increment_attempts:
+            set_clauses.append("attempts = attempts + 1")
+        with self.conn:
+            self.conn.execute(
+                f"UPDATE resolution_queue SET {', '.join(set_clauses)} WHERE track_id = ?",
+                (*params, track_id),
+            )
+
+    # --- track_candidates (spec §4.1a: hydrated top-N platform candidates) ---
+
+    def upsert_track_candidate(
+        self,
+        track_id: int,
+        platform: str,
+        platform_track_id: str,
+        captured_metadata: dict[str, Any] | None,
+    ) -> None:
+        """Insert or update a hydrated platform candidate for a track."""
+        payload = json.dumps(captured_metadata) if captured_metadata is not None else None
+        with self.conn:
+            self.conn.execute(
+                """INSERT INTO track_candidates
+                       (track_id, platform, platform_track_id, captured_metadata, fetched_at)
+                   VALUES (?, ?, ?, ?, datetime('now'))
+                   ON CONFLICT(track_id, platform, platform_track_id)
+                   DO UPDATE SET captured_metadata = excluded.captured_metadata,
+                                 fetched_at = excluded.fetched_at""",
+                (track_id, platform, platform_track_id, payload),
+            )
+
+    def get_track_candidates(
+        self, track_id: int, platform: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Return hydrated candidates for a track, optionally filtered by platform."""
+        query = "SELECT * FROM track_candidates WHERE track_id = ?"
+        params: list[Any] = [track_id]
+        if platform is not None:
+            query += " AND platform = ?"
+            params.append(platform)
+        query += " ORDER BY platform, platform_track_id"
+        rows = self.conn.execute(query, params).fetchall()
+        result = []
+        for row in rows:
+            result.append(
+                {
+                    "track_id": row["track_id"],
+                    "platform": row["platform"],
+                    "platform_track_id": row["platform_track_id"],
+                    "captured_metadata": (
+                        json.loads(row["captured_metadata"])
+                        if row["captured_metadata"]
+                        else None
+                    ),
+                    "fetched_at": row["fetched_at"],
+                }
+            )
+        return result
+
+    # --- playlist_track_mappings (spec §4.1a: per-playlist release override) ---
+
+    def set_playlist_track_mapping(
+        self,
+        playlist_id: int,
+        track_id: int,
+        platform: str,
+        platform_track_id: str,
+        *,
+        source: str | None = None,
+        user_approved: bool = False,
+    ) -> None:
+        """Set the per-playlist platform release for a track (upsert on PK)."""
+        with self.conn:
+            self.conn.execute(
+                """INSERT INTO playlist_track_mappings
+                       (playlist_id, track_id, platform, platform_track_id,
+                        source, user_approved, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+                   ON CONFLICT(playlist_id, track_id, platform)
+                   DO UPDATE SET platform_track_id = excluded.platform_track_id,
+                                 source = excluded.source,
+                                 user_approved = excluded.user_approved,
+                                 updated_at = excluded.updated_at""",
+                (
+                    playlist_id,
+                    track_id,
+                    platform,
+                    platform_track_id,
+                    source,
+                    1 if user_approved else 0,
+                ),
+            )
+
+    def get_playlist_track_mapping(
+        self, playlist_id: int, track_id: int, platform: str
+    ) -> dict[str, Any] | None:
+        """Return the per-playlist release override for a track, or None."""
+        row = self.conn.execute(
+            """SELECT * FROM playlist_track_mappings
+               WHERE playlist_id = ? AND track_id = ? AND platform = ?""",
+            (playlist_id, track_id, platform),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "playlist_id": row["playlist_id"],
+            "track_id": row["track_id"],
+            "platform": row["platform"],
+            "platform_track_id": row["platform_track_id"],
+            "source": row["source"],
+            "user_approved": bool(row["user_approved"]),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+
+    # --- playlist_track_prefs (spec §4.1a: most-specific preference scope) ---
+
+    def set_playlist_track_pref(
+        self,
+        playlist_id: int,
+        track_id: int,
+        criterion: str,
+        strength: str,
+        target: str | None = None,
+    ) -> None:
+        """Set a playlist+track+criterion preference (upsert on PK)."""
+        with self.conn:
+            self.conn.execute(
+                """INSERT INTO playlist_track_prefs
+                       (playlist_id, track_id, criterion, strength, target, updated_at)
+                   VALUES (?, ?, ?, ?, ?, datetime('now'))
+                   ON CONFLICT(playlist_id, track_id, criterion)
+                   DO UPDATE SET strength = excluded.strength,
+                                 target = excluded.target,
+                                 updated_at = excluded.updated_at""",
+                (playlist_id, track_id, criterion, strength, target),
+            )
+
+    def get_playlist_track_prefs(
+        self, playlist_id: int, track_id: int
+    ) -> list[dict[str, Any]]:
+        """Return all playlist+track-scoped preferences for a track."""
+        rows = self.conn.execute(
+            """SELECT criterion, strength, target FROM playlist_track_prefs
+               WHERE playlist_id = ? AND track_id = ?
+               ORDER BY criterion""",
+            (playlist_id, track_id),
+        ).fetchall()
+        return [
+            {"criterion": r["criterion"], "strength": r["strength"], "target": r["target"]}
+            for r in rows
+        ]
 
     def update_track_metadata(self, track_id: int, meta: dict) -> None:
         """Update a track's audio metadata fields from enrichment data."""
