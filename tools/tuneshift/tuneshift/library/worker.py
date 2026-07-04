@@ -27,6 +27,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from tuneshift.db import Database
+from tuneshift.identity.models import ConfidenceTier
 from tuneshift.models import Track
 
 logger = logging.getLogger(__name__)
@@ -99,6 +100,34 @@ class ResolutionWorker:
                 resolved += 1
         return resolved
 
+    def resolve_tracks(self, track_ids: Sequence[int], *, force: bool = False) -> int:
+        """Resolve a specific set of tracks now, in order.
+
+        Unlike :meth:`drain` (which processes the whole due backlog FIFO), this
+        resolves exactly the requested tracks so a scoped ``resolve <playlist>``
+        or ``resolve --track`` never touches unrelated queued work. Each track is
+        (re-)enqueued first so a prior quarantine is reopened (a user asking to
+        resolve is a retry signal), then resolved immediately regardless of
+        backoff — the backoff timer only governs the unattended drain loop.
+
+        Already-``resolved`` tracks are skipped unless ``force`` is set, so a
+        routine re-run is cheap and never needlessly re-hits the network.
+        Returns the number of tracks successfully resolved this call.
+        """
+        resolved = 0
+        for track_id in track_ids:
+            state = self._db.get_resolution_queue_state(track_id)
+            if state == "resolved" and not force:
+                continue
+            self.enqueue(track_id)
+            if force:
+                # enqueue only reopens quarantined rows; force a resolved row
+                # back to pending so it is actually re-resolved.
+                self._db.set_resolution_state(track_id, "pending", last_error=None)
+            if self._resolve_one(track_id):
+                resolved += 1
+        return resolved
+
     def _resolve_one(self, track_id: int) -> bool:
         """Resolve a single track. Returns True only on success."""
         track = self._db.get_track(track_id)
@@ -134,10 +163,18 @@ class ResolutionWorker:
             self._quarantine(track_id, "no_candidate: no platform match found")
             return False
 
+        candidates = list(candidates)
         for cand in candidates:
             self._db.upsert_track_candidate(
                 track_id, cand.platform, cand.platform_track_id, cand.metadata
             )
+        # Hydrate the track's core identity metadata from the best candidate
+        # (candidates are returned best-match first). Fill-NULL semantics live in
+        # the DB method, so a prior user edit is never clobbered and re-resolving
+        # is idempotent. This is what makes "resolved" mean populated, not just
+        # tagged (spec AC-D2 — the gap Alice found: tier=CONFIRMED but isrc/
+        # duration/album all NULL).
+        self._hydrate_track(track_id, candidates[0])
         self._db.set_resolution_state(track_id, "resolved", last_error=None)
         # Clear any prior quarantine now that the track resolved.
         if track.quarantine_state:
@@ -157,6 +194,32 @@ class ResolutionWorker:
                     exc_info=True,
                 )
         return True
+
+    def _hydrate_track(self, track_id: int, candidate: ResolvedCandidate) -> None:
+        """Promote the best candidate's core metadata onto the track.
+
+        Delegates the fill-NULL / provenance bookkeeping to
+        :meth:`Database.hydrate_identity_metadata`; here we just translate the
+        candidate's captured metadata into that call and derive a confidence
+        tier from the resolver's match score.
+        """
+        meta = candidate.metadata or {}
+        match_score = meta.get("match_score")
+        confidence_tier: str | None = None
+        confidence_score: float | None = None
+        if isinstance(match_score, (int, float)):
+            confidence_score = max(0.0, min(1.0, match_score / 100.0))
+            confidence_tier = ConfidenceTier.from_score(confidence_score).value
+
+        self._db.hydrate_identity_metadata(
+            track_id,
+            isrc=meta.get("isrc"),
+            duration_seconds=meta.get("duration_seconds"),
+            album=meta.get("album"),
+            confidence_tier=confidence_tier,
+            confidence_score=confidence_score,
+            source="resolver",
+        )
 
     def _handle_failure(self, track_id: int, exc: Exception) -> bool:
         """Retry a hard failure with backoff; quarantine once retries exhaust."""

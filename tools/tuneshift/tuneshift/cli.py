@@ -99,12 +99,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_pin.add_argument("--list", action="store_true", dest="list_pins", help="Show current pins")
 
     # resolve
-    p_resolve = sub.add_parser("resolve", help="Resolve track identity via MusicBrainz/Discogs")
+    p_resolve = sub.add_parser("resolve", help="Resolve tracks to platform candidates + hydrate metadata")
     p_resolve.add_argument("playlist", nargs="?", help="Playlist name to resolve")
     p_resolve.add_argument("--track", nargs=2, metavar=("TITLE", "ARTIST"), help="Resolve single track")
     p_resolve.add_argument("--all", action="store_true", help="Resolve all unresolved tracks")
+    p_resolve.add_argument("--platform", default="tidal", help="Platform to resolve against (default: tidal)")
     p_resolve.add_argument("--upgrade", action="store_true", help="Re-resolve tracks below CONFIRMED")
-    p_resolve.add_argument("--force", action="store_true", help="Re-resolve all tracks (requires --upgrade)")
+    p_resolve.add_argument("--force", action="store_true", help="Re-resolve tracks already resolved")
     p_resolve.add_argument("--status", action="store_true", help="Show resolution statistics")
     p_resolve.add_argument("--verbose", "-v", action="store_true", help="Show skipped tracks")
 

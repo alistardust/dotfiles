@@ -660,6 +660,65 @@ def _alias_expanded_candidates(
     return results
 
 
+def gather_candidates(
+    track,
+    client,
+    resolver: AliasResolver,
+    *,
+    prefer_classes: frozenset[str] | set[str] | None = None,
+    avoid_classes: frozenset[str] | set[str] | None = None,
+) -> tuple[list[TrackResult], dict[str, str]]:
+    """Run the multi-strategy platform search and return deduped candidates.
+
+    This is the single candidate-discovery pass shared by ``reconcile_track``
+    (which then scores + selects a winner) and the library-first resolver
+    (which persists the top-N for later scoring). Keeping one implementation
+    guarantees selection and resolution see the *same* candidate set — a
+    prerequisite for AC-X3 (selection reads persisted candidates, not a
+    divergent live search) and plan reproducibility (AC-P4).
+
+    Returns ``(candidates, strategy_by_platform_id)`` in discovery order.
+    """
+    prefer_classes = prefer_classes or frozenset()
+    avoid_classes = avoid_classes or frozenset()
+
+    all_candidates: list[TrackResult] = []
+    candidate_strategies: dict[str, str] = {}  # platform_id -> strategy_name
+    seen_ids: set[str] = set()
+
+    for strategy_fn, threshold in _STRATEGIES:
+        new_candidates = strategy_fn(track, client)
+        strategy_name = strategy_fn.__name__.replace("_strategy_", "")
+        for c in new_candidates:
+            if c.platform_id not in seen_ids:
+                seen_ids.add(c.platform_id)
+                all_candidates.append(c)
+                candidate_strategies[c.platform_id] = strategy_name
+
+        # Short-circuit: only on ISRC match (score 100). Never short-circuit
+        # on text matches because a later strategy might find a better version.
+        if threshold is not None and threshold >= 100 and all_candidates:
+            top_score = _quick_top_score(
+                track, all_candidates, prefer=prefer_classes, avoid=avoid_classes,
+                resolver=resolver,
+            )
+            if top_score >= threshold:
+                break
+
+    # Alias-expanded retrieval: for an artist in an alias class, query each
+    # equivalent surface spelling so a track indexed under a variant (e.g. the
+    # platform lists "98\u00ba" while the source says "98 Degrees") still
+    # surfaces. Runs once, after the cascade, and is a no-op for non-aliased
+    # artists (zero extra API calls).
+    for c in _alias_expanded_candidates(track, client, resolver):
+        if c.platform_id not in seen_ids:
+            seen_ids.add(c.platform_id)
+            all_candidates.append(c)
+            candidate_strategies[c.platform_id] = "alias_expansion"
+
+    return all_candidates, candidate_strategies
+
+
 def _fingerprint_for_track(track, mapping: PlatformMapping) -> TrackFingerprint:
     """Resolve the target fingerprint for a locked mapping.
 
@@ -1022,40 +1081,12 @@ def reconcile_track(
     # aliased artist scores and is retrieved under every equivalent surface form.
     resolver = build_alias_resolver(db)
 
-    # Multi-strategy candidate collection with strategy tracking
-    all_candidates: list[TrackResult] = []
-    candidate_strategies: dict[str, str] = {}  # platform_id -> strategy_name
-    seen_ids: set[str] = set()
-
-    for strategy_fn, threshold in _STRATEGIES:
-        new_candidates = strategy_fn(track, client)
-        strategy_name = strategy_fn.__name__.replace("_strategy_", "")
-        for c in new_candidates:
-            if c.platform_id not in seen_ids:
-                seen_ids.add(c.platform_id)
-                all_candidates.append(c)
-                candidate_strategies[c.platform_id] = strategy_name
-
-        # Short-circuit: only on ISRC match (score 100). Never short-circuit
-        # on text matches because a later strategy might find a better version.
-        if threshold is not None and threshold >= 100 and all_candidates:
-            top_score = _quick_top_score(
-                track, all_candidates, prefer=prefer_classes, avoid=avoid_classes,
-                resolver=resolver,
-            )
-            if top_score >= threshold:
-                break
-
-    # Alias-expanded retrieval: for an artist in an alias class, query each
-    # equivalent surface spelling so a track indexed under a variant (e.g. the
-    # platform lists "98\u00ba" while the source says "98 Degrees") still
-    # surfaces. Runs once, after the cascade, and is a no-op for non-aliased
-    # artists (zero extra API calls).
-    for c in _alias_expanded_candidates(track, client, resolver):
-        if c.platform_id not in seen_ids:
-            seen_ids.add(c.platform_id)
-            all_candidates.append(c)
-            candidate_strategies[c.platform_id] = "alias_expansion"
+    # Multi-strategy candidate collection (shared with the library-first
+    # resolver via gather_candidates so both see an identical candidate set).
+    all_candidates, candidate_strategies = gather_candidates(
+        track, client, resolver,
+        prefer_classes=prefer_classes, avoid_classes=avoid_classes,
+    )
 
     if not all_candidates:
         audit = _build_audit(

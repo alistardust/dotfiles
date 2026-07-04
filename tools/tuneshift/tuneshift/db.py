@@ -2031,6 +2031,18 @@ class Database:
                 (track_id,),
             )
 
+    def get_resolution_queue_state(self, track_id: int) -> str | None:
+        """Return the resolution_queue state for a track, or None if unqueued.
+
+        Distinct from :meth:`get_resolution_state` (which reads the track's
+        identity confidence): this reflects the worker's queue lifecycle
+        (pending/resolved/quarantined) that drives the drain loop and coverage.
+        """
+        row = self.conn.execute(
+            "SELECT state FROM resolution_queue WHERE track_id = ?", (track_id,)
+        ).fetchone()
+        return row["state"] if row else None
+
     def next_pending_resolution(self) -> int | None:
         """Return the next track_id whose resolution work is due, or None.
 
@@ -2127,6 +2139,95 @@ class Database:
                 }
             )
         return result
+
+    def hydrate_identity_metadata(
+        self,
+        track_id: int,
+        *,
+        isrc: str | None = None,
+        duration_seconds: int | None = None,
+        album: str | None = None,
+        confidence_tier: str | None = None,
+        confidence_score: float | None = None,
+        mb_recording_id: str | None = None,
+        mb_release_group_id: str | None = None,
+        source: str = "resolver",
+    ) -> dict[str, Any]:
+        """Promote a resolved candidate's core identity metadata onto the track.
+
+        This is the single source of truth for turning a "resolved" verdict into
+        populated ``tracks`` columns (spec AC-D2). It is deliberately conservative:
+
+        * ``isrc``/``duration_seconds``/``album`` use **fill-NULL** semantics —
+          a field is written only when the track's current value is NULL/empty,
+          so a prior user edit or an earlier higher-signal hydration is never
+          clobbered. Idempotent: re-running promotes nothing new.
+        * ``confidence_tier``/``confidence_score`` and the MusicBrainz ids are the
+          resolver's to own, so they are updated whenever provided, and
+          ``resolved_at`` is stamped so the track drops out of ``find_unresolved``.
+
+        Provenance for each *newly filled* column is recorded in
+        ``field_provenance`` (AC-D4) so downstream passes can see the source.
+        Returns the map of columns actually written (empty when a no-op).
+        """
+        row = self.conn.execute(
+            "SELECT isrc, duration_seconds, album, field_provenance "
+            "FROM tracks WHERE id = ?",
+            (track_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"Track id not found: {track_id}")
+
+        written: dict[str, Any] = {}
+        # Fill-NULL only: never overwrite a value the track already holds.
+        if isrc and not row["isrc"]:
+            written["isrc"] = isrc
+        if duration_seconds and not row["duration_seconds"]:
+            written["duration_seconds"] = duration_seconds
+        if album and not row["album"]:
+            written["album"] = album
+            written["norm_album"] = normalize_title(album)
+
+        provenance = json.loads(row["field_provenance"]) if row["field_provenance"] else {}
+        now = datetime.now(timezone.utc).isoformat()
+        for column in written:
+            if column == "norm_album":
+                continue
+            provenance[column] = {"source": source, "at": now}
+
+        set_clauses: list[str] = [f"{col} = ?" for col in written]
+        params: list[Any] = list(written.values())
+
+        # Resolution owns identity confidence + MB linkage; refresh when provided.
+        if confidence_tier is not None:
+            set_clauses.append("confidence_tier = ?")
+            params.append(confidence_tier)
+        if confidence_score is not None:
+            set_clauses.append("confidence_score = ?")
+            params.append(confidence_score)
+        if mb_recording_id is not None:
+            set_clauses.append("mb_recording_id = ?")
+            params.append(mb_recording_id)
+        if mb_release_group_id is not None:
+            set_clauses.append("mb_release_group_id = ?")
+            params.append(mb_release_group_id)
+
+        if not set_clauses:
+            return {}
+
+        if confidence_tier is not None or confidence_score is not None:
+            set_clauses.append("resolved_at = ?")
+            params.append(now)
+        set_clauses.append("field_provenance = ?")
+        params.append(json.dumps(provenance))
+        set_clauses.append("updated_at = datetime('now')")
+
+        with self.conn:
+            self.conn.execute(
+                f"UPDATE tracks SET {', '.join(set_clauses)} WHERE id = ?",
+                (*params, track_id),
+            )
+        return written
 
     # --- apply_journal (spec §7, AC-P4: reversible plan/apply) ---
 
