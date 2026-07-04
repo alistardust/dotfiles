@@ -2441,6 +2441,19 @@ class Database:
             for r in rows
         ]
 
+    def remove_playlist_track_pref(
+        self, playlist_id: int, track_id: int, criterion: str
+    ) -> bool:
+        """Delete a playlist+track+criterion preference. Returns True if a row
+        was removed (False when nothing matched)."""
+        with self.conn:
+            cur = self.conn.execute(
+                """DELETE FROM playlist_track_prefs
+                   WHERE playlist_id = ? AND track_id = ? AND criterion = ?""",
+                (playlist_id, track_id, criterion),
+            )
+        return cur.rowcount > 0
+
     def update_track_metadata(self, track_id: int, meta: dict) -> None:
         """Update a track's audio metadata fields from enrichment data."""
         # Remap LLM field name to internal field name

@@ -237,14 +237,38 @@ def build_parser() -> argparse.ArgumentParser:
     p_curate.add_argument("--hard-limit", type=int, help="Hard limit track count")
 
     # prefs
-    p_prefs = sub.add_parser("prefs", help="Manage version preferences (global/playlist/track)")
-    p_prefs.add_argument("action", choices=["show", "set", "clear"], help="Show, set or clear preferences")
-    p_prefs.add_argument("key", nargs="?", help="Preference key (version.<field>)")
-    p_prefs.add_argument("value", nargs="?", help="Value to set (comma-list for prefer/avoid)")
-    prefs_scope = p_prefs.add_mutually_exclusive_group()
-    prefs_scope.add_argument("--global", dest="global_scope", action="store_true", help="Target global defaults (default)")
-    prefs_scope.add_argument("--playlist", help="Target a playlist by name")
-    prefs_scope.add_argument("--track", type=int, help="Target a track by id")
+    p_prefs = sub.add_parser(
+        "prefs",
+        help="Manage version preferences (typed criterion/strength/target at "
+             "global/playlist/playlist-track scope)",
+    )
+    p_prefs.add_argument(
+        "action", choices=["show", "set", "unset", "list", "clear"],
+        help="set/unset/list typed prefs; show/clear the legacy keyword model",
+    )
+    p_prefs.add_argument(
+        "key", nargs="?",
+        help="criterion axis (spatial/mix/fidelity/performance/content/edit/"
+             "production) — or legacy version.<field>",
+    )
+    p_prefs.add_argument(
+        "value", nargs="?",
+        help="strength (require/prefer/avoid/forbid) — or legacy value",
+    )
+    p_prefs.add_argument(
+        "target", nargs="?",
+        help="target token for a typed pref (e.g. atmos, live, remaster)",
+    )
+    p_prefs.add_argument(
+        "--global", dest="global_scope", action="store_true",
+        help="Target global defaults (default when no scope flag is given)",
+    )
+    p_prefs.add_argument("--playlist", help="Target a playlist by name")
+    p_prefs.add_argument(
+        "--track", type=int,
+        help="Target a track (typed prefs: combine with --playlist for "
+             "playlist-track scope)",
+    )
 
     # alias
     p_alias = sub.add_parser(
