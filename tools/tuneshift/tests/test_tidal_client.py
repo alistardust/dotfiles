@@ -40,6 +40,9 @@ def test_search_track_wraps_platform_ids_as_strings() -> None:
     track.available = None
     track.premium_streaming_only = False
     track.pay_to_stream = False
+    track.tidal_release_date = None
+    track.release_date = None
+    track.album.release_date = None
     client._session.search.return_value = {"tracks": [track]}
 
     results = client.search_track("Life on Mars?")
