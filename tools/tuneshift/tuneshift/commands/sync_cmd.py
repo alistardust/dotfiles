@@ -50,6 +50,12 @@ def _sync_one(db, playlist, platforms, args) -> int:
 
     push_failed = False
     synced_ok: dict[str, bool] = {}
+    # The exact release ids the resolver approved for THIS playlist, per platform,
+    # keyed by track. AC-L4: the auto-reorder re-push mirrors this resolved set
+    # (re-ordered) rather than independently re-reading the global platform_tracks
+    # table, so a rejected substitute / a per-playlist override lock is never
+    # bypassed on the second push.
+    resolved_by_platform: dict[str, dict[int, str]] = {}
 
     for platform_name in platforms:
         client = _load_client(platform_name)
@@ -68,6 +74,7 @@ def _sync_one(db, playlist, platforms, args) -> int:
         )
 
         canonical_platform_ids: list[str] = []
+        resolved_ids = resolved_by_platform.setdefault(platform_name, {})
         unavailable: list[str] = []
 
         for track in tracks:
@@ -118,6 +125,7 @@ def _sync_one(db, playlist, platforms, args) -> int:
 
             if approved and result.platform_track_id:
                 canonical_platform_ids.append(result.platform_track_id)
+                resolved_ids[track.id] = result.platform_track_id
 
             # Persist mapping
             db.upsert_platform_mapping(PlatformMapping(
@@ -171,7 +179,10 @@ def _sync_one(db, playlist, platforms, args) -> int:
         db.set_playlist_tracks(playlist.id, reordered)
         print(f'\n  Auto-reordered "{playlist.name}" (arc={playlist.reorder_arc})')
 
-        # Push reordered tracks only to the platforms we just synced
+        # Push reordered tracks only to the platforms we just synced. AC-L4: use
+        # the resolver-approved ids captured above (re-ordered), never a fresh
+        # read of the global platform_tracks table — that would resurrect a
+        # rejected substitute or ignore a per-playlist override lock.
         reordered_tracks = db.get_playlist_tracks(playlist.id)
         for platform_name in platforms:
             client = _load_client(platform_name)
@@ -180,14 +191,10 @@ def _sync_one(db, playlist, platforms, args) -> int:
             platform_playlist_id = db.get_platform_playlist_id(playlist.id, platform_name)
             if not platform_playlist_id:
                 continue
-            platform_ids = []
-            mappings = db.get_platform_mappings_for_tracks(
-                [t.id for t in reordered_tracks], platform_name
-            )
-            for t in reordered_tracks:
-                m = mappings.get(t.id)
-                if m and m.platform_track_id:
-                    platform_ids.append(m.platform_track_id)
+            resolved_ids = resolved_by_platform.get(platform_name, {})
+            platform_ids = [
+                resolved_ids[t.id] for t in reordered_tracks if t.id in resolved_ids
+            ]
             if platform_ids:
                 try:
                     client.replace_playlist_tracks(platform_playlist_id, platform_ids)
