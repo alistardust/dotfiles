@@ -29,6 +29,17 @@ from tuneshift.matching import (
     scoring_intent,
 )
 from tuneshift.matching.aliases import AliasResolver
+from tuneshift.matching.criteria import Strength, load_token_whitelist
+from tuneshift.matching.registry import (
+    STRUCTURED_AXIS_FIELDS,
+    PreferenceSpec,
+    resolve_active_preferences,
+)
+from tuneshift.matching.selection import (
+    AMBIGUITY_DELTA,
+    ActivePreference,
+    select_version,
+)
 from tuneshift.models import AlbumResult, ArtistResult, PlatformMapping, TrackResult
 
 logger = logging.getLogger(__name__)
@@ -102,6 +113,39 @@ def _candidate_blocked(result: TrackResult) -> str | None:
     if available is False:
         return ReasonCode.BLOCKED_IN_MARKET
     return None
+
+
+def _typed_active_prefs(prefs, resolver: AliasResolver | None = None) -> list[ActivePreference]:
+    """Bridge free-text audio-format preferences onto the engine's typed criteria.
+
+    A stored ``prefer atmos`` / ``prefer hi-res`` (whatever surface form) becomes
+    a real :class:`~tuneshift.matching.selection.ActivePreference` on the
+    ``spatial`` / ``mix`` / ``fidelity`` axes, so the two-phase engine actually
+    selects the Atmos (or hi-res) release from a playlist's preferences (AC-S5),
+    rather than the axis being dead config.
+
+    Only the STRUCTURED audio axes are bridged here. Recording-class, lyric and
+    edition tokens (live/remix/clean/deluxe/...) are already applied through
+    ``prefer_classes``/``avoid_classes`` in the base scorer; forwarding them again
+    as typed criteria would double-count them.
+    """
+    if prefs.is_default():
+        return []
+    whitelist = load_token_whitelist()
+    specs: list[PreferenceSpec] = []
+    for token in prefs.prefer:
+        if whitelist.axis(token) in STRUCTURED_AXIS_FIELDS:
+            specs.append(
+                PreferenceSpec(axis=whitelist.axis(token), target=token, strength=Strength.PREFER)
+            )
+    for token in prefs.avoid:
+        if whitelist.axis(token) in STRUCTURED_AXIS_FIELDS:
+            specs.append(
+                PreferenceSpec(axis=whitelist.axis(token), target=token, strength=Strength.AVOID)
+            )
+    if not specs:
+        return []
+    return resolve_active_preferences(specs, whitelist=whitelist)
 
 
 def _build_audit(
@@ -726,8 +770,8 @@ def reconcile_track(
 
     # Score all candidates uniformly
     all_durations = [r.duration_seconds for r in all_candidates if r.duration_seconds]
-    scored: list[tuple[int, int, TrackResult]] = []  # (score, edition_penalty, result)
-    for r in all_candidates:
+
+    def _int_score(r: TrackResult) -> int:
         s = score_match_with_version(
             track.title, track.artist, track.album,
             r.title, r.artist, r.album,
@@ -738,37 +782,116 @@ def reconcile_track(
             avoid=avoid_classes,
             alias_resolver=resolver,
         )
-        s = min(100, s + duration_proximity_bonus(r.duration_seconds, track.duration_seconds))
-        ed = edition_cost(r.album or "")
-        scored.append((s, ed, r))
+        return min(100, s + duration_proximity_bonus(r.duration_seconds, track.duration_seconds))
 
-    # Sort by score descending, then by edition preference (standard preferred).
-    # Per-playlist preferences bias only the ordering; the reported score and
-    # confidence are untouched. With default preferences the bias is 0, so the
-    # ordering is byte-identical to the pre-preferences behaviour.
-    scored.sort(
-        key=lambda x: (
-            -(x[0] + preference_sort_bias(x[2].album or "", prefs)),
-            x[1],
-        )
+    # --- Selection: the single two-phase engine owns the winner pick (AC-C5) ---
+    # select_version applies the availability filter, hard-preference filter,
+    # source-aware version-mismatch guard, ambiguity-delta review flag and the
+    # per-playlist soft-preference precedence (including typed audio-format
+    # prefs like "prefer atmos"), then ranks the available survivors by the
+    # shared Distance scorer. This retires the old integer loop as the SELECTOR;
+    # winner-parity with the retired ranking is gated on the gold corpus
+    # (tests/gold/test_winner_parity.py). The integer score is retained only to
+    # drive the confidence bar + reported score + audit, so the accept /
+    # not_found / high boundaries stay byte-identical for default preferences
+    # (classify_scores reads the score multiset, independent of order).
+    selection = select_version(
+        track, all_candidates,
+        active=_typed_active_prefs(prefs, resolver),
+        prefer=prefer_classes, avoid=avoid_classes,
+        all_durations=all_durations or None,
+        alias_resolver=resolver,
     )
-    scores = [s for s, _, _ in scored]
-    confidence = classify_scores(scores, min_lead=prefs.min_lead)
-    audit = _build_audit(
-        track=track, platform_name=platform_name, scored=scored,
-        confidence=confidence, prefer=prefer_classes, avoid=avoid_classes,
-        resolver=resolver,
+
+    survivors = [c for c, _ in selection.ranked] if selection.winner is not None else []
+    if survivors:
+        # The engine ranked available survivors by Distance (and any typed/soft
+        # preference). Within its top ambiguity band the candidates are
+        # effectively tied on match quality; the per-playlist free-text keyword
+        # bias + the standard-edition tiebreak decide the final pick *there*,
+        # preserving the keyword-preference behaviour without overriding a
+        # confident Distance/typed-preference winner. The sort is stable, so a
+        # band with no keyword/edition signal keeps the engine's order.
+        winner_result = selection.winner
+        base_distance = selection.winner_distance.total
+        band = [
+            cand for cand, dist in selection.ranked
+            if dist.total - base_distance <= AMBIGUITY_DELTA
+        ]
+        if len(band) > 1:
+            band.sort(
+                key=lambda c: (
+                    -preference_sort_bias(c.album or "", prefs),
+                    edition_cost(c.album or ""),
+                )
+            )
+            winner_result = band[0]
+        ordered = [winner_result, *[c for c in survivors if c is not winner_result]]
+    else:
+        ordered = []
+    scored: list[tuple[int, int, TrackResult]] = [  # (score, edition_penalty, result)
+        (_int_score(r), edition_cost(r.album or ""), r) for r in ordered
+    ]
+    confidence = (
+        classify_scores([s for s, _, _ in scored], min_lead=prefs.min_lead)
+        if scored else "not_found"
     )
+    # The engine refuses to confidently commit a near-tie or an unresolved
+    # version mismatch; surface it for review rather than silently guessing
+    # (AC-S3/AC-S4). Never elevate a below-floor not_found — two poor matches
+    # are still "not found", not "review these two".
+    if confidence != "not_found" and selection.needs_review:
+        confidence = "ambiguous"
 
     if confidence == "not_found":
+        # No confident *available* winner. Rank ALL candidates with the integer
+        # path so an exact-but-unavailable release still surfaces as held
+        # (EXACT_UNAVAILABLE), never a silent miss.
+        scored_all = [
+            (_int_score(r), edition_cost(r.album or ""), r) for r in all_candidates
+        ]
+        scored_all.sort(
+            key=lambda x: (-(x[0] + preference_sort_bias(x[2].album or "", prefs)), x[1])
+        )
+        fallback_conf = (
+            classify_scores([s for s, _, _ in scored_all], min_lead=prefs.min_lead)
+            if scored_all else "not_found"
+        )
+        audit = _build_audit(
+            track=track, platform_name=platform_name, scored=scored_all,
+            confidence=fallback_conf, prefer=prefer_classes, avoid=avoid_classes,
+            resolver=resolver,
+        )
+        if audit.availability == Availability.EXACT_UNAVAILABLE and scored_all:
+            # The exact recording exists but is unplayable here: report it as
+            # held (its id + score), flagged via availability so callers never
+            # treat it as a live, selectable match.
+            held_score, _, held = scored_all[0]
+            return ReconcileResult(
+                platform_track_id=held.platform_id,
+                platform_title=held.title,
+                platform_artist=held.artist,
+                platform_album=held.album,
+                score=held_score,
+                confidence=fallback_conf,
+                alternatives=[r for _, _, r in scored_all[1:4]],
+                availability=audit.availability,
+                reason_code=audit.reason_code,
+                audit=audit,
+            )
         return ReconcileResult(
             confidence="not_found",
-            alternatives=[r for _, _, r in scored[:3]],
+            alternatives=[r for _, _, r in scored_all[:3]],
             availability=audit.availability,
             reason_code=audit.reason_code,
             audit=audit,
         )
 
+    audit = _build_audit(
+        track=track, platform_name=platform_name, scored=scored,
+        confidence=confidence, prefer=prefer_classes, avoid=avoid_classes,
+        resolver=resolver,
+    )
     best_score, _, best_result = scored[0]
     is_div = _check_divergence(track.album, best_result.album)
     div_note = f"Version differs: {best_result.album}" if is_div else None

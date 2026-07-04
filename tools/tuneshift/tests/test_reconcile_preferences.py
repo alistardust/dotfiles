@@ -111,3 +111,66 @@ class TestPlaylistPreferenceReRank:
             db, track_id, _client(self._tied_candidates()), playlist_id=playlist_id
         )
         assert result.platform_track_id == "bravo"
+
+
+class TestAudioFormatPreferenceEndToEnd:
+    """A per-playlist audio-format preference selects the Atmos release through
+    the full reconcile path (AC-S5), not just the engine unit.
+
+    This is the wiring that the earlier per-axis attempts dropped: a stored
+    ``prefer atmos`` is bridged onto the engine's typed ``spatial`` criterion, so
+    reconcile actually returns the Atmos platform id when both a stereo and an
+    Atmos release exist for the same recording (Tidal ships them as separate
+    ids).
+    """
+
+    def _setup(self, tmp_db: Path) -> tuple[Database, int, int]:
+        db = Database(tmp_db)
+        track_id = db.add_track(
+            Track(title="Flowerz", artist="Armand", album="Flowerz")
+        )
+        playlist_id = db.create_playlist("Atmos Playlist")
+        db.add_track_to_playlist(playlist_id, track_id, 0)
+        return db, track_id, playlist_id
+
+    def _stereo_and_atmos(self) -> list[TrackResult]:
+        # Same recording, two releases differing only by spatial audio mode.
+        return [
+            TrackResult(
+                platform_id="stereo", title="Flowerz", artist="Armand",
+                album="Flowerz", audio_modes=["STEREO"],
+            ),
+            TrackResult(
+                platform_id="atmos", title="Flowerz", artist="Armand",
+                album="Flowerz", audio_modes=["DOLBY_ATMOS"],
+            ),
+        ]
+
+    def test_prefer_atmos_selects_atmos_release(self, tmp_db: Path) -> None:
+        db, track_id, playlist_id = self._setup(tmp_db)
+        db.set_preferences(playlist_id, {"prefer": ["atmos"]})
+        result = reconcile_track(
+            db, track_id, _client(self._stereo_and_atmos()), playlist_id=playlist_id
+        )
+        assert result.platform_track_id == "atmos"
+
+    def test_default_prefs_do_not_force_atmos(self, tmp_db: Path) -> None:
+        # No audio-format preference -> the stereo release (first-inserted, tied)
+        # is not displaced: byte-parity with the pre-preferences behaviour.
+        db, track_id, playlist_id = self._setup(tmp_db)
+        result = reconcile_track(
+            db, track_id, _client(self._stereo_and_atmos()), playlist_id=playlist_id
+        )
+        assert result.platform_track_id == "stereo"
+
+    def test_prefer_atmos_on_playlist_without_id_is_ignored(
+        self, tmp_db: Path
+    ) -> None:
+        # Preference exists but no playlist context is passed -> not consulted.
+        db, track_id, playlist_id = self._setup(tmp_db)
+        db.set_preferences(playlist_id, {"prefer": ["atmos"]})
+        result = reconcile_track(
+            db, track_id, _client(self._stereo_and_atmos()), playlist_id=None
+        )
+        assert result.platform_track_id == "stereo"
+
