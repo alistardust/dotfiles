@@ -32,6 +32,11 @@ from typing import TYPE_CHECKING, Any
 from tuneshift.matching.base_scoring import score_signals
 from tuneshift.matching.criteria import Criterion, CriterionValue, Verdict
 from tuneshift.matching.engine import Distance, Recommendation
+from tuneshift.matching.fingerprint import (
+    TrackFingerprint,
+    build_fingerprint,
+    fingerprint_equal,
+)
 from tuneshift.matching.penalties import DEFAULT_WEIGHTS, Weights
 from tuneshift.matching.precedence import (
     PreferenceRef,
@@ -60,15 +65,26 @@ class IdentityLock:
 
     platform_id: str | None = None
     isrc: str | None = None
-    fingerprint: str | None = None
+    fingerprint: TrackFingerprint | None = None
 
-    def matches(self, candidate: object, candidate_fingerprint: str | None = None) -> bool:
+    def matches(
+        self, candidate: object, candidate_fingerprint: TrackFingerprint | None = None
+    ) -> bool:
         if self.platform_id and getattr(candidate, "platform_id", None) == self.platform_id:
             return True
         cand_isrc = getattr(candidate, "isrc", None)
         if self.isrc and cand_isrc and cand_isrc.upper() == self.isrc.upper():
             return True
-        if self.fingerprint and candidate_fingerprint and candidate_fingerprint == self.fingerprint:
+        # Composite fingerprint axis (AC-L1): a platform re-ID with no shared
+        # ISRC still resolves when the candidate is the SAME recording (matching
+        # normalized title/artist + version class + duration bucket, or a shared
+        # ISRC inside the fingerprint). Uses the same equivalence the routed heal
+        # applies, so select-time and heal-time agree on "same recording".
+        if (
+            self.fingerprint is not None
+            and candidate_fingerprint is not None
+            and fingerprint_equal(self.fingerprint, candidate_fingerprint)
+        ):
             return True
         return False
 
@@ -327,7 +343,28 @@ def _resolve_lock(
     (self-heal with same-identity candidates is Chunk 5, AC-L3).
     """
 
-    matched = [c for c in candidates if lock.matches(c)]
+    def _candidate_fingerprint(c: object) -> TrackFingerprint:
+        return build_fingerprint(
+            title=getattr(c, "title", None),
+            artist=getattr(c, "artist", None),
+            album=getattr(c, "album", None),
+            isrc=getattr(c, "isrc", None),
+            duration_seconds=getattr(c, "duration_seconds", None),
+        )
+
+    # Only pay the fingerprint cost when the lock actually carries one (a lock
+    # made before fingerprints were stored, or a bare platform-id/ISRC lock,
+    # matches on those axes alone).
+    matched = [
+        c
+        for c in candidates
+        if lock.matches(
+            c,
+            candidate_fingerprint=_candidate_fingerprint(c)
+            if lock.fingerprint is not None
+            else None,
+        )
+    ]
     if not matched:
         return SelectionResult(
             winner=None,

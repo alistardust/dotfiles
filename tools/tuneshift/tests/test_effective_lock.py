@@ -99,14 +99,25 @@ class TestEffectiveLock:
 
 class TestIdentityLockComposite:
     def test_matches_on_fingerprint(self) -> None:
-        lock = IdentityLock(platform_id="DEAD", fingerprint="fp-abc")
+        from tuneshift.matching.fingerprint import build_fingerprint
+
+        fp = build_fingerprint(title="Heroes", artist="Bowie", duration_seconds=195)
+        lock = IdentityLock(platform_id="DEAD", fingerprint=fp)
         candidate = TrackResult(
-            platform_id="NEW", title="t", artist="a", album="al"
+            platform_id="NEW", title="Heroes", artist="Bowie", album="Heroes",
+            duration_seconds=196,
         )
-        # A candidate whose fingerprint equals the locked fingerprint is the same
-        # recording even though the platform id changed.
-        assert lock.matches(candidate, candidate_fingerprint="fp-abc")
-        assert not lock.matches(candidate, candidate_fingerprint="fp-other")
+        other = TrackResult(
+            platform_id="OTHER", title="Ashes", artist="Bowie", album="Scary Monsters",
+            duration_seconds=100,
+        )
+        # A candidate that is the SAME recording (title/artist/class + duration
+        # bucket) matches even though the platform id changed; a different
+        # recording does not.
+        assert lock.matches(candidate, candidate_fingerprint=build_fingerprint(
+            title="Heroes", artist="Bowie", duration_seconds=196))
+        assert not lock.matches(other, candidate_fingerprint=build_fingerprint(
+            title="Ashes", artist="Bowie", duration_seconds=100))
 
     def test_matches_on_platform_id_or_isrc_without_fingerprint(self) -> None:
         lock = IdentityLock(platform_id="X", isrc="USxx1")
@@ -161,3 +172,42 @@ class TestReconcileHonoursTwoLevelLock:
 
         res = reconcile_track(db, track_id, client, playlist_id=pl_native, force=True)
         assert res.platform_track_id == "PLAYLIST"
+
+
+class TestReconcileHonoursFingerprintAxis:
+    def test_forced_redoctor_resolves_lock_via_fingerprint(self, tmp_db: Path) -> None:
+        """AC-L1 composite: a platform re-ID with no shared ISRC still resolves
+        to the SAME recording via the fingerprint axis (not just platform-id/ISRC).
+
+        Regression guard: ``_resolve_lock`` previously never passed a candidate
+        fingerprint, so the fingerprint branch of ``IdentityLock.matches`` was
+        dead and this lock would have surfaced as ``locked_missing`` instead of
+        resolving to the equivalent id.
+        """
+        import json
+
+        from tuneshift.matching.fingerprint import build_fingerprint
+
+        db = Database(tmp_db)
+        # A track with NO ISRC (common for user-entered / YouTube tracks), so the
+        # fingerprint is the only surviving identity axis after a platform re-ID.
+        track_id = db.add_track(Track(title="Heroes", artist="Bowie", album="Heroes"))
+        pid = db.create_playlist("Bowie")
+        db.add_track_to_playlist(pid, track_id, 0)
+        fp = build_fingerprint(title="Heroes", artist="Bowie", duration_seconds=195)
+        db.upsert_platform_mapping(PlatformMapping(
+            track_id=track_id, platform="tidal", platform_track_id="DEAD",
+            match_score=97, status="matched", user_approved=True,
+            fingerprint=json.dumps(fp.as_dict()),
+        ))
+
+        client = _client()
+        # The locked id is gone; the same recording exists under a NEW id with no
+        # ISRC — only the fingerprint links them.
+        client.search_track.return_value = [
+            TrackResult(platform_id="NEW", title="Heroes", artist="Bowie",
+                        album="Heroes", duration_seconds=196, available=True),
+        ]
+
+        res = reconcile_track(db, track_id, client, playlist_id=pid, force=True)
+        assert res.platform_track_id == "NEW"

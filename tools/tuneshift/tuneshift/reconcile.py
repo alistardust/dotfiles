@@ -671,10 +671,16 @@ def _mapping_from_effective(track_id: int, platform: str, eff: EffectiveLock) ->
 def _identity_lock_from_effective(eff: EffectiveLock, track) -> IdentityLock:
     """Build the engine-level composite lock (platform-id + ISRC + fingerprint)
     from an effective lock so forced/verify selection paths honour it (AC-L1/L2)."""
+    fingerprint: TrackFingerprint | None = None
+    if eff.fingerprint:
+        try:
+            fingerprint = TrackFingerprint.from_dict(json.loads(eff.fingerprint))
+        except (ValueError, TypeError, KeyError):
+            logger.warning("corrupt effective-lock fingerprint; ignoring the fingerprint axis")
     return IdentityLock(
         platform_id=eff.platform_track_id,
         isrc=eff.isrc or (track.isrc if track is not None else None),
-        fingerprint=eff.fingerprint,
+        fingerprint=fingerprint,
     )
 
 
