@@ -15,7 +15,7 @@ from tuneshift.models import Album, Artist, PlatformMapping, Playlist, PlaylistP
 if TYPE_CHECKING:
     from tuneshift.matching import ReviewItem
 
-_SCHEMA_VERSION = 16
+_SCHEMA_VERSION = 17
 
 # Columns editable via update_track. Constrains f-string interpolation in the
 # UPDATE statement to a fixed, safe set (no SQL identifier injection).
@@ -326,6 +326,7 @@ CREATE TABLE IF NOT EXISTS resolution_queue (
     track_id INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
     state TEXT NOT NULL DEFAULT 'pending',
     attempts INTEGER NOT NULL DEFAULT 0,
+    transient_attempts INTEGER NOT NULL DEFAULT 0,
     next_attempt_at TEXT,
     last_error TEXT,
     enqueued_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -900,6 +901,22 @@ class Database:
                     self.conn.execute("DROP TABLE match_audits")
                     self.conn.execute(
                         "ALTER TABLE match_audits_new RENAME TO match_audits"
+                    )
+
+            if current_version < 17:
+                # Separate transient (rate-limit) retries from hard-failure
+                # attempts so a burst of 429s can never erode the quarantine
+                # budget (AC-D7 worker semantics). PRAGMA-guarded ALTER.
+                rq_cols = {
+                    r[1]
+                    for r in self.conn.execute(
+                        "PRAGMA table_info(resolution_queue)"
+                    ).fetchall()
+                }
+                if rq_cols and "transient_attempts" not in rq_cols:
+                    self.conn.execute(
+                        "ALTER TABLE resolution_queue "
+                        "ADD COLUMN transient_attempts INTEGER NOT NULL DEFAULT 0"
                     )
 
             self.conn.execute(
@@ -1671,6 +1688,14 @@ class Database:
             JOIN tracks t ON t.id = ma.track_id
             JOIN playlist_tracks pt ON pt.track_id = ma.track_id
             JOIN playlists p ON p.id = pt.playlist_id
+            WHERE ma.playlist_id IN (pt.playlist_id, 0)
+              AND ma.playlist_id = (
+                    SELECT MAX(ma2.playlist_id)
+                    FROM match_audits ma2
+                    WHERE ma2.track_id = ma.track_id
+                      AND ma2.platform = ma.platform
+                      AND ma2.playlist_id IN (pt.playlist_id, 0)
+                  )
         """
         conditions: list[str] = []
         params: list[object] = []
@@ -1681,7 +1706,7 @@ class Database:
             conditions.append("ma.platform = ?")
             params.append(platform)
         if conditions:
-            sql += " WHERE " + " AND ".join(conditions)
+            sql += " AND " + " AND ".join(conditions)
         sql += " ORDER BY p.name, t.artist, t.title"
 
         rows = self.conn.execute(sql, params).fetchall()
@@ -1713,6 +1738,11 @@ class Database:
         Tracks with no audit for the platform are treated as available (not
         excluded): a playlist that has never been reconciled is unaffected. The
         sequencer uses this to keep unavailable tracks from distorting the arc.
+
+        Audits are playlist-scoped: a playlist-specific audit
+        (``playlist_id = this playlist``) takes precedence over the legacy
+        global sentinel (``playlist_id = 0``), so one playlist's verdict never
+        leaks into another.
         """
         rows = self.conn.execute(
             """
@@ -1720,8 +1750,16 @@ class Database:
             FROM playlist_tracks pt
             JOIN match_audits ma
               ON ma.track_id = pt.track_id AND ma.platform = ?
+             AND ma.playlist_id IN (pt.playlist_id, 0)
             WHERE pt.playlist_id = ?
               AND ma.availability IN ('not_found', 'exact_unavailable')
+              AND ma.playlist_id = (
+                    SELECT MAX(ma2.playlist_id)
+                    FROM match_audits ma2
+                    WHERE ma2.track_id = pt.track_id
+                      AND ma2.platform = ma.platform
+                      AND ma2.playlist_id IN (pt.playlist_id, 0)
+                  )
             """,
             (platform, playlist_id),
         ).fetchall()
@@ -1905,13 +1943,50 @@ class Database:
     # --- resolution_queue (spec §4.1a: resumable enrich/resolve worker) ---
 
     def enqueue_resolution(self, track_id: int, next_attempt_at: str | None = None) -> None:
-        """Enqueue a track for resolution/enrichment. Idempotent per track."""
+        """Enqueue a track for resolution/enrichment.
+
+        Idempotent per track. Re-enqueuing a track that previously QUARANTINED
+        reopens it for another attempt (a re-add/re-import is a user signal to
+        retry) and resets its counters; a ``pending`` or ``resolved`` row is left
+        untouched so already-resolved work is never needlessly redone.
+        """
         with self.conn:
             self.conn.execute(
                 """INSERT INTO resolution_queue (track_id, state, next_attempt_at)
                    VALUES (?, 'pending', ?)
-                   ON CONFLICT(track_id) DO NOTHING""",
+                   ON CONFLICT(track_id) DO UPDATE SET
+                       state = 'pending',
+                       attempts = 0,
+                       transient_attempts = 0,
+                       last_error = NULL,
+                       next_attempt_at = excluded.next_attempt_at,
+                       updated_at = datetime('now')
+                   WHERE resolution_queue.state = 'quarantined'""",
                 (track_id, next_attempt_at),
+            )
+
+    def approve_resolution(self, track_id: int) -> None:
+        """Manually approve/release a quarantined track (AC-D6).
+
+        Clears the quarantine on BOTH sources of truth in one transaction: the
+        track's ``quarantine_state`` (which drives selectability) and the
+        ``resolution_queue`` row (which drives coverage). Marking the queue row
+        ``resolved`` keeps ``coverage_report`` consistent with
+        ``get_quarantined_tracks`` — an approved track counts as resolved, never
+        lingering as quarantined.
+        """
+        with self.conn:
+            self.conn.execute(
+                """UPDATE resolution_queue
+                   SET state = 'resolved', last_error = NULL,
+                       next_attempt_at = NULL, updated_at = datetime('now')
+                   WHERE track_id = ?""",
+                (track_id,),
+            )
+            self.conn.execute(
+                "UPDATE tracks SET quarantine_state = NULL, "
+                "quarantine_reason = NULL WHERE id = ?",
+                (track_id,),
             )
 
     def next_pending_resolution(self) -> int | None:
@@ -1937,8 +2012,15 @@ class Database:
         last_error: str | None = None,
         next_attempt_at: str | None = None,
         increment_attempts: bool = False,
+        increment_transient: bool = False,
     ) -> None:
-        """Update a queued track's resolution state (and optional backoff/error)."""
+        """Update a queued track's resolution state (and optional backoff/error).
+
+        ``increment_attempts`` bumps the hard-failure counter that drives the
+        quarantine ceiling. ``increment_transient`` bumps a SEPARATE counter used
+        only for rate-limit backoff — transient throttling must never consume the
+        quarantine budget (AC-D7).
+        """
         set_clauses = ["state = ?", "last_error = ?", "updated_at = datetime('now')"]
         params: list[Any] = [state, last_error]
         if next_attempt_at is not None:
@@ -1946,6 +2028,8 @@ class Database:
             params.append(next_attempt_at)
         if increment_attempts:
             set_clauses.append("attempts = attempts + 1")
+        if increment_transient:
+            set_clauses.append("transient_attempts = transient_attempts + 1")
         with self.conn:
             self.conn.execute(
                 f"UPDATE resolution_queue SET {', '.join(set_clauses)} WHERE track_id = ?",

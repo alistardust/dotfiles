@@ -76,11 +76,11 @@ def test_add_unresolvable_then_resolve_and_approve(db: Database) -> None:
     tid2 = _add(db, "Mix", "Weird Edit", "Someone")
     ResolutionWorker(db, resolver=lambda t: []).drain()
     assert tid2 not in db.get_selectable_track_ids(pid)
-    # manual approve = clear the quarantine (library-state mutation, AC-D6)
-    db.set_track_fields(
-        tid2, {"quarantine_state": None, "quarantine_reason": None}, source="approve"
-    )
+    # manual approve releases the quarantine consistently across both sources of
+    # truth (selectability AND coverage), AC-D6.
+    db.approve_resolution(tid2)
     assert tid2 in db.get_selectable_track_ids(pid)
+    assert db.coverage_report()["quarantined"] == 0
 
 
 def test_batch_add_under_throttle_resumes(db: Database) -> None:

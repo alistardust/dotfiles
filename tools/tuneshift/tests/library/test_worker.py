@@ -62,11 +62,15 @@ def test_rate_limited_stays_pending_with_backoff(db):
     assert resolved == 0  # nothing successfully resolved
 
     row = db.conn.execute(
-        "SELECT state, attempts, next_attempt_at, last_error FROM resolution_queue WHERE track_id=?",
+        "SELECT state, attempts, transient_attempts, next_attempt_at, last_error "
+        "FROM resolution_queue WHERE track_id=?",
         (tid,),
     ).fetchone()
     assert row["state"] == "pending", "rate-limited work must NOT be lost"
-    assert row["attempts"] == 1
+    # Rate limits bump the SEPARATE transient counter, never the hard-failure
+    # quarantine budget (AC-D7).
+    assert row["attempts"] == 0
+    assert row["transient_attempts"] == 1
     assert row["next_attempt_at"] is not None
     # backoff is in the future
     assert row["next_attempt_at"] > datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")

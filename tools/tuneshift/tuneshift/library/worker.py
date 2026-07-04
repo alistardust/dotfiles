@@ -115,13 +115,15 @@ class ResolutionWorker:
         try:
             candidates = list(self._resolver(track))
         except ResolutionRateLimited as exc:
-            # Transient: re-queue with backoff, never quarantine.
+            # Transient: re-queue with backoff, never quarantine. Uses a SEPARATE
+            # transient counter so throttling can never erode the hard-failure
+            # quarantine budget (AC-D7).
             self._db.set_resolution_state(
                 track_id,
                 "pending",
                 last_error=str(exc),
-                next_attempt_at=self._backoff_at(track_id),
-                increment_attempts=True,
+                next_attempt_at=self._backoff_at(track_id, transient=True),
+                increment_transient=True,
             )
             logger.info("resolution rate-limited, backing off: track=%s", track_id)
             return False
@@ -201,14 +203,22 @@ class ResolutionWorker:
         )
         logger.warning("track quarantined: track=%s reason=%s", track_id, reason)
 
-    def _backoff_at(self, track_id: int, attempts: int | None = None) -> str:
-        """Compute an exponential-backoff timestamp string (SQLite format)."""
+    def _backoff_at(
+        self, track_id: int, attempts: int | None = None, *, transient: bool = False
+    ) -> str:
+        """Compute an exponential-backoff timestamp string (SQLite format).
+
+        For a rate-limit backoff (``transient=True``) the escalation is driven by
+        the separate ``transient_attempts`` counter, keeping transient throttling
+        independent of the hard-failure quarantine budget.
+        """
+        counter = "transient_attempts" if transient else "attempts"
         if attempts is None:
             row = self._db.conn.execute(
-                "SELECT attempts FROM resolution_queue WHERE track_id = ?",
+                f"SELECT {counter} AS n FROM resolution_queue WHERE track_id = ?",
                 (track_id,),
             ).fetchone()
-            attempts = (row["attempts"] if row else 0) + 1
+            attempts = (row["n"] if row else 0) + 1
         delay = self._base_backoff_seconds * (2 ** max(0, attempts - 1))
         return (datetime.now(timezone.utc) + timedelta(seconds=delay)).strftime(
             _SQLITE_TS_FMT

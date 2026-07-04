@@ -383,15 +383,38 @@ class TidalClient:
         premium = getattr(track, "premium_streaming_only", None)
         pay = getattr(track, "pay_to_stream", None)
         tier_restricted = premium is True or pay is True
+        # Native version/audio metadata (spec §4.2, BUILD-FIRST): the SEARCH
+        # path is the candidate source for matching, so preserve the same fields
+        # get_track_metadata captures — otherwise the Atmos/named-mix/fidelity
+        # axes are blind on every candidate. Read defensively; tidalapi omits
+        # them on some tracks/versions.
+        album = getattr(track, "album", None)
+        album_artist = None
+        album_type = None
+        if album is not None:
+            album_artist_obj = getattr(album, "artist", None)
+            if album_artist_obj is not None:
+                album_artist = getattr(album_artist_obj, "name", None)
+            album_type = getattr(album, "type", None)
+        audio_modes = getattr(track, "audio_modes", None)
+        media_tags = getattr(track, "media_metadata_tags", None)
+        audio_quality = getattr(track, "audio_quality", None)
+        version = getattr(track, "version", None)
         return TrackResult(
             platform_id=str(track.id),
             title=track.name or "",
             artist=track.artist.name if getattr(track, "artist", None) else "",
-            album=track.album.name if getattr(track, "album", None) else "",
+            album=album.name if album is not None else "",
             duration_seconds=track.duration if getattr(track, "duration", None) else None,
             isrc=getattr(track, "isrc", None),
             available=available if isinstance(available, bool) else None,
             tier_restricted=tier_restricted,
+            audio_modes=list(audio_modes) if audio_modes else None,
+            audio_quality=str(audio_quality) if audio_quality else None,
+            tidal_version=str(version) if version else None,
+            media_metadata_tags=list(media_tags) if media_tags else None,
+            album_artist=str(album_artist) if album_artist else None,
+            album_type=str(album_type) if album_type else None,
         )
 
 

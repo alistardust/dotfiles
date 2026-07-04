@@ -27,8 +27,19 @@ def test_search_track_wraps_platform_ids_as_strings() -> None:
     track.artist.name = "David Bowie"
     track.album = MagicMock(name="album")
     track.album.name = "Hunky Dory"
+    track.album.artist = None
+    track.album.type = None
     track.duration = 221
     track.isrc = "GBAYE7100001"
+    # This track carries no native version/audio metadata; keep the mock from
+    # auto-spawning truthy attributes so the result reflects a bare track.
+    track.audio_modes = None
+    track.audio_quality = None
+    track.version = None
+    track.media_metadata_tags = None
+    track.available = None
+    track.premium_streaming_only = False
+    track.pay_to_stream = False
     client._session.search.return_value = {"tracks": [track]}
 
     results = client.search_track("Life on Mars?")
