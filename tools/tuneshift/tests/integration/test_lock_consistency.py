@@ -101,6 +101,10 @@ def test_interactive_reject_pushes_nothing(
 
     assert _pushed_ids(client) == []
     assert "DIVERGENT_ID" not in _pushed_ids(client)
+    # A rejected push must not record the playlist as synced nor persist the
+    # auto-reorder locally — otherwise local/remote silently diverge with no push.
+    assert db.get_last_synced(pid, "tidal") is None
+    assert [t.id for t in db.get_playlist_tracks(pid)] == [tid]
 
 
 @patch("tuneshift.sequencer.sequence_playlist")

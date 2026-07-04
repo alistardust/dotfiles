@@ -24,6 +24,12 @@ from tuneshift.planapply.plan import write_plan
 from tuneshift.planapply.sync import build_sync_plan, make_sync_executor
 
 
+# _apply_sync_plan outcomes.
+_PUSH_APPLIED = 0   # at least one push reached the platform
+_PUSH_FAILED = 1    # a push was attempted and failed
+_PUSH_NOOP = 2      # nothing applied (all changes rejected/skipped) — no push
+
+
 def handle_sync(args, db: Database) -> int:
     """Plan (default) or apply (``--apply``) a routed push of a playlist."""
     if args.all:
@@ -102,15 +108,19 @@ def _sync_one(db: Database, playlist, platforms, args) -> int:
             continue
 
         rc = _apply_sync_plan(db, client, plan, platform_name, label, args)
-        if rc != 0:
+        if rc == _PUSH_FAILED:
             failed = True
-        else:
+        elif rc == _PUSH_APPLIED:
             applied_any = True
             db.mark_playlist_synced(playlist.id, platform_name)
+        # _PUSH_NOOP (nothing applied — e.g. interactively rejected): not a
+        # failure, but the platform did NOT receive the push, so we must NOT
+        # record it as synced.
 
-    # Persist the durable local reorder only after a successful --apply, matching
-    # the previous inline "auto-reorder sticks on sync" behaviour. Plan-only runs
-    # never mutate local order.
+    # Persist the durable local reorder only when a push actually reached a
+    # platform, matching the previous inline "auto-reorder sticks on sync"
+    # behaviour. A plan-only run or a fully-rejected apply never mutates local
+    # order, so local order can't silently diverge from what was pushed.
     if apply_mode and applied_any and ordered_ids is not None:
         db.set_playlist_tracks(playlist.id, ordered_ids)
         print(f'  Auto-reordered "{playlist.name}" (arc={playlist.reorder_arc})')
@@ -139,7 +149,14 @@ def _write_and_report(db: Database, plan: Plan, label: str,
 
 def _apply_sync_plan(db: Database, client, plan: Plan, platform_name: str,
                      label: str, args) -> int:
-    """Apply a sync plan's remote push in one step (``--apply``)."""
+    """Apply a sync plan's remote push in one step (``--apply``).
+
+    Returns one of ``_PUSH_APPLIED`` (a push reached the platform),
+    ``_PUSH_FAILED`` (a push was attempted and failed), or ``_PUSH_NOOP``
+    (nothing was applied — e.g. the user rejected every push interactively).
+    The caller must distinguish these so a rejected push is never recorded as
+    synced.
+    """
     if getattr(args, "interactive", False):
         for change in plan.actionable_changes(include_locked=True):
             print(_describe_push(change))
@@ -155,12 +172,12 @@ def _apply_sync_plan(db: Database, client, plan: Plan, platform_name: str,
             print(f"  error: {err}", file=sys.stderr)
         print(f"{label}: push failed "
               f"(applied {report.applied}, failed {report.failed}).", file=sys.stderr)
-        return 1
+        return _PUSH_FAILED
     if report.applied:
         print(f"{label}: applied ({report.applied} push).")
-    else:
-        print(f"{label}: nothing applied (skipped {report.skipped}).")
-    return 0
+        return _PUSH_APPLIED
+    print(f"{label}: nothing applied (skipped {report.skipped}).")
+    return _PUSH_NOOP
 
 
 def _describe_push(change: PlanChange) -> str:
