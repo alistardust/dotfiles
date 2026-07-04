@@ -227,6 +227,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_edit.add_argument("--title", help="New track title")
     p_edit.add_argument("--artist", help="New track artist")
     p_edit.add_argument("--album", help="New track album")
+    p_edit.add_argument("--energy", type=float,
+                        help="Set energy 0.0-1.0 (manual override, AC8)")
+    p_edit.add_argument("--valence", type=float,
+                        help="Set valence 0.0-1.0 (manual override, AC8)")
     p_edit.add_argument("--strip-album-from-title", action="store_true",
                         help="Remove a trailing parenthetical that repeats the album name")
     p_edit.add_argument("--dry-run", action="store_true", help="Show changes without writing")

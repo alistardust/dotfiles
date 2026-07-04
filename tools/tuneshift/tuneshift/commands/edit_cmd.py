@@ -35,10 +35,22 @@ def _handle_field_edit(args, db: Database) -> int:
         if value is not None:
             fields[name] = value
 
-    if not fields:
+    # Energy/valence are numeric audio features (AC8 manual override), written
+    # with explicit "manual" provenance so they outrank estimated values and are
+    # never silently overwritten by re-enrichment.
+    audio_fields: dict[str, float] = {}
+    for name in ("energy", "valence"):
+        value = getattr(args, name, None)
+        if value is not None:
+            if not 0.0 <= value <= 1.0:
+                print(f"{name} must be between 0.0 and 1.0", file=sys.stderr)
+                return 1
+            audio_fields[name] = float(value)
+
+    if not fields and not audio_fields:
         print(
-            "Nothing to edit. Provide --title/--artist/--album "
-            "or --strip-album-from-title",
+            "Nothing to edit. Provide --title/--artist/--album, "
+            "--energy/--valence, or --strip-album-from-title",
             file=sys.stderr,
         )
         return 1
@@ -51,9 +63,14 @@ def _handle_field_edit(args, db: Database) -> int:
     if getattr(args, "dry_run", False):
         for name, value in fields.items():
             print(f'[dry-run] track {track_id}: {name} -> "{value}"')
+        for name, number in audio_fields.items():
+            print(f"[dry-run] track {track_id}: {name} -> {number}")
         return 0
 
-    changed = db.update_track(track_id, **fields)
+    changed = db.update_track(track_id, **fields) if fields else 0
+    if audio_fields:
+        db.set_track_fields(track_id, audio_fields, source="manual")
+        changed += len(audio_fields)
     if changed == 0:
         print(f"Track {track_id} already has those values; nothing changed.")
     else:
