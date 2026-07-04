@@ -26,6 +26,13 @@ from tuneshift.planapply.models import Plan, PlanChange
 # rollback can recognise them and refuse to un-push inline (AC-P4 forward-only).
 REMOTE_TABLE_PREFIX = "remote:"
 
+# A remote executor may perform a LOCAL side-effect (linking the local playlist
+# to a find-or-created remote playlist) as part of its push. It reports that
+# write back under this reserved key so apply can journal it as a normal local
+# change — keeping the link inside the apply transaction (atomic on failure) and
+# reversible on rollback, instead of a self-committing write that escapes both.
+LOCAL_SIDE_EFFECT_KEY = "_local_journal"
+
 # A remote executor performs one forward-only remote push (delegated to the
 # platform client) and returns the prior remote state to journal, or None if
 # there was nothing to capture. Kept as a callable so this module has no
@@ -68,6 +75,14 @@ _TABLE_SPECS: dict[str, _TableSpec] = {
         name="platform_tracks",
         pk=("track_id", "platform"),
         columns=("platform_track_id", "status", "user_approved"),
+    ),
+    # A sync push may find-or-create + link the remote playlist at apply time.
+    # That link is a LOCAL write, so it is journaled (see ``_apply_remote``) and
+    # therefore must be a known table so rollback can reverse it.
+    "platform_playlists": _TableSpec(
+        name="platform_playlists",
+        pk=("playlist_id", "platform"),
+        columns=("platform_playlist_id",),
     ),
     # Enrichment overwrites of matcher-read fields are routed + journaled
     # (routing table row "Enrichment metadata overwrite"). Only the fields the
@@ -187,6 +202,24 @@ def _delete_row(db: Database, spec: _TableSpec, pk_values: dict[str, Any]) -> No
     )
 
 
+def _live_locked(db: Database, change: PlanChange) -> bool:
+    """Is the change's target row locked (user_approved) in the LIVE database?
+
+    A plan serializes ``change.locked`` at build time, but a lock can be created
+    between plan build and apply. Gating on live state as well as the serialized
+    flag ensures apply never silently overwrites or deletes a mapping that became
+    user-approved after the plan was generated (AC-P3/AC-P5 no-regression).
+    """
+    if change.op == "remote_push":
+        return False
+    spec = _TABLE_SPECS.get(change.table)
+    if spec is None or "user_approved" not in spec.columns:
+        return False
+    pk_values = json.loads(change.row_key)
+    row = _read_row(db, spec, pk_values)
+    return bool(row and row["user_approved"])
+
+
 def _apply_remote(
     db: Database,
     plan_id: str,
@@ -209,6 +242,21 @@ def _apply_remote(
             f"got {change.table!r}"
         )
     prior_remote = remote_executor(change)
+
+    # If the executor linked a find-or-created remote playlist, it reports that
+    # LOCAL write here. Journal it first (same transaction) so rollback reverses
+    # it; strip it from the remote prior_value before journaling the push.
+    if prior_remote is not None and LOCAL_SIDE_EFFECT_KEY in prior_remote:
+        side = prior_remote.pop(LOCAL_SIDE_EFFECT_KEY)
+        db.record_journal_entry(
+            plan_id=plan_id,
+            table_name=side["table"],
+            row_key=side["row_key"],
+            op=side["op"],
+            prior_value=side.get("prior"),
+            new_value=side.get("new"),
+        )
+
     db.record_journal_entry(
         plan_id=plan_id,
         table_name=change.table,
@@ -288,6 +336,12 @@ def apply_plan(
             # AC-P3 lock exclusion is a per-run gate, not a permanent status:
             # leave the change pending so an explicit include_locked re-apply of
             # the SAME plan can act on it.
+            continue
+        if not include_locked and _live_locked(db, change):
+            # A lock appeared after the plan was built. Treat it like any locked
+            # change: skip unless the caller explicitly opts in (never regress a
+            # user-approved mapping, even one the plan didn't know about).
+            report.skipped_locked += 1
             continue
         try:
             with db.conn:

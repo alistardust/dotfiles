@@ -65,6 +65,41 @@ class TestLockRouting:
         plan = build_unlock_plan(db, pid, tid, "tidal")
         assert plan.is_empty()
 
+    def test_lock_is_idempotent_after_apply(self, tmp_db: Path) -> None:
+        # Re-planning the exact same lock after it is applied must be a no-op
+        # (AC-P1): the mapping already holds the desired locked state.
+        db, pid, tid = _seed(tmp_db)
+        apply_plan(db, build_lock_plan(db, pid, tid, "tidal", "PINNED"))
+        replan = build_lock_plan(db, pid, tid, "tidal", "PINNED")
+        assert replan.is_empty()
+        # A lock to a DIFFERENT id is still actionable.
+        assert not build_lock_plan(db, pid, tid, "tidal", "OTHER").is_empty()
+
+    def test_apply_skips_lock_created_after_plan_build(self, tmp_db: Path) -> None:
+        # A plan built while the row was unlocked must NOT clobber a lock that
+        # appeared before apply (live-lock gating, AC-P3/AC-P5 no-regression).
+        db, pid, tid = _seed(tmp_db)
+        plan = build_lock_plan(db, pid, tid, "tidal", "PROPOSED")
+        # Someone locks the same row to a different id after the plan was built.
+        db.set_playlist_track_mapping(
+            pid, tid, "tidal", "USER_LOCKED", source="locked", user_approved=True
+        )
+        report = apply_plan(db, plan)
+        assert report.applied == 0
+        assert report.skipped_locked == 1
+        # Live lock preserved, not overwritten by the stale plan.
+        assert (
+            db.get_playlist_track_mapping(pid, tid, "tidal")["platform_track_id"]
+            == "USER_LOCKED"
+        )
+        # Explicit opt-in still applies it.
+        report2 = apply_plan(db, plan, include_locked=True)
+        assert report2.applied == 1
+        assert (
+            db.get_playlist_track_mapping(pid, tid, "tidal")["platform_track_id"]
+            == "PROPOSED"
+        )
+
 
 class TestEnrichRouting:
     def test_enrich_overwrite_is_planned_journaled_and_reversible(

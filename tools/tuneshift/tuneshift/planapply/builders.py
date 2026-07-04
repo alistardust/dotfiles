@@ -33,6 +33,15 @@ def build_lock_plan(
 ) -> Plan:
     """Plan a per-playlist identity lock to ``platform_track_id`` (map/AC-L1)."""
     current = db.get_playlist_track_mapping(playlist_id, track_id, platform)
+    # Idempotent no-op: the mapping already holds exactly this locked state, so
+    # re-planning after apply must yield an empty plan (AC-P1).
+    if (
+        current is not None
+        and current["platform_track_id"] == platform_track_id
+        and current["source"] == "locked"
+        and current["user_approved"]
+    ):
+        return Plan(plan_id=new_plan_id(), kind="lock")
     row_key = row_key_for(
         playlist_id=playlist_id, track_id=track_id, platform=platform
     )

@@ -18,7 +18,12 @@ from __future__ import annotations
 import json
 
 from tuneshift.db import Database
-from tuneshift.planapply.apply import REMOTE_TABLE_PREFIX, RemoteExecutor, RollbackReport
+from tuneshift.planapply.apply import (
+    LOCAL_SIDE_EFFECT_KEY,
+    REMOTE_TABLE_PREFIX,
+    RemoteExecutor,
+    RollbackReport,
+)
 from tuneshift.planapply.models import Plan, PlanChange, row_key_for
 from tuneshift.planapply.plan import new_plan_id
 from tuneshift.platforms.protocol import MusicPlatformClient
@@ -124,6 +129,7 @@ def make_sync_executor(
         proposed = change.proposed or {}
         platform_playlist_id = proposed.get("platform_playlist_id")
         local_playlist_id = proposed.get("local_playlist_id")
+        link_journal: dict | None = None
 
         if not platform_playlist_id:
             existing = client.find_playlist_by_name(proposed["playlist_name"])
@@ -135,15 +141,48 @@ def make_sync_executor(
                 )
                 platform_playlist_id = created.platform_id
             if local_playlist_id is not None:
-                db.link_platform_playlist(
-                    local_playlist_id, platform, platform_playlist_id
+                # Link within the apply transaction (no self-committing helper),
+                # and report it so apply journals it as a reversible local change
+                # instead of leaving an orphaned link if the push then fails.
+                prior_link = db.get_platform_playlist_id(local_playlist_id, platform)
+                db.conn.execute(
+                    "INSERT OR REPLACE INTO platform_playlists "
+                    "(playlist_id, platform, platform_playlist_id) VALUES (?, ?, ?)",
+                    (local_playlist_id, platform, platform_playlist_id),
                 )
+                link_journal = {
+                    "table": "platform_playlists",
+                    "row_key": row_key_for(
+                        playlist_id=local_playlist_id, platform=platform
+                    ),
+                    "op": "update" if prior_link is not None else "insert",
+                    "prior": (
+                        {
+                            "playlist_id": local_playlist_id,
+                            "platform": platform,
+                            "platform_playlist_id": prior_link,
+                        }
+                        if prior_link is not None
+                        else None
+                    ),
+                    "new": {
+                        "playlist_id": local_playlist_id,
+                        "platform": platform,
+                        "platform_playlist_id": platform_playlist_id,
+                    },
+                }
 
         prior_ids = _remote_ids(client, platform_playlist_id)
         client.replace_playlist_tracks(
             platform_playlist_id, list(proposed.get("track_ids", []))
         )
-        return {"platform_playlist_id": platform_playlist_id, "track_ids": prior_ids}
+        result: dict = {
+            "platform_playlist_id": platform_playlist_id,
+            "track_ids": prior_ids,
+        }
+        if link_journal is not None:
+            result[LOCAL_SIDE_EFFECT_KEY] = link_journal
+        return result
 
     return _execute
 

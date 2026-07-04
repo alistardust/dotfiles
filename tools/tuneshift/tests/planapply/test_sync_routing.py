@@ -163,3 +163,45 @@ class TestSyncRouting:
         assert report.failed == 1
         assert report.applied == 0
         assert "remote_executor" in report.errors[0]
+
+    def test_new_link_is_journaled_and_removed_on_rollback(
+        self, tmp_db: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A find-or-create link is a LOCAL write; it must be journaled so a
+        # rollback reverses it, not orphaned pointing at a remote we've "forgotten"
+        # how we created (AC-P4 local reversibility).
+        db, pid, tids = _seed(tmp_db)
+        _stub_reconcile(monkeypatch, {tids[0]: "A", tids[1]: "B", tids[2]: "C"})
+        client = FakeClient()
+
+        plan = build_sync_plan(db, pid, client, platform="tidal")
+        executor = make_sync_executor(db, client, platform="tidal")
+        apply_plan(db, plan, remote_executor=executor)
+        assert db.get_platform_playlist_id(pid, "tidal") == "pl:Roadtrip"
+
+        rollback_plan(db, plan.plan_id)
+        # The link the sync created is gone; the remote push is left for the
+        # compensating plan (forward-only).
+        assert db.get_platform_playlist_id(pid, "tidal") is None
+
+    def test_failed_push_does_not_orphan_a_link(
+        self, tmp_db: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # If the remote push fails, the just-created link must roll back with the
+        # rest of the apply transaction (no self-committing write escaping it).
+        db, pid, tids = _seed(tmp_db)
+        _stub_reconcile(monkeypatch, {tids[0]: "A", tids[1]: "B", tids[2]: "C"})
+
+        class FailingClient(FakeClient):
+            def replace_playlist_tracks(self, playlist_id: str, track_ids: list[str]) -> None:
+                raise RuntimeError("remote push failed")
+
+        client = FailingClient()
+        plan = build_sync_plan(db, pid, client, platform="tidal")
+        executor = make_sync_executor(db, client, platform="tidal")
+        report = apply_plan(db, plan, remote_executor=executor)
+
+        assert report.failed == 1
+        assert report.applied == 0
+        # No orphaned link left behind by the failed apply.
+        assert db.get_platform_playlist_id(pid, "tidal") is None
