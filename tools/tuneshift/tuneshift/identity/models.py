@@ -55,6 +55,8 @@ class RecordingCandidate:
     duration_ms: int | None = None
     score: float = 0.0
     release_groups: list[dict] = field(default_factory=list)
+    language: str | None = None
+    composer: str | None = None
 
 
 @dataclass

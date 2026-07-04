@@ -649,6 +649,62 @@ class ArtistRoleCriterion:
         return _soft_signal(self.name, self.weight, verdict)
 
 
+@dataclass
+class ComposerCriterion:
+    """A composer identity-match criterion (M6, AC-M6).
+
+    Differentiates same-title, different-WORK recordings by comparing the
+    SOURCE's composer set against the CANDIDATE's: satisfied when every source
+    composer is also credited on the candidate (source ⊆ candidate). A multi-name
+    composer credit (``"Lennon, McCartney"``) is split like an artist credit so
+    order and packaging do not matter. ``target`` is a mode selector (``"match"``)
+    — the comparison is always source-vs-candidate, not against a fixed name.
+
+    Composer is structured metadata (from the MB WORK relations) so the verdict
+    is confident and a ``require`` may hard-filter. Either side missing a composer
+    -> NO_VERDICT -> no signal (parity rule §5.1). KNOWN COVERAGE GAP (spec §11):
+    MB WORK-relation composer data is inconsistent and platform search results
+    rarely expose it, so this criterion fires only where both sides carry a
+    composer — a low fire-rate is expected, not a bug.
+    """
+
+    name: str
+    target: str = "match"
+    weight: int = 10
+    hard_cap: HardCapPolicy = HardCapPolicy.NONE
+
+    def extract(self, meta: object) -> CriterionValue | None:
+        raw = getattr(meta, "composer", None)
+        if not raw:
+            return None
+        from tuneshift.matching.normalize import split_artists
+
+        names = split_artists(str(raw))
+        if not names:
+            return None
+        return CriterionValue(raw=frozenset(names), tokens=frozenset(names),
+                              structured=True)
+
+    def compare(
+        self,
+        source: CriterionValue,
+        candidate: CriterionValue,
+        strength: Strength | None,
+    ) -> Verdict:
+        if not isinstance(source.raw, frozenset) or not isinstance(
+            candidate.raw, frozenset
+        ):
+            return Verdict.NO_VERDICT
+        if not source.raw or not candidate.raw:
+            return Verdict.NO_VERDICT
+        satisfied = source.raw.issubset(candidate.raw)
+        # Structured -> confident; a hard verdict stays hard.
+        return resolve_strength_verdict(strength, satisfied=satisfied)
+
+    def to_signal(self, verdict: Verdict) -> SignalPenalty | None:
+        return _soft_signal(self.name, self.weight, verdict)
+
+
 class CriterionRegistry:
     """An ordered, name-unique collection of registered criteria.
 

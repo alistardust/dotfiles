@@ -37,7 +37,12 @@ class MusicBrainzSource:
         try:
             response = musicbrainzngs.get_recordings_by_isrc(
                 isrc,
-                includes=["artist-credits", "releases"],
+                includes=[
+                    "artist-credits",
+                    "releases",
+                    "work-rels",
+                    "work-level-rels",
+                ],
             )
         except (OSError, RuntimeError, MusicBrainzError):
             logger.debug("ISRC lookup failed for %s", isrc)
@@ -128,7 +133,48 @@ class MusicBrainzSource:
             mb_recording_id=recording.get("id"),
             duration_ms=duration_ms,
             release_groups=release_groups,
+            language=self._extract_language(recording),
+            composer=self._extract_composer(recording),
         )
+
+    @staticmethod
+    def _extract_language(recording: dict[str, Any]) -> str | None:
+        """Pull the sung language (ISO 639-3) from a MB recording or its work (M6).
+
+        Prefers the recording-level ``language`` (present when ``inc=language``
+        was requested); falls back to the first related work's ``language``.
+        Returns ``None`` when neither is present — the criterion then emits no
+        verdict rather than fabricating a value (parity rule §5.1).
+        """
+        language = recording.get("language")
+        if language:
+            return str(language)
+        for relation in recording.get("work-relation-list", []):
+            work = relation.get("work", {})
+            if work.get("language"):
+                return str(work["language"])
+        return None
+
+    @staticmethod
+    def _extract_composer(recording: dict[str, Any]) -> str | None:
+        """Pull composer name(s) from the MB WORK relations (M6, AC-M6).
+
+        Walks the recording's ``work-relation-list`` and, within each work's
+        ``artist-relation-list``, collects artists whose relation ``type`` is
+        ``composer``. Multiple composers are joined with ``", "`` in first-seen
+        order. Returns ``None`` when no composer relation is present (parity rule
+        §5.1) — this data is inconsistent in MB, so absence is expected, not a bug.
+        """
+        composers: list[str] = []
+        for relation in recording.get("work-relation-list", []):
+            work = relation.get("work", {})
+            for artist_relation in work.get("artist-relation-list", []):
+                if artist_relation.get("type") != "composer":
+                    continue
+                name = artist_relation.get("artist", {}).get("name")
+                if name and name not in composers:
+                    composers.append(name)
+        return ", ".join(composers) if composers else None
 
     def _extract_artist_name(self, artist_credit: list[dict[str, Any]] | str) -> str:
         """Build a display artist name from MusicBrainz artist-credit entries.

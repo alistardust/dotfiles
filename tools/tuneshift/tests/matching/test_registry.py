@@ -368,3 +368,56 @@ def test_m5_artist_role_is_a_known_axis():
     assert "artist_role" in KNOWN_AXES
 
 
+# --- M6: language-variant + composer criteria (AC-M6) -------------------------
+
+
+def _lang_rel(pid, *, language=None, composer=None, available=True):
+    return SimpleNamespace(
+        platform_id=pid,
+        title="99 Luftballons",
+        artist="Nena",
+        album="Nena",
+        isrc="DED830000001",
+        duration_seconds=232,
+        available=available,
+        language=language,
+        composer=composer,
+    )
+
+
+def test_m6_prefer_language_selects_right_language_release():
+    # Two releases of the same recording differing only by sung language; a
+    # prefer-language=de preference selects the German release.
+    src = _lang_rel("src", language="de")
+    english = _lang_rel("en", language="en")
+    german = _lang_rel("de", language="de")
+    specs = [PreferenceSpec(axis="language", target="de",
+                            strength=Strength.PREFER, scope="playlist")]
+    active = resolve_active_preferences(specs)
+    result = select_version(src, [english, german], active=active)
+    assert result.winner is german
+
+
+def test_m6_require_composer_differentiates_same_title_different_work():
+    # Same title/artist strings, different underlying WORK (composer). A
+    # require-composer match keeps only the candidate with the source's composer.
+    src = _lang_rel("src", composer="Carlo Karges")
+    same_work = _lang_rel("same", composer="Carlo Karges")
+    other_work = _lang_rel("other", composer="Diane Warren")
+    specs = [PreferenceSpec(axis="composer", target="match",
+                            strength=Strength.REQUIRE, scope="playlist")]
+    active = resolve_active_preferences(specs)
+    result = select_version(src, [other_work, same_work], active=active)
+    assert result.winner is same_work
+    assert any(
+        fc.candidate is other_work and fc.reason.startswith("hard:composer")
+        for fc in result.filtered
+    )
+
+
+def test_m6_language_and_composer_are_known_axes():
+    assert "language" in KNOWN_AXES
+    assert "composer" in KNOWN_AXES
+
+
+

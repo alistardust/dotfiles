@@ -332,3 +332,51 @@ def test_artist_role_criterion_missing_artist_no_verdict():
     assert crit.extract(_artist_meta(None)) is None
 
 
+# --- M6: language equality + composer identity-match --------------------------
+
+
+def _lang_meta(language=None, composer=None):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(language=language, composer=composer)
+
+
+def test_language_criterion_prefers_matching_language():
+    from tuneshift.matching.registry import criterion_for
+
+    crit = criterion_for("language", "en")
+    en = crit.extract(_lang_meta(language="en"))
+    ja = crit.extract(_lang_meta(language="ja"))
+    assert crit.compare(en, en, Strength.PREFER) is Verdict.SOFT_BONUS
+    assert crit.compare(ja, ja, Strength.PREFER) is Verdict.SOFT_PENALTY
+
+
+def test_language_criterion_absent_language_no_verdict():
+    from tuneshift.matching.registry import criterion_for
+
+    crit = criterion_for("language", "en")
+    assert crit.extract(_lang_meta(language=None)) is None
+
+
+def test_composer_criterion_matches_same_composer_rejects_different():
+    from tuneshift.matching.criteria import ComposerCriterion
+
+    crit = ComposerCriterion(name="composer")
+    src = crit.extract(_lang_meta(composer="Max Martin"))
+    same = crit.extract(_lang_meta(composer="Max Martin"))
+    diff = crit.extract(_lang_meta(composer="Diane Warren"))
+    assert crit.compare(src, same, Strength.REQUIRE) is Verdict.HARD_PASS
+    assert crit.compare(src, diff, Strength.REQUIRE) is Verdict.HARD_REJECT
+
+
+def test_composer_criterion_absent_composer_no_verdict():
+    from tuneshift.matching.criteria import ComposerCriterion
+
+    crit = ComposerCriterion(name="composer")
+    assert crit.extract(_lang_meta(composer=None)) is None
+    src = crit.extract(_lang_meta(composer="Max Martin"))
+    empty = crit.extract(_lang_meta(composer=None)) or CriterionValue(raw=None)
+    assert crit.compare(empty, src, Strength.REQUIRE) is Verdict.NO_VERDICT
+
+
+

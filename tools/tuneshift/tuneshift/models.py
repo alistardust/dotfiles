@@ -105,6 +105,8 @@ class TrackResult:
     recording_date: str | None = None
     release_date: str | None = None
     remaster_year: int | None = None
+    language: str | None = None
+    composer: str | None = None
 
 
 @dataclass(frozen=True)

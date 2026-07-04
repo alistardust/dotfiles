@@ -125,3 +125,46 @@ class TestMusicBrainzAdditionalLookupISRC:
         source = MusicBrainzSource()
 
         assert source.lookup_isrc("GBAYE0000000") is None
+
+
+class TestMusicBrainzLanguageComposer:
+    """M6: capture language + composer from the MB recording/work data."""
+
+    def test_recording_to_candidate_extracts_language_and_composer(self):
+        source = MusicBrainzSource()
+        recording = {
+            "id": "rec-99",
+            "title": "99 Luftballons",
+            "artist-credit": [{"artist": {"name": "Nena"}}],
+            "length": "232000",
+            "language": "deu",
+            "work-relation-list": [
+                {
+                    "work": {
+                        "id": "work-1",
+                        "title": "99 Luftballons",
+                        "artist-relation-list": [
+                            {"type": "composer",
+                             "artist": {"name": "Carlo Karges"}},
+                            {"type": "lyricist",
+                             "artist": {"name": "Someone Else"}},
+                        ],
+                    }
+                }
+            ],
+        }
+        candidate = source._recording_to_candidate(recording)
+        assert candidate.language == "deu"
+        assert candidate.composer == "Carlo Karges"
+
+    def test_recording_to_candidate_missing_language_composer_is_none(self):
+        source = MusicBrainzSource()
+        recording = {
+            "id": "rec-1",
+            "title": "Heroes",
+            "artist-credit": [{"artist": {"name": "David Bowie"}}],
+            "length": "372000",
+        }
+        candidate = source._recording_to_candidate(recording)
+        assert candidate.language is None
+        assert candidate.composer is None

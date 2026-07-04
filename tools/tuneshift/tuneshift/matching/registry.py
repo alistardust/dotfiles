@@ -24,6 +24,7 @@ from dataclasses import dataclass
 
 from tuneshift.matching.criteria import (
     ArtistRoleCriterion,
+    ComposerCriterion,
     Criterion,
     DateCriterion,
     DurationCriterion,
@@ -108,6 +109,17 @@ def criterion_for(
         # Role-aware artist-set match; target selects the role ("main"). Raw
         # target, not a whitelist token (M5).
         return ArtistRoleCriterion(name=axis, target=target)
+    if axis == "language":
+        # Scalar language-equality; the target is a language code/name (not a
+        # whitelist token). TokenCriterion folds it and the candidate uniformly
+        # so "en"/"EN" match (M6). Structured -> a require may hard-filter.
+        return TokenCriterion(
+            name=axis, field_name="language", target=target, structured=True
+        )
+    if axis == "composer":
+        # Source-vs-candidate composer identity match; target is a mode selector
+        # ("match"), not a whitelist token (M6).
+        return ComposerCriterion(name=axis, target=target)
     field = STRUCTURED_AXIS_FIELDS.get(axis)
     if field is not None:
         return TokenCriterion(
@@ -123,12 +135,12 @@ def criterion_for(
 
 
 #: All criterion axes a preference may target (structured + title-derived + date
-#: + the numeric duration-tolerance axis + role-aware artist matching).
+#: + duration-tolerance + role-aware artist + language/composer identity axes).
 KNOWN_AXES: frozenset[str] = (
     frozenset(STRUCTURED_AXIS_FIELDS)
     | TITLE_AXES
     | frozenset(DATE_AXIS_FIELDS)
-    | frozenset({"duration", "artist_role"})
+    | frozenset({"duration", "artist_role", "language", "composer"})
 )
 
 #: Scope name each cascade layer maps onto for engine precedence
