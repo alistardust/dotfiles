@@ -95,6 +95,90 @@ def build_unlock_plan(
     )
 
 
+def build_global_lock_plan(
+    db: Database,
+    track_id: int,
+    platform: str,
+    platform_track_id: str,
+) -> Plan:
+    """Plan a GLOBAL (library-wide) identity lock (spec §8, AC-L1).
+
+    The global default lock lives on ``platform_tracks`` (``user_approved=1``);
+    a per-playlist override (:func:`build_lock_plan`) wins over it. Locking to
+    the id already held with approval is an idempotent no-op (empty plan, AC-P1).
+    An update preserves the existing descriptive verify metadata / fingerprint;
+    only ``user_approved`` (and ``platform_track_id`` when re-pointed) change.
+    """
+    current = db.get_platform_mapping(track_id, platform)
+    if (
+        current is not None
+        and current.platform_track_id == platform_track_id
+        and current.user_approved
+    ):
+        return Plan(plan_id=new_plan_id(), kind="lock")
+    row_key = row_key_for(track_id=track_id, platform=platform)
+    if current is None:
+        op = "insert"
+        proposed = {
+            "track_id": track_id,
+            "platform": platform,
+            "platform_track_id": platform_track_id,
+            "status": "matched",
+            "user_approved": 1,
+        }
+    else:
+        op = "update"
+        proposed = {
+            "track_id": track_id,
+            "platform": platform,
+            "platform_track_id": platform_track_id,
+            "user_approved": 1,
+        }
+    # Overwriting an already-approved mapping touches a locked row (AC-P3).
+    locked = bool(current and current.user_approved)
+    change = PlanChange(
+        op=op,
+        table="platform_tracks",
+        row_key=row_key,
+        current=_global_mapping_state(current),
+        proposed=proposed,
+        reason=f"lock global {platform} mapping to {platform_track_id}",
+        provenance="user:lock",
+        locked=locked,
+    )
+    return _single_change_plan("lock", f"track:{track_id}", change)
+
+
+def build_global_unlock_plan(db: Database, track_id: int, platform: str) -> Plan:
+    """Plan the release of a GLOBAL identity lock (AC-L1/AC-L2).
+
+    Releasing sets ``user_approved=0`` while KEEPING the mapping, so the match
+    survives as an ordinary (re-doctorable) auto-match rather than being deleted
+    outright (``unmap`` is the delete-entirely path). Nothing to release when no
+    global lock is set -> empty (no-op) plan.
+    """
+    current = db.get_platform_mapping(track_id, platform)
+    if current is None or not current.user_approved:
+        return Plan(plan_id=new_plan_id(), kind="unlock")
+    row_key = row_key_for(track_id=track_id, platform=platform)
+    proposed = {
+        "track_id": track_id,
+        "platform": platform,
+        "user_approved": 0,
+    }
+    change = PlanChange(
+        op="update",
+        table="platform_tracks",
+        row_key=row_key,
+        current=_global_mapping_state(current),
+        proposed=proposed,
+        reason=f"release global {platform} lock",
+        provenance="user:unlock",
+        locked=True,
+    )
+    return _single_change_plan("unlock", f"track:{track_id}", change)
+
+
 def build_enrich_plan(db: Database, track_id: int, fields: dict[str, object]) -> Plan:
     """Plan an enrichment overwrite of matcher-read ``tracks`` fields.
 
@@ -147,6 +231,24 @@ def _mapping_state(mapping: dict | None) -> dict | None:
         "platform_track_id": mapping["platform_track_id"],
         "source": mapping["source"],
         "user_approved": 1 if mapping["user_approved"] else 0,
+    }
+
+
+def _global_mapping_state(mapping) -> dict | None:
+    """Serialize the spec-column state of a ``platform_tracks`` row for a plan.
+
+    Only the columns the apply engine may write (``_TABLE_SPECS['platform_tracks']``)
+    are recorded, so rollback restores exactly what the change touched.
+    """
+    if mapping is None:
+        return None
+    return {
+        "track_id": mapping.track_id,
+        "platform": mapping.platform,
+        "platform_track_id": mapping.platform_track_id,
+        "status": mapping.status,
+        "user_approved": 1 if mapping.user_approved else 0,
+        "fingerprint": mapping.fingerprint,
     }
 
 

@@ -184,6 +184,35 @@ def build_parser() -> argparse.ArgumentParser:
     p_unmap.add_argument("--tidal", action="store_true", help="Remove Tidal mapping")
     p_unmap.add_argument("--ytmusic", action="store_true", help="Remove YouTube Music mapping")
 
+    # lock — routed identity lock (global default or per-playlist override)
+    p_lock = sub.add_parser(
+        "lock",
+        help="Lock a track to a specific platform release (routed via plan/apply)",
+    )
+    p_lock.add_argument("playlist", nargs="?", help="Playlist name (track lookup / --scope playlist)")
+    p_lock.add_argument("title", nargs="?", help="Track title, substring match (omit with --track-id)")
+    p_lock.add_argument("--track-id", type=int, help="Canonical track id (locks without playlist/title)")
+    p_lock.add_argument("--tidal", help="Tidal track ID to lock to")
+    p_lock.add_argument("--ytmusic", help="YouTube Music video ID to lock to")
+    p_lock.add_argument("--scope", choices=["global", "playlist"], default="global",
+                        help="global default lock (default) or per-playlist override")
+    p_lock.add_argument("--apply", action="store_true", help="Apply immediately instead of writing a plan")
+    p_lock.add_argument("--interactive", action="store_true", help="Step through the change before applying")
+
+    # unlock — release an identity lock (global default or per-playlist override)
+    p_unlock = sub.add_parser(
+        "unlock", help="Release an identity lock (routed via plan/apply)"
+    )
+    p_unlock.add_argument("playlist", nargs="?", help="Playlist name (track lookup / --scope playlist)")
+    p_unlock.add_argument("title", nargs="?", help="Track title, substring match (omit with --track-id)")
+    p_unlock.add_argument("--track-id", type=int, help="Canonical track id (unlocks without playlist/title)")
+    p_unlock.add_argument("--tidal", action="store_true", help="Release the Tidal lock")
+    p_unlock.add_argument("--ytmusic", action="store_true", help="Release the YouTube Music lock")
+    p_unlock.add_argument("--scope", choices=["global", "playlist"], default="global",
+                          help="global default lock (default) or per-playlist override")
+    p_unlock.add_argument("--apply", action="store_true", help="Apply immediately instead of writing a plan")
+    p_unlock.add_argument("--interactive", action="store_true", help="Step through the change before applying")
+
     # edit
     p_edit = sub.add_parser("edit", help="Edit track metadata (title/artist/album)")
     p_edit.add_argument("track_id", nargs="?", type=int, help="Canonical track id to edit")
@@ -752,6 +781,12 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "unmap":
             from tuneshift.commands.map_cmd import handle_unmap
             return handle_unmap(args, db)
+        elif args.command == "lock":
+            from tuneshift.commands.lock_cmd import handle_lock
+            return handle_lock(args, db)
+        elif args.command == "unlock":
+            from tuneshift.commands.lock_cmd import handle_unlock
+            return handle_unlock(args, db)
         elif args.command == "edit":
             from tuneshift.commands.edit_cmd import handle_edit
             return handle_edit(args, db)

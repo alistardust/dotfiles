@@ -1,4 +1,13 @@
-"""Map command: manually link a track to a platform ID."""
+"""Map command: manually link a track to a platform ID.
+
+``map`` writes the GLOBAL platform mapping directly (with optional ``--verify``
+metadata capture) and ``unmap`` deletes it. For a REVIEWABLE, journaled, and
+reversible identity lock — at global OR per-playlist scope — prefer the routed
+``lock`` / ``unlock`` commands (see ``commands/lock_cmd.py``), which produce a
+plan by default (§7.1 mutation routing, AC-L1/AC-P1). ``map``/``unmap`` remain
+the immediate manual path (``map`` additionally captures platform metadata via
+``--verify``).
+"""
 import sys
 
 from tuneshift.db import Database
