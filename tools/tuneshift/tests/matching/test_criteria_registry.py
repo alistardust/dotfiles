@@ -194,3 +194,52 @@ def test_edit_axis_require_album_version_hard_rejects_radio_edit():
     radio = crit.extract(_edit_meta(version="Radio Edit"))
     # A structured marker is confident, so REQUIRE stays hard (not demoted).
     assert crit.compare(radio, radio, Strength.REQUIRE) is Verdict.HARD_REJECT
+
+
+# --- M3: DateCriterion (recording/release/remaster-year prefer/require) -------
+
+
+def _date_meta(*, remaster_year=None, release_date=None, recording_date=None):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        remaster_year=remaster_year,
+        release_date=release_date,
+        recording_date=recording_date,
+    )
+
+
+def test_date_criterion_prefers_exact_remaster_year():
+    from tuneshift.matching.criteria import DateCriterion
+
+    crit = DateCriterion(name="remaster_year", date_field="remaster_year", target="2015")
+    hit = crit.extract(_date_meta(remaster_year=2015))
+    miss = crit.extract(_date_meta(remaster_year=1999))
+    assert crit.compare(hit, hit, Strength.PREFER) is Verdict.SOFT_BONUS
+    assert crit.compare(miss, miss, Strength.PREFER) is Verdict.SOFT_PENALTY
+
+
+def test_date_criterion_original_means_no_remaster():
+    from tuneshift.matching.criteria import DateCriterion
+
+    crit = DateCriterion(name="remaster_year", date_field="remaster_year", target="original")
+    original = crit.extract(_date_meta(remaster_year=None))
+    remastered = crit.extract(_date_meta(remaster_year=2015))
+    assert crit.compare(original, original, Strength.PREFER) is Verdict.SOFT_BONUS
+    assert crit.compare(remastered, remastered, Strength.PREFER) is Verdict.SOFT_PENALTY
+
+
+def test_date_criterion_parses_year_from_iso_release_date():
+    from tuneshift.matching.criteria import DateCriterion
+
+    crit = DateCriterion(name="release_year", date_field="release_date", target="1999")
+    val = crit.extract(_date_meta(release_date="1999-05-18"))
+    assert val is not None and "1999" in val.tokens
+    assert crit.compare(val, val, Strength.REQUIRE) is Verdict.HARD_PASS
+
+
+def test_date_criterion_unextractable_yields_no_verdict():
+    from tuneshift.matching.criteria import DateCriterion
+
+    crit = DateCriterion(name="remaster_year", date_field="remaster_year", target="2015")
+    assert crit.extract(_date_meta()) is None

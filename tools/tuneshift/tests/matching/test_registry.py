@@ -245,3 +245,46 @@ def test_m7_radio_edit_marker_read_from_title_too():
     result = select_version(M7_SOURCE, [radio, M7_ALBUM], active=active)
 
     assert result.winner is radio
+
+
+# --- M3: date-axis prefs + earliest-original-release tiebreak (AC-M3/AC-C6) ---
+
+
+def _dated_rel(pid, *, remaster_year=None, release_date=None,
+               title="Bohemian Rhapsody", available=True):
+    return SimpleNamespace(
+        platform_id=pid,
+        title=title,
+        artist="Queen",
+        album="A Night at the Opera",
+        isrc="GBUM71029604",
+        duration_seconds=354,
+        available=available,
+        remaster_year=remaster_year,
+        release_date=release_date,
+        recording_date=None,
+    )
+
+
+def test_m3_prefer_specific_remaster_year_selects_that_remaster():
+    src = _dated_rel("src")
+    r1999 = _dated_rel("r1999", remaster_year=1999)
+    r2015 = _dated_rel("r2015", remaster_year=2015)
+    specs = [PreferenceSpec(axis="remaster_year", target="2015",
+                            strength=Strength.PREFER, scope="playlist")]
+    active = resolve_active_preferences(specs)
+    result = select_version(src, [r1999, r2015], active=active)
+    assert result.winner is r2015
+    assert result.decided_by == "remaster_year"
+
+
+def test_m3_earliest_original_release_tiebreak_fires_without_prefs():
+    # Two identical-identity album versions differing only by release year and
+    # NO active preference: the deterministic earliest-original tiebreak (AC-C6)
+    # picks the earliest, rather than an arbitrary input-order pick.
+    src = _dated_rel("src")
+    later = _dated_rel("later", release_date="2011-01-01")
+    original = _dated_rel("orig", release_date="1975-11-21")
+    result = select_version(src, [later, original], active=())
+    assert result.winner is original
+    assert result.decided_by == "release-year"

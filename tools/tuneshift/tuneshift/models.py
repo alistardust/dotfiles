@@ -102,6 +102,9 @@ class TrackResult:
     media_metadata_tags: list[str] | None = None
     album_artist: str | None = None
     album_type: str | None = None
+    recording_date: str | None = None
+    release_date: str | None = None
+    remaster_year: int | None = None
 
 
 @dataclass(frozen=True)

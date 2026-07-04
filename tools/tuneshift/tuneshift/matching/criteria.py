@@ -451,6 +451,73 @@ class EditAxisCriterion:
         return _soft_signal(self.name, self.weight, verdict)
 
 
+@dataclass
+class DateCriterion:
+    """A date/year criterion over a candidate's recording/release/remaster date (M3).
+
+    ``date_field`` names the metadata attribute to read. It may hold an integer
+    year (``remaster_year``) or an ISO date string (``release_date`` /
+    ``recording_date``), from which the four-digit year is parsed. ``target`` is
+    either a four-digit year (exact-year match) or the literal ``"original"``,
+    which is satisfied only when the field is ABSENT — i.e. the un-remastered /
+    un-dated original form.
+
+    Dates are structured metadata, so a verdict is confident (a ``require`` may
+    hard-filter). An absent field yields no value → NO_VERDICT → no signal, per
+    the parity rule (§5.1): a criterion with nothing to read never perturbs the
+    score.
+    """
+
+    name: str
+    date_field: str
+    target: str
+    weight: int = 10
+    hard_cap: HardCapPolicy = HardCapPolicy.NONE
+
+    _ORIGINAL = "original"
+
+    @staticmethod
+    def _year_of(raw: object) -> int | None:
+        if raw is None:
+            return None
+        if isinstance(raw, int):
+            return raw
+        match = re.search(r"\d{4}", str(raw))
+        return int(match.group()) if match else None
+
+    def extract(self, meta: object) -> CriterionValue | None:
+        raw = getattr(meta, self.date_field, None)
+        if raw is None:
+            # ``original`` keys on ABSENCE, but an absent field is still "no
+            # evidence to compare years" — represent absence with an explicit
+            # marker value so the comparator can distinguish it from "unknown".
+            if self.target.strip().lower() == self._ORIGINAL:
+                return CriterionValue(raw=None, tokens=frozenset({self._ORIGINAL}),
+                                      structured=True)
+            return None
+        year = self._year_of(raw)
+        if year is None:
+            return None
+        return CriterionValue(raw=year, tokens=frozenset({str(year)}), structured=True)
+
+    def compare(
+        self,
+        source: CriterionValue,
+        candidate: CriterionValue,
+        strength: Strength | None,
+    ) -> Verdict:
+        target = self.target.strip().lower()
+        if target == self._ORIGINAL:
+            satisfied = self._ORIGINAL in candidate.tokens
+        else:
+            satisfied = target in candidate.tokens
+        # Dates are structured -> confident; a hard verdict stays hard.
+        return resolve_strength_verdict(strength, satisfied=satisfied)
+
+    def to_signal(self, verdict: Verdict) -> SignalPenalty | None:
+        return _soft_signal(self.name, self.weight, verdict)
+
+
 class CriterionRegistry:
     """An ordered, name-unique collection of registered criteria.
 

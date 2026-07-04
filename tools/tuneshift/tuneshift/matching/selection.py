@@ -27,6 +27,7 @@ availability and Phase 2 reproduces today's base scoring (AC-C5 winner-parity).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import re
 from typing import TYPE_CHECKING, Any
 
 from tuneshift.matching.base_scoring import score_signals
@@ -43,6 +44,7 @@ from tuneshift.matching.precedence import (
     derive_precedence,
     resolve_conflict,
 )
+from tuneshift.matching.tiebreak import TieCandidate, tie_break
 
 if TYPE_CHECKING:
     from tuneshift.matching.aliases import AliasResolver
@@ -313,6 +315,61 @@ def _phase2_score(
     return scored
 
 
+def _release_year(cand: object) -> int | None:
+    """Earliest ORIGINAL release year of a candidate for the AC-C6 tiebreak.
+
+    Prefers ``recording_date`` (when the original recording date is known) then
+    ``release_date``; a remaster year is deliberately NOT used — the tiebreak
+    favours the canonical original over later reissues. Returns ``None`` when no
+    date is present (treated as "newest" by the tiebreak so dated originals win).
+    """
+    for attr in ("recording_date", "release_date"):
+        raw = getattr(cand, attr, None)
+        if raw is None:
+            continue
+        if isinstance(raw, int):
+            return raw
+        match = re.search(r"\d{4}", str(raw))
+        if match:
+            return int(match.group())
+    return None
+
+
+def _availability_rank(cand: object) -> int:
+    """Higher = more available; feeds the tiebreak's second tier."""
+    if getattr(cand, "available", None) is False or getattr(cand, "tier_restricted", False):
+        return 0
+    return 2 if getattr(cand, "available", None) is True else 1
+
+
+def _deterministic_tiebreak(
+    scored: list[tuple[Any, Distance, dict[PreferenceRef, Verdict]]],
+    cluster: list[int],
+) -> tuple[int, str | None]:
+    """Break a same-identity contention band deterministically (AC-C6).
+
+    Returns ``(winner_index_into_scored, decided_by)`` where ``decided_by`` is
+    the tie tier name when a MEANINGFUL tier (earliest-original release-year or
+    availability) separated the candidates, or ``None`` when only the arbitrary
+    stable-id fallback did — in which case the caller keeps the near-tie flagged
+    for review (AC-S3) even though the pick itself is deterministic.
+    """
+    tie_candidates = [
+        TieCandidate(
+            id=str(getattr(scored[i][0], "platform_id", i)),
+            release_year=_release_year(scored[i][0]),
+            availability_rank=_availability_rank(scored[i][0]),
+        )
+        for i in cluster
+    ]
+    result = tie_break(tie_candidates)
+    winner_pos = next(
+        idx for idx, tc in zip(cluster, tie_candidates) if tc.id == result.winner
+    )
+    decided_by = result.decided_by if result.decided_by != "stable-id" else None
+    return winner_pos, decided_by
+
+
 def _resolve_winner(
     scored: list[tuple[Any, Distance, dict[PreferenceRef, Verdict]]],
     soft: list[ActivePreference],
@@ -322,12 +379,14 @@ def _resolve_winner(
     Candidates whose BASE identity distance is within :data:`AMBIGUITY_DELTA` of
     the best form the same-song contention set; within it soft preferences decide
     by precedence (AC-C7, lexicographic favor — a neutral candidate has favor 0
-    and loses to one a higher-precedence preference wants). Outside the band the
+    and loses to one a higher-precedence preference wants). When no preference
+    (or precedence is exhausted) separates the band, the deterministic AC-C6
+    tiebreak (earliest-original release-year -> availability -> stable-id) picks
+    the winner; a meaningful tier resolves the contention, a pure stable-id
+    fallback still surfaces the near-tie for review (AC-S3). Outside the band the
     better identity match wins outright: a preference selects among comparable
     versions, it never rescues a poor match. Returns ``(winner_index,
-    decided_by, ambiguous)`` where ``ambiguous`` is set when 2+ survivors are
-    within the band and nothing (preference or lock) resolved the contention —
-    the near-tie is surfaced for review rather than guessed (AC-S3).
+    decided_by, ambiguous)``.
     """
 
     if not scored:
@@ -335,19 +394,24 @@ def _resolve_winner(
     best_total = scored[0][1].total
     cluster = [i for i, row in enumerate(scored) if row[1].total - best_total <= AMBIGUITY_DELTA]
     contested = len(cluster) >= 2
-    if not contested or not soft:
-        # A lone best is unambiguous; a contested band with no preference to break
-        # it is a guess -> flag for review (AC-S3), still surfacing a provisional pick.
-        return 0, None, contested
+    if not contested:
+        return 0, None, False
+    if not soft:
+        # No preference to break the band: fall to the deterministic AC-C6
+        # tiebreak. A meaningful tier (earliest-original / availability) resolves
+        # it; a stable-id-only pick stays flagged for review (AC-S3).
+        winner_index, decided_by = _deterministic_tiebreak(scored, cluster)
+        return winner_index, decided_by, decided_by is None
 
     precedence = _precedence_of(soft)
     candidate_verdicts = {i: scored[i][2] for i in cluster}
     decision = resolve_conflict(candidate_verdicts, precedence)
     if decision.winner is not None:
         return decision.winner, decision.decided_by, False
-    # Precedence could not distinguish -> provisional lowest-distance survivor,
-    # flagged ambiguous for review.
-    return 0, None, True
+    # Precedence could not distinguish -> deterministic AC-C6 tiebreak among the
+    # contested band; a meaningful tier resolves it, else surface for review.
+    winner_index, decided_by = _deterministic_tiebreak(scored, cluster)
+    return winner_index, decided_by, decided_by is None
 
 
 def _resolve_lock(

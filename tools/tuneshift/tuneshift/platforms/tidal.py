@@ -34,6 +34,33 @@ def _retry(fn: Callable[[], Any], max_retries: int = 3) -> Any:
     raise RuntimeError("Unreachable retry state")
 
 
+def _release_date_iso(track: Any, album: Any) -> str | None:
+    """Normalise a Tidal track/album release date to an ISO date string.
+
+    tidalapi exposes ``tidal_release_date``/``release_date`` as ``datetime``
+    objects (occasionally already strings). Prefer the track's own date, fall
+    back to the album's. Returns ``None`` when no date is exposed so the
+    DateCriterion treats the field as unextractable (NO_VERDICT) rather than
+    fabricating a year.
+    """
+    for source, attrs in (
+        (track, ("tidal_release_date", "release_date")),
+        (album, ("release_date",)),
+    ):
+        if source is None:
+            continue
+        for attr in attrs:
+            value = getattr(source, attr, None)
+            if value is None:
+                continue
+            if isinstance(value, datetime):
+                return value.date().isoformat()
+            text = str(value).strip()
+            if text:
+                return text
+    return None
+
+
 class TidalClient:
     """Tidal streaming platform client."""
 
@@ -396,6 +423,10 @@ class TidalClient:
             if album_artist_obj is not None:
                 album_artist = getattr(album_artist_obj, "name", None)
             album_type = getattr(album, "type", None)
+        # Release date (M3 date axes): prefer the track's own release date, fall
+        # back to the album's. tidalapi exposes datetime objects; normalise to an
+        # ISO date string so the DateCriterion year-parse works uniformly.
+        release_date = _release_date_iso(track, album)
         audio_modes = getattr(track, "audio_modes", None)
         media_tags = getattr(track, "media_metadata_tags", None)
         audio_quality = getattr(track, "audio_quality", None)
@@ -415,6 +446,7 @@ class TidalClient:
             media_metadata_tags=list(media_tags) if media_tags else None,
             album_artist=str(album_artist) if album_artist else None,
             album_type=str(album_type) if album_type else None,
+            release_date=release_date,
         )
 
 

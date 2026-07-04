@@ -24,6 +24,7 @@ from dataclasses import dataclass
 
 from tuneshift.matching.criteria import (
     Criterion,
+    DateCriterion,
     EditAxisCriterion,
     Strength,
     TitleTokenCriterion,
@@ -49,6 +50,15 @@ STRUCTURED_AXIS_FIELDS: dict[str, str] = {
 TITLE_AXES: frozenset[str] = frozenset(
     {"performance", "content", "edit", "production"}
 )
+
+#: Date/year axes (M3). Each maps a preference axis to the candidate metadata
+#: attribute the :class:`~tuneshift.matching.criteria.DateCriterion` reads; the
+#: target is a four-digit year or the literal ``"original"`` (field absent).
+DATE_AXIS_FIELDS: dict[str, str] = {
+    "recording_year": "recording_date",
+    "release_year": "release_date",
+    "remaster_year": "remaster_year",
+}
 
 
 @dataclass(frozen=True)
@@ -82,6 +92,12 @@ def criterion_for(
     wl = whitelist or load_token_whitelist()
     canonical = wl.canonical(target)
 
+    if axis in DATE_AXIS_FIELDS:
+        # Date axes carry a year / "original" target, not a whitelist token, so
+        # the raw target is passed through unfolded.
+        return DateCriterion(
+            name=axis, date_field=DATE_AXIS_FIELDS[axis], target=target
+        )
     field = STRUCTURED_AXIS_FIELDS.get(axis)
     if field is not None:
         return TokenCriterion(
@@ -96,8 +112,10 @@ def criterion_for(
     raise ValueError(f"unknown preference axis {axis!r}")
 
 
-#: All criterion axes a preference may target (structured + title-derived).
-KNOWN_AXES: frozenset[str] = frozenset(STRUCTURED_AXIS_FIELDS) | TITLE_AXES
+#: All criterion axes a preference may target (structured + title-derived + date).
+KNOWN_AXES: frozenset[str] = (
+    frozenset(STRUCTURED_AXIS_FIELDS) | TITLE_AXES | frozenset(DATE_AXIS_FIELDS)
+)
 
 #: Scope name each cascade layer maps onto for engine precedence
 #: (:data:`tuneshift.matching.precedence.SCOPE_RANK`). The most-specific
