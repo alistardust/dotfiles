@@ -1,0 +1,8 @@
+{
+  "_comment": "Matching gold-set acceptance gates. Edit these to tune quality bars; the gold runner reads this file. See tests/gold/config.py for field docs. max_review_burden_per_1k is the PRODUCTION target (verified against real telemetry, not the adversarial gold set); gold_burden_ceiling_per_1k is the gold-set regression guard.",
+  "max_severe_mismatches": 0,
+  "min_recall": 0.95,
+  "max_review_burden_per_1k": 20.0,
+  "min_zero_intervention_rate": 0.80,
+  "gold_burden_ceiling_per_1k": 110.0
+}

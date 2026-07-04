@@ -87,19 +87,40 @@ distribution) protects all pinned positions.
 ## Version Matching Rules
 
 The reconcile pipeline selects platform tracks in this priority:
-1. **ISRC match** (score=100, but flags divergence if duration is >1.6x expected)
+1. **ISRC lookup** is a *discovery strategy*, not ground truth. An ISRC hit
+   surfaces a candidate, but that candidate is still scored like any other and
+   can be down-ranked or rejected — ISRCs are shared/mislabelled often enough
+   (clean vs. explicit, single vs. album edit) that a blind accept is unsafe.
+   The short-circuit only fires when the found candidate *also* scores a clean
+   title+artist+album match.
 2. **Title+artist search** scored with `score_match_with_version`:
    - Base similarity (title: 0-50, artist: 0-30, album: 0-20)
-   - Version penalty (live: -20, remix: -20, tribute: -20, compilation: -15, acoustic: -10, remaster: -10, deluxe: -5)
+   - **Source-aware recording verdict** (see `matching/version.py`): the
+     candidate's recording class is compared to the SOURCE's, not judged in
+     isolation. A studio source REJECTs a live/karaoke/instrumental/tribute/
+     cover take (score floored to 0); a live source MATCHes a live take; a live
+     source falling back to the studio master is a SUBSTITUTE (down-ranked,
+     never auto-selected); a remaster of the same recording is a SOFT match; a
+     clean candidate never satisfies an explicit source (REJECT).
+   - **Version-intent override** from per-playlist prefs (`version_intent`):
+     `prefer:[live]` elevates a live candidate to a MATCH; `avoid:[live]` hard-
+     rejects live regardless of source. Default prefs map to *no* intent, so
+     scoring stays purely source-aware.
+   - Residual candidate-only penalties for packaging keywords that are not
+     recording classes (radio-edit, deluxe, compilation), applied only when the
+     candidate has them and the source does not.
    - Duration penalty (>1.4x shortest: -10, >1.6x: -15, >2.0x: -20)
-3. **User-approved mappings** are never re-reconciled
+3. **User-approved mappings** are never re-reconciled.
 
-Key patterns caught by version penalty:
-- Live recordings, concert versions
-- Performance Mix, Extended Mix, Club Mix, 12" versions
-- Instrumentals, dub mixes
-- Compilations (Greatest Hits, Best Of, etc.)
-- Tributes and reimaginings
+The legacy candidate-only `version_penalty`/`version_signals` are retained for
+byte-parity golden tests; the live scoring path uses the source-aware signals.
+
+Key recording classes distinguished (distinct performances, not packaging):
+- Live recordings / concert versions
+- Remixes (Performance/Extended/Club Mix, 12" versions), dub mixes
+- Instrumentals, karaoke
+- Acoustic re-recordings
+- Tributes / covers / reimaginings
 
 ### Known Tidal Pitfalls
 
@@ -117,7 +138,7 @@ Key patterns caught by version penalty:
 |----------|--------|-------------|-------|
 | Tidal | `tidalapi` | `~/.local/share/tidal-importer/session.json` | Full CRUD, reorder works |
 | YouTube Music | `ytmusicapi` | `~/.local/share/tuneshift/ytmusic_oauth.json` | Push works, reorder gets 403 (scope issue) |
-| Spotify | Not yet implemented | - | Planned |
+| Spotify | `spotipy` (PKCE) | `~/.local/share/tuneshift/spotify.json` | Track/album/artist search + enrich; client_id via env or 1Password |
 
 ### YTM API Quirks
 - Reorder requires `playlistItems.delete` permission which returns 403

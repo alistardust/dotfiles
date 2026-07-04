@@ -38,6 +38,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_sync.add_argument("--all", action="store_true", help="Sync all playlists")
     p_sync.add_argument("--reconcile", action="store_true", help="Force re-reconciliation")
     p_sync.add_argument("--auto", action="store_true", help="Accept all best matches without prompting")
+    p_sync.add_argument(
+        "--verify-locks", action="store_true",
+        help="Probe locked tracks for liveness and self-heal dead platform ids "
+             "to the same recording (skips the API probe by default)",
+    )
 
     # diff
     p_diff = sub.add_parser("diff", help="Show what would change on sync")
@@ -164,11 +169,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     # map
     p_map = sub.add_parser("map", help="Manually map a track to a platform ID")
-    p_map.add_argument("playlist", help="Playlist name")
-    p_map.add_argument("title", help="Track title (substring match)")
+    p_map.add_argument("playlist", nargs="?", help="Playlist name (omit when using --track-id)")
+    p_map.add_argument("title", nargs="?", help="Track title, substring match (omit when using --track-id)")
+    p_map.add_argument("--track-id", type=int, help="Canonical track id (maps without playlist/title)")
     p_map.add_argument("--tidal", help="Tidal track ID")
     p_map.add_argument("--ytmusic", help="YouTube Music video ID")
     p_map.add_argument("--verify", action="store_true", help="Verify ID exists on platform")
+    p_map.add_argument("--dry-run", action="store_true", help="Show the intended mapping without writing")
 
     # unmap
     p_unmap = sub.add_parser("unmap", help="Remove a manual platform mapping")
@@ -176,6 +183,36 @@ def build_parser() -> argparse.ArgumentParser:
     p_unmap.add_argument("title", help="Track title (substring match)")
     p_unmap.add_argument("--tidal", action="store_true", help="Remove Tidal mapping")
     p_unmap.add_argument("--ytmusic", action="store_true", help="Remove YouTube Music mapping")
+
+    # edit
+    p_edit = sub.add_parser("edit", help="Edit track metadata (title/artist/album)")
+    p_edit.add_argument("track_id", nargs="?", type=int, help="Canonical track id to edit")
+    p_edit.add_argument("--playlist", help="Playlist name (for batch --strip-album-from-title)")
+    p_edit.add_argument("--title", help="New track title")
+    p_edit.add_argument("--artist", help="New track artist")
+    p_edit.add_argument("--album", help="New track album")
+    p_edit.add_argument("--strip-album-from-title", action="store_true",
+                        help="Remove a trailing parenthetical that repeats the album name")
+    p_edit.add_argument("--dry-run", action="store_true", help="Show changes without writing")
+
+    # why
+    p_why = sub.add_parser("why", help="Explain a track's match decision on each platform")
+    p_why.add_argument("track_id", type=int, help="Canonical track id to explain")
+    p_why.add_argument("--platform", choices=["spotify", "tidal", "ytmusic"],
+                       help="Limit to one platform (default: all with a stored decision)")
+    p_why.add_argument("--live", action="store_true",
+                       help="Reconcile now against the platform(s) instead of reading the "
+                            "stored decision (requires login)")
+
+    # triage
+    p_triage = sub.add_parser(
+        "triage",
+        help="Cluster tracks needing attention for bulk review + show review burden",
+    )
+    p_triage.add_argument("playlist", nargs="?",
+                          help="Limit to one playlist (default: all playlists)")
+    p_triage.add_argument("--platform", choices=["spotify", "tidal", "ytmusic"],
+                          help="Limit to one platform (default: all)")
 
     # goal
     p_goal = sub.add_parser("goal", help="Set or show playlist goal/theme")
@@ -200,11 +237,27 @@ def build_parser() -> argparse.ArgumentParser:
     p_curate.add_argument("--hard-limit", type=int, help="Hard limit track count")
 
     # prefs
-    p_prefs = sub.add_parser("prefs", help="Manage global version preferences")
-    p_prefs.add_argument("action", choices=["show", "set"], help="Show or set preferences")
-    p_prefs.add_argument("key", nargs="?", help="Preference key (section.name)")
-    p_prefs.add_argument("value", nargs="?", help="Value to set")
-    p_prefs.add_argument("--config-path", help="Path to preferences file")
+    p_prefs = sub.add_parser("prefs", help="Manage version preferences (global/playlist/track)")
+    p_prefs.add_argument("action", choices=["show", "set", "clear"], help="Show, set or clear preferences")
+    p_prefs.add_argument("key", nargs="?", help="Preference key (version.<field>)")
+    p_prefs.add_argument("value", nargs="?", help="Value to set (comma-list for prefer/avoid)")
+    prefs_scope = p_prefs.add_mutually_exclusive_group()
+    prefs_scope.add_argument("--global", dest="global_scope", action="store_true", help="Target global defaults (default)")
+    prefs_scope.add_argument("--playlist", help="Target a playlist by name")
+    prefs_scope.add_argument("--track", type=int, help="Target a track by id")
+
+    # alias
+    p_alias = sub.add_parser(
+        "alias", help="Manage artist-alias equivalence classes (98\u00b0 / 98 Degrees)"
+    )
+    alias_sub = p_alias.add_subparsers(dest="action", required=True)
+    alias_sub.add_parser("list", help="List all alias classes")
+    p_alias_show = alias_sub.add_parser("show", help="Show the class an artist belongs to")
+    p_alias_show.add_argument("artist", help="Artist name to look up")
+    p_alias_add = alias_sub.add_parser("add", help="Create/extend a class from >=2 members")
+    p_alias_add.add_argument("members", nargs="+", help="Two or more artist surface forms")
+    p_alias_remove = alias_sub.add_parser("remove", help="Remove a member from its class")
+    p_alias_remove.add_argument("member", help="Artist surface form to remove")
 
     # share
     p_share = sub.add_parser("share", help="Generate shareable links for a playlist")
@@ -634,6 +687,15 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "unmap":
             from tuneshift.commands.map_cmd import handle_unmap
             return handle_unmap(args, db)
+        elif args.command == "edit":
+            from tuneshift.commands.edit_cmd import handle_edit
+            return handle_edit(args, db)
+        elif args.command == "why":
+            from tuneshift.commands.why_cmd import handle_why
+            return handle_why(args, db)
+        elif args.command == "triage":
+            from tuneshift.commands.triage_cmd import handle_triage
+            return handle_triage(args, db)
         elif args.command == "goal":
             from tuneshift.commands.goal_cmd import handle_goal
             return handle_goal(args, db)
@@ -645,7 +707,10 @@ def main(argv: list[str] | None = None) -> int:
             return handle_curate(args, db)
         elif args.command == "prefs":
             from tuneshift.commands.prefs_cmd import handle_prefs
-            return handle_prefs(args)
+            return handle_prefs(args, db)
+        elif args.command == "alias":
+            from tuneshift.commands.alias_cmd import handle_alias
+            return handle_alias(args, db)
         elif args.command == "share":
             from tuneshift.commands.share_cmd import handle_share
             return handle_share(args, db)

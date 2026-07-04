@@ -34,7 +34,10 @@ def test_status_named_playlist_shows_tracks_and_platform(tmp_db: Path, capsys) -
     out = capsys.readouterr().out
     assert "Mix" in out
     assert "Tracks: 1" in out
-    assert "Platforms: tidal" in out
+    # status now reports per-platform sync state (bc66259); a freshly linked
+    # playlist that has never been pushed shows "push pending".
+    assert "Platforms:" in out
+    assert "tidal: push pending (never synced)" in out
 
 
 def test_status_named_playlist_without_platform(tmp_db: Path, capsys) -> None:

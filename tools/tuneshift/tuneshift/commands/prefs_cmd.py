@@ -1,86 +1,162 @@
-"""Preferences command: manage global version preferences."""
-import copy
-import json
-from pathlib import Path
+"""Preferences command: manage DB-backed version preferences.
 
-try:
-    import tomllib
-except ImportError:
-    import tomli as tomllib  # Python < 3.11
+Preferences cascade global < playlist < track and are read by the
+reconciliation scorer (see :mod:`tuneshift.matching.preferences`). This command
+is the user-facing control surface for that cascade: it writes to the same DB
+layers the matcher reads, so a configured preference actually takes effect on
+the next sync/add/doctor run.
 
-DEFAULT_PREFS = {
-    "version_preferences": {
-        "prefer": ["studio", "original", "explicit"],
-        "avoid": ["live", "remix", "acoustic", "radio-edit", "clean"],
-        "duration_tolerance_percent": 15.0,
-    }
-}
+Grammar::
 
-DEFAULT_CONFIG_PATH = Path.home() / ".config" / "tuneshift" / "preferences.toml"
+    tuneshift prefs show  [--global | --playlist NAME | --track ID]
+    tuneshift prefs set KEY VALUE [--global | --playlist NAME | --track ID]
+    tuneshift prefs clear [--global | --playlist NAME | --track ID]
 
+Keys are dotted ``version.<field>``:
 
-def load_global_preferences(config_path: Path | None = None) -> dict:
-    """Load global preferences from TOML config file."""
-    path = config_path or DEFAULT_CONFIG_PATH
-    if not path.exists():
-        return copy.deepcopy(DEFAULT_PREFS)
-    with open(path, "rb") as f:
-        data = tomllib.load(f)
-    # Merge with defaults (deep copy to avoid mutating module-level constant)
-    result = copy.deepcopy(DEFAULT_PREFS)
-    if "version_preferences" in data:
-        result["version_preferences"].update(data["version_preferences"])
-    return result
+* ``version.prefer`` / ``version.avoid`` -- comma-separated keyword lists
+  (recording classes: live/remix/acoustic/karaoke/instrumental/tribute/studio;
+  lyric axis: explicit/clean; editions: radio/single/expanded/anniversary/
+  deluxe/compilation).
+* ``version.tiebreak_order`` -- comma-separated ordering hints.
+* ``version.duration_tolerance_percent`` -- float.
+* ``version.min_lead`` -- int (wider lead required before a pick is confident).
+"""
+from __future__ import annotations
 
+from collections.abc import Callable
 
-def _write_toml(path: Path, data: dict) -> None:
-    """Write dict as TOML (simple implementation for flat preferences)."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    lines = []
-    for section, values in data.items():
-        lines.append(f"[{section}]")
-        for key, val in values.items():
-            if isinstance(val, list):
-                items = ", ".join(f'"{v}"' for v in val)
-                lines.append(f"{key} = [{items}]")
-            elif isinstance(val, (int, float)):
-                lines.append(f"{key} = {val}")
-            else:
-                lines.append(f'{key} = "{val}"')
-        lines.append("")
-    path.write_text("\n".join(lines))
+from tuneshift.db import Database
+from tuneshift.matching.preferences import Preferences, resolve_preferences
+
+_LIST_KEYS = {"prefer", "avoid", "tiebreak_order"}
+_FLOAT_KEYS = {"duration_tolerance_percent"}
+_INT_KEYS = {"min_lead"}
+_VALID_KEYS = _LIST_KEYS | _FLOAT_KEYS | _INT_KEYS
 
 
-def handle_prefs(args) -> int:
-    """Show or set global preferences."""
-    config_path = Path(getattr(args, "config_path", None) or DEFAULT_CONFIG_PATH)
+def _parse_value(key: str, raw: str):
+    """Parse a raw CLI value into the stored type for ``key``."""
+    if key in _LIST_KEYS:
+        return [t.strip().lower() for t in raw.split(",") if t.strip()]
+    if key in _FLOAT_KEYS:
+        return float(raw)
+    return int(raw)
+
+
+def _resolve_scope(
+    args, db: Database
+) -> tuple[str, Callable[[], dict | None], Callable[[dict | None], None], str] | None:
+    """Resolve the selected preference layer.
+
+    Returns ``(label, getter, setter, layer)`` where ``layer`` is one of
+    ``global``/``playlist``/``track`` (used to slot the stored dict into the
+    right cascade position for effective resolution). Returns ``None`` after
+    printing an error when the target playlist/track does not exist.
+    """
+    playlist = getattr(args, "playlist", None)
+    track = getattr(args, "track", None)
+    if playlist is not None:
+        matches = [p for p in db.list_playlists() if p.name == playlist]
+        if not matches:
+            print(f'Playlist "{playlist}" not found.')
+            return None
+        pid = matches[0].id
+        return (
+            f'playlist "{playlist}"',
+            lambda: db.get_preferences(pid),
+            lambda d: db.set_preferences(pid, d),
+            "playlist",
+        )
+    if track is not None:
+        if db.get_track(track) is None:
+            print(f"Track {track} not found.")
+            return None
+        return (
+            f"track {track}",
+            lambda: db.get_track_preferences(track),
+            lambda d: db.set_track_preferences(track, d),
+            "track",
+        )
+    return (
+        "global",
+        db.get_global_preferences,
+        db.set_global_preferences,
+        "global",
+    )
+
+
+def _print_preferences(prefs: Preferences) -> None:
+    print(f"    prefer                      = {', '.join(prefs.prefer) or '(none)'}")
+    print(f"    avoid                       = {', '.join(prefs.avoid) or '(none)'}")
+    print(f"    duration_tolerance_percent  = {prefs.duration_tolerance_percent}")
+    print(f"    tiebreak_order              = {', '.join(prefs.tiebreak_order) or '(none)'}")
+    print(f"    min_lead                    = {prefs.min_lead}")
+
+
+def _effective(db: Database, stored: dict | None, layer: str) -> Preferences:
+    """Cascade-resolve the effective prefs for the selected layer.
+
+    Global always applies; a playlist/track layer stacks its own stored dict on
+    top of global so ``show`` reflects what the scorer will actually use.
+    """
+    global_prefs = db.get_global_preferences()
+    if layer == "global":
+        return resolve_preferences(stored, None, None)
+    if layer == "playlist":
+        return resolve_preferences(global_prefs, stored, None)
+    return resolve_preferences(global_prefs, None, stored)
+
+
+def handle_prefs(args, db: Database) -> int:
+    """Show, set or clear DB-backed version preferences."""
+    resolved = _resolve_scope(args, db)
+    if resolved is None:
+        return 1
+    label, getter, setter, layer = resolved
 
     if args.action == "show":
-        prefs = load_global_preferences(config_path)
-        print("Global preferences:")
-        for section, values in prefs.items():
-            print(f"\n  [{section}]")
-            for key, val in values.items():
-                print(f"    {key} = {val}")
+        stored = getter()
+        print(f"Stored preferences ({label}):")
+        if stored:
+            for key in ("prefer", "avoid", "tiebreak_order", "duration_tolerance_percent", "min_lead"):
+                if key in stored:
+                    val = stored[key]
+                    shown = ", ".join(val) if isinstance(val, list) else val
+                    print(f"    {key} = {shown}")
+        else:
+            print("    (none set)")
+        print(f"\nEffective preferences ({label}, cascade-resolved):")
+        _print_preferences(_effective(db, stored, layer))
+        return 0
+
+    if args.action == "clear":
+        setter(None)
+        print(f"Cleared preferences ({label}).")
         return 0
 
     if args.action == "set":
-        prefs = load_global_preferences(config_path)
-        # Parse dotted key like "version_preferences.prefer"
-        parts = args.key.split(".", 1)
-        if len(parts) != 2:
-            print(f"Key must be section.key format: {args.key}")
+        if not args.key or args.value is None:
+            print("Usage: prefs set version.<field> <value>")
             return 1
-        section, key = parts
-        if section not in prefs:
-            prefs[section] = {}
-        # Try to parse value as JSON
+        parts = args.key.split(".", 1)
+        if len(parts) != 2 or parts[0] != "version":
+            print(f'Key must be "version.<field>": {args.key}')
+            return 1
+        field = parts[1]
+        if field not in _VALID_KEYS:
+            print(f'Unknown field "{field}". Valid: {sorted(_VALID_KEYS)}')
+            return 1
         try:
-            prefs[section][key] = json.loads(args.value)
-        except (json.JSONDecodeError, TypeError):
-            prefs[section][key] = args.value
-        _write_toml(config_path, prefs)
-        print(f"Set {args.key} = {prefs[section][key]}")
+            value = _parse_value(field, args.value)
+        except ValueError:
+            print(f'Invalid value for {args.key}: "{args.value}"')
+            return 1
+        stored = getter() or {}
+        stored[field] = value
+        setter(stored)
+        shown = ", ".join(value) if isinstance(value, list) else value
+        print(f"Set {args.key} = {shown} ({label}).")
         return 0
 
     print(f"Unknown action: {args.action}")

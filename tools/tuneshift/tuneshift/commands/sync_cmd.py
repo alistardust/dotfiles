@@ -49,6 +49,7 @@ def _sync_one(db, playlist, platforms, args) -> int:
         return 0
 
     push_failed = False
+    synced_ok: dict[str, bool] = {}
 
     for platform_name in platforms:
         client = _load_client(platform_name)
@@ -74,7 +75,10 @@ def _sync_one(db, playlist, platforms, args) -> int:
                 db, track.id, client,
                 force=getattr(args, "reconcile", False),
                 cached_mapping=cached_mappings.get(track.id),
+                playlist_id=playlist.id,
+                verify_locked=getattr(args, "verify_locks", False),
             )
+            db.save_match_audit(track.id, platform_name, result.audit)
 
             if result.confidence == "not_found":
                 unavailable.append(f"  ? {track.title} - {track.artist}")
@@ -151,9 +155,11 @@ def _sync_one(db, playlist, platforms, args) -> int:
             try:
                 client.replace_playlist_tracks(platform_playlist_id, canonical_platform_ids)
                 print(f"  Pushed {len(canonical_platform_ids)} tracks to {platform_name}.")
+                synced_ok[platform_name] = True
             except Exception as exc:
                 print(f"  Push to {platform_name} failed: {exc}", file=sys.stderr)
                 push_failed = True
+                synced_ok[platform_name] = False
         else:
             print(f"  No tracks to push to {platform_name}.")
 
@@ -161,9 +167,7 @@ def _sync_one(db, playlist, platforms, args) -> int:
     if playlist.auto_reorder:
         from tuneshift.sequencer import sequence_playlist
 
-        tracks = db.get_playlist_tracks(playlist.id)
-        track_ids = [t.id for t in tracks if t.id is not None]
-        reordered = sequence_playlist(db, track_ids, arc=playlist.reorder_arc)
+        reordered = sequence_playlist(db, playlist.id, arc=playlist.reorder_arc)
         db.set_playlist_tracks(playlist.id, reordered)
         print(f'\n  Auto-reordered "{playlist.name}" (arc={playlist.reorder_arc})')
 
@@ -188,8 +192,15 @@ def _sync_one(db, playlist, platforms, args) -> int:
                 try:
                     client.replace_playlist_tracks(platform_playlist_id, platform_ids)
                     print(f"  {platform_name}: synced ({len(platform_ids)} tracks)")
+                    synced_ok[platform_name] = True
                 except Exception as exc:
                     print(f"  {platform_name}: reorder push failed ({exc})", file=sys.stderr)
                     push_failed = True
+                    synced_ok[platform_name] = False
+
+    # Record the synced marker only for platforms whose push actually succeeded.
+    for platform_name, ok in synced_ok.items():
+        if ok:
+            db.mark_playlist_synced(playlist.id, platform_name)
 
     return 1 if push_failed else 0

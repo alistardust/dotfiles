@@ -195,3 +195,43 @@ def test_get_track() -> None:
     assert result is not None
     assert result.title == "Louder"
     assert result.platform_id == "122361821"
+
+
+def test_track_to_result_captures_availability_and_tier() -> None:
+    track = MagicMock()
+    track.id = 1
+    track.name = "Song"
+    track.artist = MagicMock()
+    track.artist.name = "A"
+    track.album = MagicMock()
+    track.album.name = "Alb"
+    track.duration = 200
+    track.isrc = "X"
+    track.available = False
+    track.premium_streaming_only = True
+    track.pay_to_stream = False
+
+    result = TidalClient._track_to_result(track)
+
+    assert result.available is False
+    assert result.tier_restricted is True
+
+
+def test_track_to_result_availability_unknown_for_non_bool() -> None:
+    # A real tidalapi object lacking these attrs, or a mock auto-vivifying them,
+    # must not be coerced into a false "blocked"/"restricted" signal.
+    track = MagicMock()
+    track.id = 2
+    track.name = "Song"
+    track.artist = MagicMock()
+    track.artist.name = "A"
+    track.album = MagicMock()
+    track.album.name = "Alb"
+    track.duration = 200
+    track.isrc = "X"
+    # available / premium_streaming_only / pay_to_stream are MagicMocks (truthy)
+
+    result = TidalClient._track_to_result(track)
+
+    assert result.available is None
+    assert result.tier_restricted is False

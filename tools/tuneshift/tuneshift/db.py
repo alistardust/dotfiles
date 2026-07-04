@@ -4,11 +4,21 @@ import json
 import os
 import re
 import sqlite3
+from collections.abc import Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
+from tuneshift.matching.normalize import normalize_artist as _alias_normalize
 from tuneshift.models import Album, Artist, PlatformMapping, Playlist, PlaylistPin, Track
 
-_SCHEMA_VERSION = 11
+if TYPE_CHECKING:
+    from tuneshift.matching import ReviewItem
+
+_SCHEMA_VERSION = 14
+
+# Columns editable via update_track. Constrains f-string interpolation in the
+# UPDATE statement to a fixed, safe set (no SQL identifier injection).
+_TRACK_EDITABLE_COLUMNS = frozenset({"title", "artist", "album"})
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS tracks (
@@ -35,7 +45,8 @@ CREATE TABLE IF NOT EXISTS tracks (
     confidence_score REAL,
     resolved_at TEXT,
     artist_id INTEGER REFERENCES artists(id),
-    album_id INTEGER REFERENCES albums(id)
+    album_id INTEGER REFERENCES albums(id),
+    preferences TEXT
 );
 
 CREATE TABLE IF NOT EXISTS platform_tracks (
@@ -52,6 +63,7 @@ CREATE TABLE IF NOT EXISTS platform_tracks (
     status TEXT NOT NULL DEFAULT 'matched',
     user_approved INTEGER NOT NULL DEFAULT 0,
     unavailable INTEGER NOT NULL DEFAULT 0,
+    fingerprint TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(track_id, platform)
 );
@@ -204,6 +216,16 @@ CREATE TABLE IF NOT EXISTS batch_history (
 );
 CREATE INDEX IF NOT EXISTS idx_batch_history_playlist ON batch_history(playlist_id);
 
+CREATE TABLE IF NOT EXISTS track_edits (
+    id INTEGER PRIMARY KEY,
+    track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+    field TEXT NOT NULL,
+    old_value TEXT,
+    new_value TEXT,
+    edited_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_track_edits_track ON track_edits(track_id);
+
 CREATE TABLE IF NOT EXISTS collections (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,
@@ -252,6 +274,25 @@ CREATE TABLE IF NOT EXISTS track_tags (
     PRIMARY KEY (track_id, tag)
 );
 CREATE INDEX IF NOT EXISTS idx_track_tags_tag ON track_tags(tag);
+
+CREATE TABLE IF NOT EXISTS match_audits (
+    track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+    platform TEXT NOT NULL,
+    availability TEXT NOT NULL,
+    reason_code TEXT NOT NULL,
+    audit_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (track_id, platform)
+);
+
+CREATE TABLE IF NOT EXISTS artist_aliases (
+    class_id INTEGER NOT NULL,
+    member TEXT NOT NULL,
+    norm_member TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (class_id, member)
+);
+CREATE INDEX IF NOT EXISTS idx_artist_aliases_norm ON artist_aliases(norm_member);
 """
 
 _REMIX_RE = re.compile(r"\s*\((?:remaster(?:ed)?|deluxe edition)[^)]*\)\s*", re.IGNORECASE)
@@ -666,6 +707,59 @@ class Database:
                     "CREATE INDEX IF NOT EXISTS idx_track_tags_tag ON track_tags(tag)"
                 )
 
+            if current_version < 12:
+                self.conn.execute("""
+                    CREATE TABLE IF NOT EXISTS match_audits (
+                        track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+                        platform TEXT NOT NULL,
+                        availability TEXT NOT NULL,
+                        reason_code TEXT NOT NULL,
+                        audit_json TEXT NOT NULL,
+                        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                        PRIMARY KEY (track_id, platform)
+                    )
+                """)
+
+            if current_version < 13:
+                # Chunk 6: durable self-healing locks + per-track precedence.
+                cols = {
+                    row[1]
+                    for row in self.conn.execute(
+                        "PRAGMA table_info(platform_tracks)"
+                    ).fetchall()
+                }
+                if "fingerprint" not in cols:
+                    self.conn.execute(
+                        "ALTER TABLE platform_tracks ADD COLUMN fingerprint TEXT"
+                    )
+                track_cols = {
+                    row[1]
+                    for row in self.conn.execute(
+                        "PRAGMA table_info(tracks)"
+                    ).fetchall()
+                }
+                if "preferences" not in track_cols:
+                    self.conn.execute(
+                        "ALTER TABLE tracks ADD COLUMN preferences TEXT"
+                    )
+
+            if current_version < 14:
+                # Artist-alias equivalence: user-curated classes of equivalent
+                # artist surface forms (98\u00ba / 98 Degrees, Ke$ha / Kesha).
+                self.conn.execute("""
+                    CREATE TABLE IF NOT EXISTS artist_aliases (
+                        class_id INTEGER NOT NULL,
+                        member TEXT NOT NULL,
+                        norm_member TEXT NOT NULL,
+                        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                        PRIMARY KEY (class_id, member)
+                    )
+                """)
+                self.conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_artist_aliases_norm "
+                    "ON artist_aliases(norm_member)"
+                )
+
             self.conn.execute(
                 "UPDATE schema_meta SET value = ? WHERE key = 'version'",
                 (str(_SCHEMA_VERSION),),
@@ -702,6 +796,67 @@ class Database:
     def add_track(self, track: Track) -> int:
         """Insert a track and return its ID."""
         return self.insert_track(track)
+
+    def update_track(self, track_id: int, **fields: str | None) -> int:
+        """Update editable identity fields, recomputing normalized columns.
+
+        Only ``title``, ``artist`` and ``album`` may be edited. Normalized
+        lookup columns are recomputed for every changed field so identity
+        matching stays consistent, and each change is recorded in
+        ``track_edits`` for an audit trail. Returns the number of fields
+        that actually changed.
+        """
+        invalid = set(fields) - _TRACK_EDITABLE_COLUMNS
+        if invalid:
+            raise ValueError(f"Cannot edit track fields: {sorted(invalid)}")
+
+        track = self.get_track(track_id)
+        if track is None:
+            raise ValueError(f"Track id not found: {track_id}")
+
+        current = {"title": track.title, "artist": track.artist, "album": track.album}
+        changes = {k: v for k, v in fields.items() if v != current.get(k)}
+        if not changes:
+            return 0
+
+        set_clauses: list[str] = []
+        params: list[str | None] = []
+        for field, value in changes.items():
+            # field is constrained to the allowlist above, so interpolation is safe.
+            set_clauses.append(f"{field} = ?")
+            params.append(value)
+            if field == "title":
+                set_clauses.append("norm_title = ?")
+                params.append(normalize_title(value))
+            elif field == "artist":
+                set_clauses.append("norm_artist = ?")
+                params.append(normalize_artist(value) if value else None)
+            elif field == "album":
+                set_clauses.append("norm_album = ?")
+                params.append(normalize_title(value) if value else None)
+        set_clauses.append("updated_at = datetime('now')")
+
+        with self.conn:
+            self.conn.execute(
+                f"UPDATE tracks SET {', '.join(set_clauses)} WHERE id = ?",
+                (*params, track_id),
+            )
+            for field, value in changes.items():
+                self.conn.execute(
+                    "INSERT INTO track_edits (track_id, field, old_value, new_value) "
+                    "VALUES (?, ?, ?, ?)",
+                    (track_id, field, current.get(field), value),
+                )
+        return len(changes)
+
+    def get_track_edits(self, track_id: int) -> list[dict]:
+        """Return the recorded edit history for a track, newest first."""
+        rows = self.conn.execute(
+            "SELECT field, old_value, new_value, edited_at FROM track_edits "
+            "WHERE track_id = ? ORDER BY id DESC",
+            (track_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     def get_track(self, track_id: int) -> Track | None:
         """Fetch a track by ID."""
@@ -1208,8 +1363,8 @@ class Database:
             """INSERT INTO platform_tracks
                (track_id, platform, platform_track_id, platform_title,
                 platform_artist, platform_album, match_score,
-                is_divergent, divergence_note, status, user_approved)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                is_divergent, divergence_note, status, user_approved, fingerprint)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(track_id, platform) DO UPDATE SET
                  platform_track_id = excluded.platform_track_id,
                  platform_title = excluded.platform_title,
@@ -1219,7 +1374,8 @@ class Database:
                  is_divergent = excluded.is_divergent,
                  divergence_note = excluded.divergence_note,
                  status = excluded.status,
-                 user_approved = excluded.user_approved""",
+                 user_approved = excluded.user_approved,
+                 fingerprint = COALESCE(excluded.fingerprint, platform_tracks.fingerprint)""",
             (
                 mapping.track_id,
                 mapping.platform,
@@ -1232,9 +1388,135 @@ class Database:
                 mapping.divergence_note,
                 mapping.status,
                 int(mapping.user_approved),
+                mapping.fingerprint,
             ),
         )
         self.conn.commit()
+
+    def save_match_audit(self, track_id: int, platform: str, audit) -> None:
+        """Persist the explainable MatchAudit for a (track, platform) pair.
+
+        Stored for every reconcile outcome — including misses — so ``tuneshift
+        why`` can explain a decision without re-running a live search. The audit
+        is serialized to JSON via ``MatchAudit.to_json``; availability and
+        reason_code are also stored as plain columns for cheap filtering.
+        """
+        if audit is None:
+            return
+        self.conn.execute(
+            """INSERT INTO match_audits
+               (track_id, platform, availability, reason_code, audit_json, updated_at)
+               VALUES (?, ?, ?, ?, ?, datetime('now'))
+               ON CONFLICT(track_id, platform) DO UPDATE SET
+                 availability = excluded.availability,
+                 reason_code = excluded.reason_code,
+                 audit_json = excluded.audit_json,
+                 updated_at = excluded.updated_at""",
+            (track_id, platform, audit.availability, audit.reason_code, audit.to_json()),
+        )
+        self.conn.commit()
+
+    def get_match_audit(self, track_id: int, platform: str):
+        """Return the persisted ``MatchAudit`` for a (track, platform), or None."""
+        from tuneshift.matching import MatchAudit
+
+        row = self.conn.execute(
+            "SELECT audit_json FROM match_audits WHERE track_id = ? AND platform = ?",
+            (track_id, platform),
+        ).fetchone()
+        if row is None:
+            return None
+        return MatchAudit.from_json(row["audit_json"])
+
+    def get_match_audits_for_track(self, track_id: int) -> dict[str, object]:
+        """Return all persisted audits for a track, keyed by platform name."""
+        from tuneshift.matching import MatchAudit
+
+        rows = self.conn.execute(
+            "SELECT platform, audit_json FROM match_audits WHERE track_id = ?",
+            (track_id,),
+        ).fetchall()
+        return {row["platform"]: MatchAudit.from_json(row["audit_json"]) for row in rows}
+
+    def get_review_items(
+        self,
+        playlist_id: int | None = None,
+        platform: str | None = None,
+    ) -> list["ReviewItem"]:
+        """Return per-(playlist, track, platform) review items from stored audits.
+
+        Joins persisted ``match_audits`` to the tracks and the playlists they
+        appear in. One item per distinct (playlist, track, platform) so a track
+        pinned twice in a playlist is not double-counted, while the same track in
+        two playlists is surfaced under each. Callers filter/cluster with
+        :func:`tuneshift.matching.cluster_reviews` and
+        :func:`tuneshift.matching.compute_burden`.
+        """
+        from tuneshift.matching import ReviewItem
+
+        sql = """
+            SELECT DISTINCT p.id AS playlist_id, p.name AS playlist_name,
+                   t.id AS track_id, t.title, t.artist, t.album,
+                   ma.platform, ma.availability, ma.reason_code
+            FROM match_audits ma
+            JOIN tracks t ON t.id = ma.track_id
+            JOIN playlist_tracks pt ON pt.track_id = ma.track_id
+            JOIN playlists p ON p.id = pt.playlist_id
+        """
+        conditions: list[str] = []
+        params: list[object] = []
+        if playlist_id is not None:
+            conditions.append("p.id = ?")
+            params.append(playlist_id)
+        if platform is not None:
+            conditions.append("ma.platform = ?")
+            params.append(platform)
+        if conditions:
+            sql += " WHERE " + " AND ".join(conditions)
+        sql += " ORDER BY p.name, t.artist, t.title"
+
+        rows = self.conn.execute(sql, params).fetchall()
+        return [
+            ReviewItem(
+                track_id=row["track_id"],
+                title=row["title"],
+                artist=row["artist"],
+                album=row["album"],
+                platform=row["platform"],
+                availability=row["availability"],
+                reason_code=row["reason_code"],
+                playlist_id=row["playlist_id"],
+                playlist_name=row["playlist_name"],
+            )
+            for row in rows
+        ]
+
+    def get_unavailable_track_ids(
+        self, playlist_id: int, platform: str = "tidal"
+    ) -> list[int]:
+        """Return playlist track ids that are unavailable on ``platform``.
+
+        A track counts as unavailable when its persisted ``match_audit`` for the
+        platform records availability ``not_found`` (genuinely absent) or
+        ``exact_unavailable`` (known but blocked). Tidal is the availability
+        source of truth, so it is the default platform.
+
+        Tracks with no audit for the platform are treated as available (not
+        excluded): a playlist that has never been reconciled is unaffected. The
+        sequencer uses this to keep unavailable tracks from distorting the arc.
+        """
+        rows = self.conn.execute(
+            """
+            SELECT DISTINCT pt.track_id
+            FROM playlist_tracks pt
+            JOIN match_audits ma
+              ON ma.track_id = pt.track_id AND ma.platform = ?
+            WHERE pt.playlist_id = ?
+              AND ma.availability IN ('not_found', 'exact_unavailable')
+            """,
+            (platform, playlist_id),
+        ).fetchall()
+        return [row[0] for row in rows]
 
     def get_platform_mapping(self, track_id: int, platform: str) -> PlatformMapping | None:
         """Get a platform mapping for a track."""
@@ -1256,6 +1538,7 @@ class Database:
             divergence_note=row["divergence_note"],
             status=row["status"],
             user_approved=bool(row["user_approved"]),
+            fingerprint=row["fingerprint"],
         )
 
     def get_platform_mappings_for_tracks(
@@ -1285,6 +1568,7 @@ class Database:
                 divergence_note=row["divergence_note"],
                 status=row["status"],
                 user_approved=bool(row["user_approved"]),
+                fingerprint=row["fingerprint"],
             )
         return result
 
@@ -1427,6 +1711,27 @@ class Database:
         ).fetchone()
         return row["platform_playlist_id"] if row else None
 
+    def mark_playlist_synced(self, playlist_id: int, platform: str) -> None:
+        """Record that a playlist was successfully pushed to a platform.
+
+        Call this ONLY after the platform push has succeeded, so the stored
+        sync timestamp never claims a playlist is mirrored when the push failed.
+        """
+        self.conn.execute(
+            "UPDATE platform_playlists SET last_synced_at = datetime('now') "
+            "WHERE playlist_id = ? AND platform = ?",
+            (playlist_id, platform),
+        )
+        self.conn.commit()
+
+    def get_last_synced(self, playlist_id: int, platform: str) -> str | None:
+        """Return the last successful push timestamp, or None if never synced."""
+        row = self.conn.execute(
+            "SELECT last_synced_at FROM platform_playlists WHERE playlist_id = ? AND platform = ?",
+            (playlist_id, platform),
+        ).fetchone()
+        return row["last_synced_at"] if row else None
+
     def find_playlist_by_name(self, name: str) -> Playlist | None:
         """Find a playlist by exact name."""
         row = self.conn.execute(
@@ -1500,6 +1805,125 @@ class Database:
         row = self.conn.execute("SELECT preferences FROM playlists WHERE id = ?", (playlist_id,)).fetchone()
         return json.loads(row[0]) if row and row[0] else None
 
+    def set_global_preferences(self, prefs: dict | None) -> None:
+        """Set the account-wide default preferences (schema_meta key/value)."""
+        if prefs:
+            self.conn.execute(
+                "INSERT INTO schema_meta (key, value) VALUES ('global_preferences', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (json.dumps(prefs),),
+            )
+        else:
+            self.conn.execute("DELETE FROM schema_meta WHERE key = 'global_preferences'")
+        self.conn.commit()
+
+    def get_global_preferences(self) -> dict | None:
+        """Get the account-wide default preferences, or None if unset."""
+        row = self.conn.execute(
+            "SELECT value FROM schema_meta WHERE key = 'global_preferences'"
+        ).fetchone()
+        return json.loads(row[0]) if row and row[0] else None
+
+    def set_track_preferences(self, track_id: int, prefs: dict | None) -> None:
+        """Set the per-track preferences (highest-precedence override layer)."""
+        val = json.dumps(prefs) if prefs else None
+        self.conn.execute("UPDATE tracks SET preferences = ? WHERE id = ?", (val, track_id))
+        self.conn.commit()
+
+    def get_track_preferences(self, track_id: int) -> dict | None:
+        """Get the per-track preferences, or None if unset."""
+        row = self.conn.execute(
+            "SELECT preferences FROM tracks WHERE id = ?", (track_id,)
+        ).fetchone()
+        return json.loads(row[0]) if row and row[0] else None
+
+    def add_artist_alias(self, members: Sequence[str]) -> None:
+        """Add (or extend) an artist-alias equivalence class.
+
+        ``members`` are raw surface forms (e.g. ``["98 Degrees", "98\u00ba"]``);
+        surrounding whitespace is trimmed but case and glyphs are preserved so
+        the exact spelling is retained for retrieval query expansion. At least
+        two *distinct* raw members are required. If any member's normalized key
+        already belongs to an existing class, the new members are merged into it
+        (bridging several classes into the lowest ``class_id`` when they
+        overlap); duplicate ``(class_id, member)`` rows are ignored. Idempotent.
+        """
+        trimmed = [m.strip() for m in members if m and m.strip()]
+        distinct = set(trimmed)
+        if len(distinct) < 2:
+            raise ValueError("an alias class needs at least two distinct members")
+        norms = {_alias_normalize(m) for m in distinct}
+        placeholders = ",".join("?" * len(norms))
+        with self.conn:
+            rows = self.conn.execute(
+                f"SELECT DISTINCT class_id FROM artist_aliases "
+                f"WHERE norm_member IN ({placeholders})",
+                tuple(norms),
+            ).fetchall()
+            existing = sorted(r[0] for r in rows)
+            if existing:
+                target = existing[0]
+                for other in existing[1:]:
+                    self.conn.execute(
+                        "UPDATE OR IGNORE artist_aliases SET class_id = ? "
+                        "WHERE class_id = ?",
+                        (target, other),
+                    )
+                    self.conn.execute(
+                        "DELETE FROM artist_aliases WHERE class_id = ?", (other,)
+                    )
+            else:
+                target = self.conn.execute(
+                    "SELECT COALESCE(MAX(class_id), 0) + 1 FROM artist_aliases"
+                ).fetchone()[0]
+            for member in distinct:
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO artist_aliases "
+                    "(class_id, member, norm_member) VALUES (?, ?, ?)",
+                    (target, member, _alias_normalize(member)),
+                )
+
+    def get_artist_alias_classes(self) -> list[frozenset[str]]:
+        """Return every user-curated alias class as a frozenset of raw members."""
+        rows = self.conn.execute(
+            "SELECT class_id, member FROM artist_aliases ORDER BY class_id"
+        ).fetchall()
+        classes: dict[int, set[str]] = {}
+        for class_id, member in rows:
+            classes.setdefault(class_id, set()).add(member)
+        return [frozenset(members) for members in classes.values()]
+
+    def remove_artist_alias(self, member: str) -> bool:
+        """Remove a raw alias member; drop the class if it falls below 2 members.
+
+        Matches ``member`` exactly after trimming surrounding whitespace. Returns
+        True if a row was removed, False if the member is absent from the DB
+        (e.g. a seed-only member, which is read-only).
+        """
+        target = (member or "").strip()
+        if not target:
+            return False
+        with self.conn:
+            row = self.conn.execute(
+                "SELECT class_id FROM artist_aliases WHERE member = ?", (target,)
+            ).fetchone()
+            if row is None:
+                return False
+            class_id = row[0]
+            self.conn.execute(
+                "DELETE FROM artist_aliases WHERE class_id = ? AND member = ?",
+                (class_id, target),
+            )
+            remaining = self.conn.execute(
+                "SELECT COUNT(DISTINCT member) FROM artist_aliases WHERE class_id = ?",
+                (class_id,),
+            ).fetchone()[0]
+            if remaining < 2:
+                self.conn.execute(
+                    "DELETE FROM artist_aliases WHERE class_id = ?", (class_id,)
+                )
+        return True
+
     def set_playlist_type(self, playlist_id: int, playlist_type: str | None) -> None:
         """Set the playlist type."""
         self.conn.execute("UPDATE playlists SET playlist_type = ? WHERE id = ?", (playlist_type, playlist_id))
@@ -1553,12 +1977,27 @@ class Database:
         """, (playlist_id,)).fetchall()
         return [self._row_to_artist(row) for row in rows]
 
+    _UPDATABLE_ARTIST_COLUMNS = frozenset({
+        "name", "norm_name", "sort_name", "bio", "identity", "tags",
+        "identity_confidence", "genres", "origin", "active_start", "active_end",
+        "mb_artist_id", "tidal_artist_id", "spotify_artist_uri", "lastfm_url",
+        "wikipedia_url", "enrichment_sources", "verified", "enriched_at",
+        "verified_at",
+    })
+
     def update_artist(self, artist_id: int, **fields: Any) -> None:
-        """Update artist fields by keyword arguments."""
+        """Update artist fields by keyword arguments.
+
+        Field names are validated against an allowlist of updatable columns
+        before being interpolated as SQL identifiers, preventing SQL-identifier
+        injection via caller-supplied keys.
+        """
         json_fields = {"identity", "tags", "genres", "enrichment_sources"}
         sets: list[str] = []
         values: list[Any] = []
         for key, value in fields.items():
+            if key not in self._UPDATABLE_ARTIST_COLUMNS:
+                raise ValueError(f"Not an updatable artist column: {key!r}")
             sets.append(f"{key} = ?")
             if key in json_fields and not isinstance(value, str):
                 values.append(json.dumps(value))

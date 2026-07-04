@@ -48,11 +48,24 @@ def resolve_item(db: Database, client, item: PlanItem, *,
         return item
 
     if item.issue in _RECONCILE_ISSUES:
-        result = reconcile_track(db, item.track_id, client, force=True)
+        _playlist = db.find_playlist_by_name(item.playlist) if item.playlist else None
+        result = reconcile_track(
+            db, item.track_id, client, force=True,
+            playlist_id=_playlist.id if _playlist else None,
+        )
+        db.save_match_audit(item.track_id, client.platform_name, result.audit)
         if result.confidence == "not_found" or not result.platform_track_id:
             item.resolution = "manual"
             item.confidence = 0
-            item.note = (item.note + "; " if item.note else "") + "no candidate found"
+            # Surface the *reason* from the audit, not a flat "no candidate".
+            # This distinguishes "wrong version rejected" / "blocked in market" /
+            # "platform can't distinguish" so the human knows what to do next.
+            if result.audit is not None:
+                from tuneshift.matching import describe_reason
+                detail = describe_reason(result.audit.reason_code)
+            else:
+                detail = "no candidate found"
+            item.note = (item.note + "; " if item.note else "") + detail
             return item
 
         item.proposed_platform_id = result.platform_track_id

@@ -632,29 +632,45 @@ def sequence_playlist(
     arc: str = "wave",
     profile: str = "default",
     weights: dict[str, float] | None = None,
+    availability_platform: str = "tidal",
 ) -> list[int]:
     """Sequence playlist tracks using the database as authoritative source.
 
     Loads the track list from DB. Tracks without energy/valence metadata
     are appended at the end (never dropped).
-    
+
+    Tracks that are unavailable on ``availability_platform`` (Tidal, the
+    availability source of truth, by default) are excluded from the arc
+    optimization and appended at the end alongside metadata-less tracks: an
+    unplayable track should not distort the energy flow between the tracks that
+    will actually play. They are never dropped, and playlists that have never
+    been reconciled are unaffected (no audits => nothing excluded).
+
     If weights is provided, it overrides the profile's default weights.
     """
     track_ids = db.get_playlist_track_ids(playlist_id)
     if len(track_ids) <= 1:
         return list(track_ids)
 
+    unavailable_ids = set(db.get_unavailable_track_ids(playlist_id, availability_platform))
+    sequenceable_ids = [tid for tid in track_ids if tid not in unavailable_ids]
+
     profile_config = get_profile(profile)
     resolved_arc = arc or profile_config.arc
-    metadata_map = get_track_metadata_map(db, track_ids)
-    metadata_tracks = [metadata_map[track_id] for track_id in track_ids if track_id in metadata_map]
-    missing_ids = [track_id for track_id in track_ids if track_id not in metadata_map]
+    metadata_map = get_track_metadata_map(db, sequenceable_ids)
+    metadata_tracks = [metadata_map[track_id] for track_id in sequenceable_ids if track_id in metadata_map]
+
+    # Everything not placed by the optimizer (unavailable + metadata-less)
+    # tails the result in original playlist order, never dropped.
+    def _tail(placed: set[int]) -> list[int]:
+        return [tid for tid in track_ids if tid not in placed]
 
     if not metadata_tracks:
-        return list(track_ids)
+        return list(sequenceable_ids) + [tid for tid in track_ids if tid in unavailable_ids]
 
     if len(metadata_tracks) == 1:
-        return [metadata_tracks[0].track_id] + missing_ids
+        placed = {metadata_tracks[0].track_id}
+        return [metadata_tracks[0].track_id] + _tail(placed)
 
     from tuneshift.models import PlaylistPin
     pins: list[PlaylistPin] = db.get_pins(playlist_id)
@@ -678,12 +694,16 @@ def sequence_playlist(
         narrative=narrative,
     )
 
-    result = [track.track_id for track in ordered_tracks] + missing_ids
+    optimized = [track.track_id for track in ordered_tracks]
+    tail = _tail(set(optimized))
+    result = optimized + tail
 
-    if missing_ids:
+    deferred = len(tail)
+    if deferred:
         import sys
         print(
-            f"  Warning: {len(missing_ids)} track(s) without sequencer metadata appended at end",
+            f"  Note: {deferred} track(s) (no sequencer metadata or unavailable on "
+            f"{availability_platform}) appended at end",
             file=sys.stderr,
         )
 

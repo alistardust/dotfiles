@@ -16,15 +16,16 @@ def _load_client(platform: str):
 
 
 def handle_map(args, db: Database) -> int:
-    """Store a user-approved platform mapping for a track."""
-    playlist = db.find_playlist_by_name(args.playlist)
-    if not playlist:
-        print(f"Playlist not found: {args.playlist}", file=sys.stderr)
-        return 1
+    """Store a user-approved platform mapping for a track.
 
-    track = _find_track_by_title(db, playlist.id, args.title)
-    if not track:
-        print(f"Track not found: {args.title}", file=sys.stderr)
+    Track selection is either by canonical id (``--track-id``) or by
+    playlist name + title substring. ``--dry-run`` performs every lookup
+    and prints the intended result but never writes to the database.
+    """
+    dry_run = getattr(args, "dry_run", False)
+
+    track = _resolve_target_track(args, db)
+    if track is None:
         return 1
 
     platform, platform_id = _extract_platform_args(args)
@@ -53,6 +54,10 @@ def handle_map(args, db: Database) -> int:
         duration = f" ({result.duration_seconds}s)" if result.duration_seconds else ""
         print(f"Found: {result.title} - {result.artist} [{result.album}]{duration}")
 
+    if dry_run:
+        print(f'[dry-run] Would map "{track.title}" -> {platform}:{platform_id}')
+        return 0
+
     db.set_platform_mapping(
         track_id=track.id,
         platform=platform,
@@ -65,6 +70,36 @@ def handle_map(args, db: Database) -> int:
     )
     print(f'Mapped "{track.title}" -> {platform}:{platform_id}')
     return 0
+
+
+def _resolve_target_track(args, db: Database):
+    """Resolve the canonical track from --track-id or playlist + title.
+
+    Returns the Track, or None (after printing an error) if it cannot be
+    resolved.
+    """
+    track_id = getattr(args, "track_id", None)
+    if track_id is not None:
+        track = db.get_track(track_id)
+        if not track:
+            print(f"Track id not found: {track_id}", file=sys.stderr)
+            return None
+        return track
+
+    if not getattr(args, "playlist", None) or not getattr(args, "title", None):
+        print("Specify --track-id, or a playlist name and title", file=sys.stderr)
+        return None
+
+    playlist = db.find_playlist_by_name(args.playlist)
+    if not playlist:
+        print(f"Playlist not found: {args.playlist}", file=sys.stderr)
+        return None
+
+    track = _find_track_by_title(db, playlist.id, args.title)
+    if not track:
+        print(f"Track not found: {args.title}", file=sys.stderr)
+        return None
+    return track
 
 
 def handle_unmap(args, db: Database) -> int:

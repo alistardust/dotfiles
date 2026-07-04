@@ -9,7 +9,7 @@ from typing import Any, Callable
 
 import tidalapi
 
-from tuneshift.models import PlaylistInfo, TrackResult
+from tuneshift.models import AlbumResult, ArtistResult, PlaylistInfo, TrackResult
 from tuneshift.platforms.auth import secure_write, validate_no_symlink
 from tuneshift.platforms.rate_limiter import RateLimiter
 
@@ -110,7 +110,6 @@ class TidalClient:
 
     def search_album(self, query: str, limit: int = 5) -> list["AlbumResult"]:
         """Search for albums on Tidal."""
-        from tuneshift.models import AlbumResult
         self._ensure_session()
 
         def _search() -> list[AlbumResult]:
@@ -143,7 +142,6 @@ class TidalClient:
 
     def search_artist(self, query: str, limit: int = 3) -> list["ArtistResult"]:
         """Search for artists on Tidal."""
-        from tuneshift.models import ArtistResult
         self._ensure_session()
 
         def _search() -> list[ArtistResult]:
@@ -154,6 +152,7 @@ class TidalClient:
                 ArtistResult(
                     platform_id=str(artist.id),
                     name=artist.name or "",
+                    popularity=getattr(artist, "popularity", None),
                 )
                 for artist in artists
             ]
@@ -162,7 +161,6 @@ class TidalClient:
 
     def get_artist_albums(self, artist_id: str, limit: int = 20) -> list["AlbumResult"]:
         """Get albums for a Tidal artist."""
-        from tuneshift.models import AlbumResult
         self._ensure_session()
 
         def _get_albums() -> list[AlbumResult]:
@@ -363,6 +361,13 @@ class TidalClient:
 
     @staticmethod
     def _track_to_result(track: Any) -> TrackResult:
+        # tidalapi parses allowStreaming -> `available` and exposes tier flags.
+        # Capture them instead of discarding: None means "unknown", only an
+        # explicit False denotes blocked-in-market.
+        available = getattr(track, "available", None)
+        premium = getattr(track, "premium_streaming_only", None)
+        pay = getattr(track, "pay_to_stream", None)
+        tier_restricted = premium is True or pay is True
         return TrackResult(
             platform_id=str(track.id),
             title=track.name or "",
@@ -370,6 +375,8 @@ class TidalClient:
             album=track.album.name if getattr(track, "album", None) else "",
             duration_seconds=track.duration if getattr(track, "duration", None) else None,
             isrc=getattr(track, "isrc", None),
+            available=available if isinstance(available, bool) else None,
+            tier_restricted=tier_restricted,
         )
 
 

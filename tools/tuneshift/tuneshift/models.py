@@ -37,6 +37,7 @@ class PlatformMapping:
     divergence_note: str | None = None
     status: str = "matched"
     user_approved: bool = False
+    fingerprint: str | None = None
 
 
 @dataclass
@@ -63,7 +64,14 @@ class PlatformPlaylist:
 
 @dataclass
 class TrackResult:
-    """A search result from any platform."""
+    """A search result from any platform.
+
+    ``available`` and ``tier_restricted`` carry the availability signal the
+    platform exposes (Spotify ``is_playable``/``available_markets``; Tidal
+    ``allowStreaming``/``premium_streaming_only``). They are optional so call
+    sites that don't need availability are unaffected: ``available=None`` means
+    "unknown", never "blocked" — only an explicit ``False`` denotes blocked.
+    """
 
     platform_id: str
     title: str
@@ -71,6 +79,8 @@ class TrackResult:
     album: str
     duration_seconds: int | None = None
     isrc: str | None = None
+    available: bool | None = None
+    tier_restricted: bool = False
 
 
 @dataclass
@@ -95,10 +105,18 @@ class AlbumResult:
 
 @dataclass
 class ArtistResult:
-    """An artist search result from any platform."""
+    """An artist search result from any platform.
+
+    Enrichment fields (``popularity``, ``genres``, ``followers``) are optional:
+    platforms populate what they expose and leave the rest ``None``/empty. The
+    artist scorer treats missing enrichment as neutral, never as a mismatch.
+    """
 
     platform_id: str
     name: str
+    popularity: int | None = None
+    genres: list[str] = field(default_factory=list)
+    followers: int | None = None
 
 
 @dataclass

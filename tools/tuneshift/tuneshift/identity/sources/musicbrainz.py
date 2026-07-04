@@ -131,7 +131,11 @@ class MusicBrainzSource:
         )
 
     def _extract_artist_name(self, artist_credit: list[dict[str, Any]] | str) -> str:
-        """Build a display artist name from MusicBrainz artist-credit entries."""
+        """Build a display artist name from MusicBrainz artist-credit entries.
+
+        MusicBrainz interleaves plain join-phrase strings between artist dicts
+        (and occasionally supplies a bare string), so tolerate both shapes.
+        """
         if isinstance(artist_credit, str):
             return artist_credit
         parts: list[str] = []

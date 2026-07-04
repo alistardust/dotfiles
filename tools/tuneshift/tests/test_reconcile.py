@@ -69,6 +69,10 @@ def test_reconcile_searches_when_no_cache(tmp_db: Path) -> None:
         TrackResult(platform_id="sp1", title="Heroes", artist="David Bowie", album="Heroes"),
         TrackResult(platform_id="sp2", title="Heroes", artist="Wallflowers", album="Other"),
     ]
+    client.search_album.return_value = []
+    client.get_album_tracks.return_value = []
+    client.search_artist.return_value = []
+    client.get_artist_albums.return_value = []
 
     result = reconcile_track(db, track_id, client)
     assert result.confidence == "high"
@@ -104,6 +108,10 @@ def test_reconcile_not_found(tmp_db: Path) -> None:
     client.platform_name = "ytmusic"
     client.search_isrc.return_value = None
     client.search_track.return_value = []
+    client.search_album.return_value = []
+    client.get_album_tracks.return_value = []
+    client.search_artist.return_value = []
+    client.get_artist_albums.return_value = []
 
     result = reconcile_track(db, track_id, client)
     assert result.confidence == "not_found"
@@ -125,6 +133,10 @@ def test_reconcile_force_bypasses_cache(tmp_db: Path) -> None:
     client.search_track.return_value = [
         TrackResult(platform_id="new_id", title="Heroes", artist="David Bowie", album="Heroes"),
     ]
+    client.search_album.return_value = []
+    client.get_album_tracks.return_value = []
+    client.search_artist.return_value = []
+    client.get_artist_albums.return_value = []
 
     result = reconcile_track(db, track_id, client, force=True)
     assert result.from_cache is False
@@ -210,8 +222,14 @@ def test_reconcile_deduplicates_across_strategies(mock_client, db_with_track):
     assert result.platform_track_id == "t1"
 
 
-def test_reconcile_short_circuits_on_high_confidence(mock_client, db_with_track):
-    """Album lookup score >= 90 skips later strategies."""
+def test_reconcile_high_score_album_candidate_wins(mock_client, db_with_track):
+    """A high-scoring album-lookup candidate is selected as the best match.
+
+    Text/album strategies never short-circuit the cascade (only an ISRC match
+    at score 100 does), so later strategies still run; the winning candidate is
+    simply the highest-scoring one. The mock_client fixture returns empty lists
+    for the other search methods, so album lookup supplies the only candidate.
+    """
     db, track_id = db_with_track
     from tuneshift.models import AlbumResult, TrackResult
     mock_album = AlbumResult(platform_id="alb1", title="3rd Ward Bounce", artist="Big Freedia", track_count=12)
@@ -219,9 +237,6 @@ def test_reconcile_short_circuits_on_high_confidence(mock_client, db_with_track)
     mock_client.get_album_tracks.return_value = [
         TrackResult(platform_id="t1", title="Louder", artist="Big Freedia", album="3rd Ward Bounce", duration_seconds=195),
     ]
-    mock_client.search_track.side_effect = AssertionError("Should not be called")
-    mock_client.search_artist.side_effect = AssertionError("Should not be called")
-    mock_client.get_artist_albums.side_effect = AssertionError("Should not be called")
 
     result = reconcile_track(db, track_id, mock_client, force=True)
     assert result.platform_track_id == "t1"
@@ -249,8 +264,73 @@ def test_reconcile_tries_all_strategies_when_low_scores(mock_client, db_with_tra
     mock_client.search_artist.return_value = [mock_artist]
     mock_client.get_artist_albums.return_value = [mock_album]
 
-    result = reconcile_track(db, track_id, mock_client, force=True)
+    reconcile_track(db, track_id, mock_client, force=True)
     # All strategies were called
     mock_client.search_album.assert_called()
     mock_client.search_track.assert_called()
     mock_client.search_artist.assert_called()
+
+
+def test_reconcile_availability_exact_available(tmp_db: Path) -> None:
+    """A clean playable match reports EXACT_AVAILABLE with an audit."""
+    from tuneshift.matching import Availability
+
+    db = Database(tmp_db)
+    track_id = db.add_track(Track(title="Heroes", artist="David Bowie", album="Heroes"))
+    client = MagicMock()
+    client.platform_name = "spotify"
+    client.search_isrc.return_value = None
+    client.search_track.return_value = [
+        TrackResult(platform_id="sp1", title="Heroes", artist="David Bowie",
+                    album="Heroes", available=True),
+    ]
+    client.search_album.return_value = []
+    client.get_album_tracks.return_value = []
+    client.search_artist.return_value = []
+    client.get_artist_albums.return_value = []
+
+    result = reconcile_track(db, track_id, client)
+    assert result.availability == Availability.EXACT_AVAILABLE
+    assert result.audit is not None
+    assert result.audit.chosen_platform_id == "sp1"
+
+
+def test_reconcile_availability_blocked_is_exact_unavailable(tmp_db: Path) -> None:
+    """The exact recording found but not playable -> EXACT_UNAVAILABLE, not a miss."""
+    from tuneshift.matching import Availability
+
+    db = Database(tmp_db)
+    track_id = db.add_track(Track(title="Heroes", artist="David Bowie", album="Heroes"))
+    client = MagicMock()
+    client.platform_name = "spotify"
+    client.search_isrc.return_value = None
+    client.search_track.return_value = [
+        TrackResult(platform_id="sp1", title="Heroes", artist="David Bowie",
+                    album="Heroes", available=False),
+    ]
+    client.search_album.return_value = []
+    client.get_album_tracks.return_value = []
+    client.search_artist.return_value = []
+    client.get_artist_albums.return_value = []
+
+    result = reconcile_track(db, track_id, client)
+    assert result.availability == Availability.EXACT_UNAVAILABLE
+
+
+def test_reconcile_ytmusic_miss_is_ambiguous(tmp_db: Path) -> None:
+    """YouTube Music can't distinguish absence -> AMBIGUOUS, never NOT_FOUND."""
+    from tuneshift.matching import Availability
+
+    db = Database(tmp_db)
+    track_id = db.add_track(Track(title="Obscure", artist="Nobody", album="None"))
+    client = MagicMock()
+    client.platform_name = "ytmusic"
+    client.search_isrc.return_value = None
+    client.search_track.return_value = []
+    client.search_album.return_value = []
+    client.get_album_tracks.return_value = []
+    client.search_artist.return_value = []
+    client.get_artist_albums.return_value = []
+
+    result = reconcile_track(db, track_id, client)
+    assert result.availability == Availability.AMBIGUOUS

@@ -97,7 +97,7 @@ class TestHandleAdd:
         mock_client.search_track.return_value = [{"id": "t-999", "title": "KQ", "artist": "Queen"}]
 
         mock_reconcile = MagicMock()
-        mock_reconcile.return_value = MagicMock(platform_track_id="t-999")
+        mock_reconcile.return_value = MagicMock(platform_track_id="t-999", audit=None)
 
         with patch("tuneshift.commands.ingest_cmd._load_client", return_value=mock_client), \
              patch("tuneshift.reconcile.reconcile_track", mock_reconcile):
