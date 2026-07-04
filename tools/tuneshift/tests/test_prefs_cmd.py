@@ -180,7 +180,7 @@ class TestTypedGrammar:
         assert db.get_playlist_track_prefs(pid, tid) == []
 
     def test_list_shows_precedence_and_marks_effective_winner(self, db, capsys):
-        pid = db.create_playlist("Spatial")
+        db.create_playlist("Spatial")
         tid = db.add_track(__import__("tuneshift.models", fromlist=["Track"]).Track(
             title="S", artist="A", album="Al"))
         handle_prefs(_args("set", "spatial", "avoid", "atmos"), db)  # global
