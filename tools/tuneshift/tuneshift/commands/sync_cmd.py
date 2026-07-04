@@ -2,6 +2,7 @@
 import sys
 
 from tuneshift.db import Database
+from tuneshift.matching.audit import ReasonCode
 from tuneshift.reconcile import reconcile_track
 from tuneshift.models import PlatformMapping
 
@@ -76,6 +77,7 @@ def _sync_one(db, playlist, platforms, args) -> int:
         canonical_platform_ids: list[str] = []
         resolved_ids = resolved_by_platform.setdefault(platform_name, {})
         unavailable: list[str] = []
+        held_dead: list[str] = []
 
         for track in tracks:
             result = reconcile_track(
@@ -86,6 +88,15 @@ def _sync_one(db, playlist, platforms, args) -> int:
                 verify_locked=getattr(args, "verify_locks", False),
             )
             db.save_match_audit(track.id, platform_name, result.audit)
+
+            # A verified lock whose platform id has gone dead is HELD for a routed
+            # heal (AC-L3), never overwritten inline — wiping it to "unavailable"
+            # here would destroy the lock and make the heal impossible. Surface it
+            # and leave the mapping intact; the track is simply omitted from this
+            # push (no silent substitute) until Alice routes the heal.
+            if result.reason_code == ReasonCode.LOCK_HELD:
+                held_dead.append(f"  ! {track.title} - {track.artist}")
+                continue
 
             if result.confidence == "not_found":
                 unavailable.append(f"  ? {track.title} - {track.artist}")
@@ -127,6 +138,19 @@ def _sync_one(db, playlist, platforms, args) -> int:
                 canonical_platform_ids.append(result.platform_track_id)
                 resolved_ids[track.id] = result.platform_track_id
 
+            # AC-L4: a per-playlist override lock is playlist-scoped storage. Do
+            # NOT write it back into the library-wide ``platform_tracks`` default,
+            # or syncing one playlist would clobber the global default every OTHER
+            # playlist resolves against. Only the global cache is refreshed here;
+            # the playlist override row is already authoritative and untouched.
+            effective_lock = db.get_effective_lock(track.id, platform_name, playlist.id)
+            if (
+                effective_lock is not None
+                and effective_lock.scope == "playlist"
+                and effective_lock.platform_track_id == result.platform_track_id
+            ):
+                continue
+
             # Persist mapping
             db.upsert_platform_mapping(PlatformMapping(
                 track_id=track.id, platform=platform_name,
@@ -145,6 +169,13 @@ def _sync_one(db, playlist, platforms, args) -> int:
             print(f"\n  Unavailable ({len(unavailable)} tracks):")
             for line in unavailable:
                 print(line)
+
+        if held_dead:
+            print(f"\n  Locked id gone — held for review ({len(held_dead)} tracks):")
+            for line in held_dead:
+                print(line)
+            print("  Route a heal to re-bind the same recording: "
+                  "tuneshift plan heal --platform " + platform_name)
 
         # Push to platform
         platform_playlist_id = db.get_platform_playlist_id(playlist.id, platform_name)

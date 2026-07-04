@@ -19,7 +19,8 @@ from unittest.mock import MagicMock, patch
 
 from tuneshift.commands.sync_cmd import handle_sync
 from tuneshift.db import Database
-from tuneshift.models import PlaylistInfo, Track
+from tuneshift.matching.audit import ReasonCode
+from tuneshift.models import PlatformMapping, PlaylistInfo, Track
 from tuneshift.reconcile import ReconcileResult
 
 
@@ -99,3 +100,81 @@ def test_reorder_repush_pushes_approved_selection(
 
     # Pushed by the main sync AND re-pushed after the auto-reorder.
     assert _pushed_ids(client) == ["RESOLVED_ID", "RESOLVED_ID"]
+
+
+@patch("tuneshift.sequencer.sequence_playlist")
+@patch("tuneshift.commands.sync_cmd.reconcile_track")
+@patch("tuneshift.commands.ingest_cmd._load_client")
+def test_playlist_override_sync_does_not_clobber_global_default(
+    mock_load, mock_reconcile, mock_sequence, tmp_db: Path
+) -> None:
+    """BLOCKER-1 regression: syncing a playlist with a per-playlist override lock
+    must NOT rewrite the library-wide ``platform_tracks`` default.
+
+    The override is playlist-scoped storage; every OTHER playlist resolves against
+    the global default. Writing the override id back into the global row clobbers
+    that default and silently changes unrelated playlists on their next sync.
+    """
+    db, pid, tid = _setup(tmp_db)
+    # The global default that other playlists rely on.
+    db.upsert_platform_mapping(PlatformMapping(
+        track_id=tid, platform="tidal", platform_track_id="GLOBAL_ID",
+        match_score=97, status="matched", user_approved=True,
+    ))
+    # THIS playlist pins a different release via a per-playlist override lock.
+    db.set_playlist_track_mapping(
+        pid, tid, "tidal", "OVERRIDE_ID", source="locked", user_approved=True
+    )
+    client = _mock_client()
+    mock_load.return_value = client
+    mock_sequence.return_value = [tid]
+    mock_reconcile.return_value = ReconcileResult(
+        platform_track_id="OVERRIDE_ID", score=98, confidence="high",
+    )
+
+    args = Namespace(playlist="Reorder Me", platform="tidal", all=False,
+                     reconcile=False, auto=False)
+    handle_sync(args, db)
+
+    # Global default untouched; override remains playlist-scoped; override pushed.
+    assert db.get_platform_mapping(tid, "tidal").platform_track_id == "GLOBAL_ID"
+    assert db.get_playlist_track_mapping(pid, tid, "tidal")["platform_track_id"] == "OVERRIDE_ID"
+    assert "OVERRIDE_ID" in _pushed_ids(client)
+
+
+@patch("tuneshift.sequencer.sequence_playlist")
+@patch("tuneshift.commands.sync_cmd.reconcile_track")
+@patch("tuneshift.commands.ingest_cmd._load_client")
+def test_verify_locks_holds_dead_lock_without_wiping_mapping(
+    mock_load, mock_reconcile, mock_sequence, tmp_db: Path
+) -> None:
+    """BLOCKER-2a regression: ``sync --verify-locks`` on a lock whose platform id
+    has gone dead (``LOCK_HELD``) must leave the lock mapping intact.
+
+    The held result carries ``confidence='not_found'``; without an explicit
+    interception it hits the not-found handler which overwrites the mapping to
+    ``""`` / ``unavailable`` — destroying the lock and defeating AC-L3's routed
+    self-heal. It must instead be held and omitted from the push, never wiped.
+    """
+    db, pid, tid = _setup(tmp_db)
+    db.upsert_platform_mapping(PlatformMapping(
+        track_id=tid, platform="tidal", platform_track_id="DEAD_LOCK",
+        match_score=97, status="matched", user_approved=True,
+    ))
+    client = _mock_client()
+    mock_load.return_value = client
+    mock_sequence.return_value = [tid]
+    mock_reconcile.return_value = ReconcileResult(
+        platform_track_id="", score=0, confidence="not_found",
+        reason_code=ReasonCode.LOCK_HELD,
+    )
+
+    args = Namespace(playlist="Reorder Me", platform="tidal", all=False,
+                     reconcile=False, auto=False, verify_locks=True)
+    handle_sync(args, db)
+
+    # The lock is preserved, not wiped to unavailable, and not pushed.
+    mapping = db.get_platform_mapping(tid, "tidal")
+    assert mapping.platform_track_id == "DEAD_LOCK"
+    assert mapping.status == "matched"
+    assert _pushed_ids(client) == []
