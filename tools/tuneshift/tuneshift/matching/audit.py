@@ -3,7 +3,7 @@
 This module makes matching *explainable*. Every reconcile decision can be
 captured as a :class:`MatchAudit` — what was chosen, what was rejected and why,
 which signal was decisive, and whether a durable lock forced the outcome. The
-``tuneshift why`` command surfaces this record so a human can see exactly why
+``tuneshift explain`` command surfaces this record so a human can see exactly why
 the engine picked (or refused to pick) a platform track.
 
 It also defines the graded availability model. A core Alice failure mode is the
