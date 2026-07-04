@@ -245,7 +245,7 @@ def _phase2_score(
 def _resolve_winner(
     scored: list[tuple[Any, Distance, dict[PreferenceRef, Verdict]]],
     soft: list[ActivePreference],
-) -> tuple[int, str | None]:
+) -> tuple[int, str | None, bool]:
     """Pick the winning index.
 
     Candidates whose BASE identity distance is within :data:`AMBIGUITY_DELTA` of
@@ -254,23 +254,29 @@ def _resolve_winner(
     and loses to one a higher-precedence preference wants). Outside the band the
     better identity match wins outright: a preference selects among comparable
     versions, it never rescues a poor match. Returns ``(winner_index,
-    decided_by)``.
+    decided_by, ambiguous)`` where ``ambiguous`` is set when 2+ survivors are
+    within the band and nothing (preference or lock) resolved the contention —
+    the near-tie is surfaced for review rather than guessed (AC-S3).
     """
 
     if not scored:
-        return -1, None
+        return -1, None, False
     best_total = scored[0][1].total
     cluster = [i for i, row in enumerate(scored) if row[1].total - best_total <= AMBIGUITY_DELTA]
-    if len(cluster) <= 1 or not soft:
-        return 0, None
+    contested = len(cluster) >= 2
+    if not contested or not soft:
+        # A lone best is unambiguous; a contested band with no preference to break
+        # it is a guess -> flag for review (AC-S3), still surfacing a provisional pick.
+        return 0, None, contested
 
     precedence = _precedence_of(soft)
     candidate_verdicts = {i: scored[i][2] for i in cluster}
     decision = resolve_conflict(candidate_verdicts, precedence)
     if decision.winner is not None:
-        return decision.winner, decision.decided_by
-    # Precedence could not distinguish -> lowest-distance survivor (tie-break in 3.4).
-    return 0, None
+        return decision.winner, decision.decided_by, False
+    # Precedence could not distinguish -> provisional lowest-distance survivor,
+    # flagged ambiguous for review.
+    return 0, None, True
 
 
 def _resolve_lock(
@@ -394,7 +400,7 @@ def select_version(
         alias_resolver=alias_resolver,
     )
 
-    winner_index, decided_by = _resolve_winner(scored, soft)
+    winner_index, decided_by, ambiguous = _resolve_winner(scored, soft)
     ranked = [(cand, dist) for cand, dist, _ in scored]
 
     if winner_index >= 0:
@@ -412,6 +418,8 @@ def select_version(
         ranked=ranked,
         filtered=filtered,
         decided_by=decided_by,
+        needs_review=ambiguous,
+        review_reason="ambiguous" if ambiguous else None,
     )
 
 

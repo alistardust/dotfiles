@@ -205,3 +205,54 @@ def test_locked_release_missing_surfaces_for_review_no_silent_pick():
     assert result.winner is None
     assert result.needs_review is True
     assert result.review_reason == "locked_missing"
+
+
+# --- Task 3.4: ambiguity surface (AC-S3) ---
+
+
+def test_near_tie_without_preference_flags_review_not_guessed():
+    # Two genuinely comparable versions, no preference to break the tie: the
+    # engine surfaces it for review instead of silently guessing.
+    source = _track("src", "Flower Power", "The Band", "Album One")
+    a = SimpleNamespace(platform_id="A", title="Flower Power", artist="The Band",
+                        album="Album One", isrc=None, duration_seconds=200, available=True,
+                        audio_modes=[])
+    b = SimpleNamespace(platform_id="B", title="Flower Power", artist="The Band",
+                        album="Album One", isrc=None, duration_seconds=200, available=True,
+                        audio_modes=[])
+    result = select_version(source, [a, b])
+
+    assert result.needs_review is True
+    assert result.review_reason == "ambiguous"
+
+
+def test_clear_winner_beyond_delta_not_flagged():
+    source = _track("src", "Flower Power", "The Band", "Album One", duration=200)
+    good = _track("A", "Flower Power", "The Band", "Album One", available=True, duration=200)
+    poor = _track("B", "Different Song Entirely", "Someone Else", "Other", available=True,
+                  duration=20)
+    result = select_version(source, [good, poor])
+
+    assert result.winner is good
+    assert result.needs_review is False
+
+
+def test_preference_resolved_near_tie_is_not_ambiguous():
+    # A near-tie that a soft preference resolves by precedence is decided, not a
+    # guess -> no review flag.
+    source = SimpleNamespace(platform_id="src", title="Flower Power", artist="The Band",
+                             album="Album One", isrc=None, duration_seconds=200,
+                             audio_modes=[])
+    stereo = SimpleNamespace(platform_id="A", title="Flower Power", artist="The Band",
+                             album="Album One", isrc=None, duration_seconds=200,
+                             available=True, audio_modes=["STEREO"])
+    atmos = SimpleNamespace(platform_id="B", title="Flower Power", artist="The Band",
+                            album="Album One", isrc=None, duration_seconds=200,
+                            available=True, audio_modes=["DOLBY_ATMOS"])
+    active = [ActivePreference(SPATIAL, PreferenceRef(
+        "spatial", Strength.PREFER, "dolby_atmos", "playlist"))]
+    result = select_version(source, [stereo, atmos], active=active)
+
+    assert result.winner is atmos
+    assert result.decided_by == "spatial"
+    assert result.needs_review is False
