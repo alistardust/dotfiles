@@ -331,6 +331,42 @@ def build_parser() -> argparse.ArgumentParser:
     p_batch.add_argument("--history", nargs="?", const=True, help="Show batch history")
     p_batch.add_argument("--interactive", action="store_true", help="Walk through decisions one at a time")
 
+    # plan (terraform-style plan/apply engine: sync/rematch/migrate routes)
+    p_plan = sub.add_parser(
+        "plan", help="Generate, inspect, apply, or roll back a plan/apply plan"
+    )
+    plan_sub = p_plan.add_subparsers(dest="action", required=True)
+
+    p_plan_sync = plan_sub.add_parser("sync", help="Plan a playlist push to a platform")
+    p_plan_sync.add_argument("playlist", help="Playlist name")
+    p_plan_sync.add_argument("--platform", default="tidal", help="Target platform (default: tidal)")
+    p_plan_sync.add_argument("--reconcile", action="store_true", help="Force re-reconcile (ignore cache)")
+
+    p_plan_rematch = plan_sub.add_parser("rematch", help="Plan re-matching a playlist's tracks")
+    p_plan_rematch.add_argument("playlist", help="Playlist name")
+    p_plan_rematch.add_argument("--platform", default="tidal", help="Target platform (default: tidal)")
+    p_plan_rematch.add_argument("--reconcile", action="store_true", help="Force re-reconcile (ignore cache)")
+
+    p_plan_migrate = plan_sub.add_parser("migrate", help="Plan migration of stale global mappings")
+    p_plan_migrate.add_argument("--platform", default="tidal", help="Target platform (default: tidal)")
+
+    plan_sub.add_parser("list", help="List saved plans")
+
+    p_plan_show = plan_sub.add_parser("show", help="Show a saved plan")
+    p_plan_show.add_argument("plan_id", help="Plan id")
+
+    p_plan_reject = plan_sub.add_parser("reject", help="Reject a single change in a plan")
+    p_plan_reject.add_argument("plan_id", help="Plan id")
+    p_plan_reject.add_argument("change_id", type=int, help="Change id to reject")
+
+    p_plan_apply = plan_sub.add_parser("apply", help="Apply a saved plan")
+    p_plan_apply.add_argument("plan_id", help="Plan id")
+    p_plan_apply.add_argument("--include-locked", action="store_true", help="Also apply locked changes")
+    p_plan_apply.add_argument("--interactive", action="store_true", help="Step through changes accept/reject")
+
+    p_plan_rollback = plan_sub.add_parser("rollback", help="Roll back an applied plan")
+    p_plan_rollback.add_argument("plan_id", help="Plan id")
+
     # ban
     p_ban = sub.add_parser("ban", help="Manage the global banned artist list")
     p_ban.add_argument("artist", nargs="?", help="Artist name to ban")
@@ -731,6 +767,9 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "batch":
             from tuneshift.commands.batch_cmd import handle_batch
             return handle_batch(args, db)
+        elif args.command == "plan":
+            from tuneshift.commands.plan_cmd import handle_plan
+            return handle_plan(args, db)
         elif args.command == "ban":
             return _handle_ban(args, db)
         elif args.command == "merge":
