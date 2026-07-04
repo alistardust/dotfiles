@@ -39,18 +39,44 @@ _managed_block_differs() {
     [[ "$(_managed_block "$src_file")" != "$(_managed_block "$dest_file")" ]]
 }
 
+# True (0) when the file has exactly one BEGIN and one END marker with BEGIN
+# strictly before END. Guards the splice against a hand-corrupted dest (missing,
+# duplicated, or reversed markers) that would otherwise produce a garbled file.
+_markers_well_formed() {
+    local file="$1"
+    awk -v b="$INSTRUCTIONS_MANAGED_BEGIN" -v e="$INSTRUCTIONS_MANAGED_END" '
+        $0==b{nb++; if(bpos==0) bpos=NR}
+        $0==e{ne++; if(epos==0) epos=NR}
+        END{ exit !(nb==1 && ne==1 && bpos>0 && epos>bpos) }
+    ' "$file"
+}
+
+# Print the octal permission bits of a file, or nothing (return 1) if neither
+# stat dialect yields a clean octal value. Tries GNU (-c %a) then BSD (-f %Lp);
+# each result is validated as octal so a wrong-dialect stat that "succeeds" with
+# garbage (e.g. GNU stat treating -f as --file-system) is rejected, not chmod'd.
+_file_perms() {
+    local file="$1" perms
+    perms="$(stat -c '%a' "$file" 2>/dev/null)"
+    if [[ "$perms" =~ ^[0-7]+$ ]]; then printf '%s' "$perms"; return 0; fi
+    perms="$(stat -f '%Lp' "$file" 2>/dev/null)"
+    if [[ "$perms" =~ ^[0-7]+$ ]]; then printf '%s' "$perms"; return 0; fi
+    return 1
+}
+
 # Replace dest's managed block with the seed's managed block, preserving every
 # line outside the markers (the local-overrides section). Splices via file
 # concatenation so backslashes/code samples in the content are never mangled.
 _sync_managed_block() {
     local src_file="$1" dest_file="$2"
-    local head tail block out
+    local head tail block out perms
     # head/tail/block are scratch; out MUST live in dest's directory so the final
     # mv is a same-filesystem atomic rename (a cross-fs mv degrades to a
     # copy-then-unlink that can truncate dest and destroy local overrides).
-    head="$(mktemp)" && tail="$(mktemp)" && block="$(mktemp)" \
-        && out="$(mktemp "$(dirname "$dest_file")/.dotfiles-instr.XXXXXX")"
-    if [[ ! -e "$head" || ! -e "$tail" || ! -e "$block" || ! -e "$out" ]]; then
+    # The whole chain runs inside `if !` so a failure of the final mktemp (e.g.
+    # dest dir not writable) is caught here rather than aborting under `set -e`.
+    if ! { head="$(mktemp)" && tail="$(mktemp)" && block="$(mktemp)" \
+        && out="$(mktemp "$(dirname "$dest_file")/.dotfiles-instr.XXXXXX")"; }; then
         warn "mktemp failed; leaving ${dest_file} untouched."
         rm -f "$head" "$tail" "$block" "$out" 2>/dev/null
         return 1
@@ -64,7 +90,17 @@ _sync_managed_block() {
         rm -f "$head" "$tail" "$block" "$out"
         return 1
     fi
-    if ! { cat "$head" "$block" "$tail" > "$out" && mv "$out" "$dest_file"; }; then
+    if ! cat "$head" "$block" "$tail" > "$out"; then
+        warn "failed to assemble managed block; leaving ${dest_file} untouched."
+        rm -f "$head" "$tail" "$block" "$out"
+        return 1
+    fi
+    # Preserve the destination's permissions across the atomic replace (mv from a
+    # 0600 mktemp would otherwise reset them).
+    if perms="$(_file_perms "$dest_file")"; then
+        chmod "$perms" "$out" 2>/dev/null || true
+    fi
+    if ! mv "$out" "$dest_file"; then
         warn "failed to write managed block; leaving ${dest_file} untouched."
         rm -f "$head" "$tail" "$block" "$out"
         return 1
@@ -100,8 +136,7 @@ install_instructions() {
                 cp "$src_file" "$dest_file"
             fi
             ok "${tool_name} instructions written to ${dest_file}."
-        elif grep -qxF "$INSTRUCTIONS_MANAGED_BEGIN" "$dest_file" 2>/dev/null \
-            && grep -qxF "$INSTRUCTIONS_MANAGED_END" "$dest_file" 2>/dev/null; then
+        elif _markers_well_formed "$dest_file"; then
             if _managed_block_differs "$src_file" "$dest_file"; then
                 log "Re-syncing ${tool_name} managed block..."
                 if [[ "$DRY_RUN" == "true" ]]; then
@@ -113,6 +148,9 @@ install_instructions() {
             else
                 ok "${tool_name} managed block up to date at ${dest_file}."
             fi
+        elif grep -qxF "$INSTRUCTIONS_MANAGED_BEGIN" "$dest_file" 2>/dev/null \
+            || grep -qxF "$INSTRUCTIONS_MANAGED_END" "$dest_file" 2>/dev/null; then
+            warn "${tool_name} instructions at ${dest_file} have malformed managed markers (missing, duplicated, or reversed); leaving untouched. Fix the markers to a single ordered BEGIN/END pair to re-enable managed sync."
         else
             warn "${tool_name} instructions at ${dest_file} predate the managed/local split; leaving untouched. Add the marker blocks manually to enable managed sync."
         fi
