@@ -91,6 +91,42 @@ def test_title_criterion_never_hard_rejects_ambiguous_pet_sounds():
     assert not verdict.is_hard
 
 
+def test_title_with_no_same_axis_token_is_not_confident():
+    """Regression (Chunk 2 review, finding 1): a require parsed from free text
+    must NOT hard-reject a plain title that carries NO same-axis evidence.
+
+    ``require mono`` against a plain title like "Wouldn't It Be Nice" has zero
+    ``mix``-axis tokens, so the title provides no confident basis to eliminate
+    it. The hard verdict must demote to soft (nudge, never eliminate)."""
+
+    wl = load_token_whitelist()
+    plain = _title_value("Wouldn't It Be Nice", wl)
+    assert plain.tokens == frozenset()
+    gated = apply_confidence_gate(
+        Verdict.HARD_REJECT, value=plain, target="mono", whitelist=wl
+    )
+    assert gated is Verdict.SOFT_PENALTY
+
+    crit = TitleTokenCriterion(name="mix", target="mono", whitelist=wl)
+    source = crit.extract_from_title("Pet Sounds (Mono)")
+    verdict = crit.compare(source, plain, Strength.REQUIRE)
+    assert not verdict.is_hard
+
+
+def test_title_with_confident_conflicting_token_still_hard_rejects():
+    """A plain title bearing exactly ONE opposing same-axis token IS confident:
+    ``require mono`` against a title parsed as "(Stereo)" is a confident reject
+    (the release is unambiguously stereo, not mono)."""
+
+    wl = load_token_whitelist()
+    stereo = _title_value("Pet Sounds (Stereo)", wl)
+    assert stereo.tokens == frozenset({"stereo"})
+    gated = apply_confidence_gate(
+        Verdict.HARD_REJECT, value=stereo, target="mono", whitelist=wl
+    )
+    assert gated is Verdict.HARD_REJECT
+
+
 def test_structured_token_criterion_still_hard_filters():
     wl = load_token_whitelist()
     # A structured TokenCriterion (audio_modes) is confident => hard filter fires.

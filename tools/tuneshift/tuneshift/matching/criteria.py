@@ -213,9 +213,12 @@ def _is_confident(
     """Whether ``value`` is a confident basis for a hard filter on ``target``.
 
     Confident iff the value came from a structured field, or ``target`` is a
-    committed whitelist token AND the value is not internally ambiguous (it does
-    not also carry a *conflicting* token from the same axis — e.g. a title that
-    reads "Mono & Stereo Mix" carries two mutually-exclusive ``mix`` tokens).
+    committed whitelist token AND the value carries *exactly one* token on that
+    axis (unambiguous evidence). Zero same-axis tokens means the value offers no
+    evidence at all (e.g. a plain title "Wouldn't It Be Nice" says nothing about
+    mix) and must never drive a hard elimination; two or more conflicting
+    same-axis tokens are ambiguous (e.g. a title reading "Mono & Stereo Mix").
+    Either way the hard verdict is demoted to soft.
     """
 
     if value.structured:
@@ -224,7 +227,7 @@ def _is_confident(
         return False
     axis = whitelist.axis(target)
     same_axis = {t for t in value.tokens if whitelist.axis(t) == axis}
-    return len(same_axis) <= 1
+    return len(same_axis) == 1
 
 
 def apply_confidence_gate(
