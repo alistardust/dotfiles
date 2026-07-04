@@ -24,11 +24,24 @@ scoring code, and cannot perturb today's scores until a preference opts in.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from enum import Enum, auto
+from functools import lru_cache
+from pathlib import Path
 from typing import Any, Iterator, Protocol, runtime_checkable
 
+import yaml
+
 from tuneshift.matching.penalties import SignalPenalty
+
+_WHITELIST_PATH = Path(__file__).with_name("token_whitelist.yaml")
+
+
+def _fold(token: object) -> str:
+    """Lowercase and strip to alphanumerics (``Dolby Atmos`` -> ``dolbyatmos``)."""
+
+    return "".join(ch for ch in str(token).lower() if ch.isalnum())
 
 
 class Strength(str, Enum):
@@ -144,6 +157,108 @@ def resolve_strength_verdict(
     return Verdict.SOFT_PENALTY if satisfied else Verdict.SOFT_BONUS
 
 
+def _soft_signal(name: str, weight: int, verdict: Verdict) -> SignalPenalty | None:
+    """Project a *soft* verdict onto a SignalPenalty (None for hard/no-verdict)."""
+
+    if verdict is Verdict.SOFT_PENALTY:
+        return SignalPenalty(name, -weight, 1.0, weight)
+    if verdict is Verdict.SOFT_BONUS:
+        return SignalPenalty(name, weight, 0.0, weight)
+    return None
+
+
+class TokenWhitelist:
+    """Committed, axis-grouped set of tokens trusted to drive hard filters.
+
+    Membership and axis lookups fold surface variants onto canonical tokens via
+    the alias table, so ``"Dolby Atmos"``, ``"dolby_atmos"`` and ``"atmos"`` all
+    resolve to the same whitelisted token on the ``spatial`` axis.
+    """
+
+    def __init__(
+        self, axes: dict[str, list[str]], aliases: dict[str, str]
+    ) -> None:
+        self._axis_of: dict[str, str] = {}
+        for axis, tokens in axes.items():
+            for tok in tokens or ():
+                self._axis_of[_fold(tok)] = axis
+        self._aliases: dict[str, str] = {
+            _fold(k): _fold(v) for k, v in (aliases or {}).items()
+        }
+
+    def canonical(self, token: object) -> str:
+        folded = _fold(token)
+        return self._aliases.get(folded, folded)
+
+    def axis(self, token: object) -> str | None:
+        return self._axis_of.get(self.canonical(token))
+
+    def __contains__(self, token: object) -> bool:
+        return self.canonical(token) in self._axis_of
+
+
+@lru_cache(maxsize=1)
+def load_token_whitelist() -> TokenWhitelist:
+    """Load (and cache) the committed token whitelist from the packaged YAML."""
+
+    data = yaml.safe_load(_WHITELIST_PATH.read_text(encoding="utf-8")) or {}
+    return TokenWhitelist(
+        axes=data.get("axes") or {}, aliases=data.get("aliases") or {}
+    )
+
+
+def _is_confident(
+    *, value: CriterionValue, target: str, whitelist: TokenWhitelist
+) -> bool:
+    """Whether ``value`` is a confident basis for a hard filter on ``target``.
+
+    Confident iff the value came from a structured field, or ``target`` is a
+    committed whitelist token AND the value is not internally ambiguous (it does
+    not also carry a *conflicting* token from the same axis — e.g. a title that
+    reads "Mono & Stereo Mix" carries two mutually-exclusive ``mix`` tokens).
+    """
+
+    if value.structured:
+        return True
+    if target not in whitelist:
+        return False
+    axis = whitelist.axis(target)
+    same_axis = {t for t in value.tokens if whitelist.axis(t) == axis}
+    return len(same_axis) <= 1
+
+
+def apply_confidence_gate(
+    verdict: Verdict,
+    *,
+    value: CriterionValue,
+    target: str,
+    whitelist: TokenWhitelist,
+) -> Verdict:
+    """Demote a HARD verdict to its soft equivalent unless the value is confident.
+
+    Soft/no verdicts pass through unchanged. A confident hard verdict stands; an
+    unconfident one is demoted (``HARD_REJECT`` -> ``SOFT_PENALTY``,
+    ``HARD_PASS`` -> ``SOFT_BONUS``) so an ambiguous token can nudge the score
+    but never eliminate a candidate.
+    """
+
+    if not verdict.is_hard:
+        return verdict
+    if _is_confident(value=value, target=target, whitelist=whitelist):
+        return verdict
+    return Verdict.SOFT_PENALTY if verdict is Verdict.HARD_REJECT else Verdict.SOFT_BONUS
+
+
+def _title_ngrams(title: object) -> list[str]:
+    """Folded 1- and 2-word n-grams from a free-text title, for token matching."""
+
+    words = [_fold(w) for w in re.split(r"\W+", str(title))]
+    words = [w for w in words if w]
+    grams = list(words)
+    grams += [words[i] + words[i + 1] for i in range(len(words) - 1)]
+    return grams
+
+
 @dataclass
 class TokenCriterion:
     """A reusable token-membership criterion (audio-mode, edition, class, ...).
@@ -167,7 +282,7 @@ class TokenCriterion:
     structured: bool = True
 
     def _norm(self, token: object) -> str:
-        return "".join(ch for ch in str(token).lower() if ch.isalnum())
+        return _fold(token)
 
     def extract(self, meta: object) -> CriterionValue | None:
         raw = getattr(meta, self.field_name, None)
@@ -191,11 +306,57 @@ class TokenCriterion:
         return resolve_strength_verdict(strength, satisfied=satisfied)
 
     def to_signal(self, verdict: Verdict) -> SignalPenalty | None:
-        if verdict is Verdict.SOFT_PENALTY:
-            return SignalPenalty(self.name, -self.weight, 1.0, self.weight)
-        if verdict is Verdict.SOFT_BONUS:
-            return SignalPenalty(self.name, self.weight, 0.0, self.weight)
-        return None
+        return _soft_signal(self.name, self.weight, verdict)
+
+
+@dataclass
+class TitleTokenCriterion:
+    """A criterion whose tokens are PARSED from a free-text title (AC-C3).
+
+    Because title tokens are unstructured, every hard verdict is run through the
+    committed-whitelist confidence gate before it may eliminate a candidate. An
+    off-whitelist token (e.g. "Deluxe") or an internally ambiguous title (e.g.
+    "Mono & Stereo Mix") demotes the hard verdict to a soft signal.
+    """
+
+    name: str
+    target: str
+    whitelist: TokenWhitelist
+    field_name: str = "title"
+    weight: int = 10
+    hard_cap: HardCapPolicy = HardCapPolicy.NONE
+
+    def extract_from_title(self, title: object) -> CriterionValue:
+        tokens = frozenset(
+            self.whitelist.canonical(gram)
+            for gram in _title_ngrams(title)
+            if gram in self.whitelist
+        )
+        return CriterionValue(raw=title, tokens=tokens, structured=False)
+
+    def extract(self, meta: object) -> CriterionValue | None:
+        raw = getattr(meta, self.field_name, None)
+        if not raw:
+            return None
+        return self.extract_from_title(raw)
+
+    def compare(
+        self,
+        source: CriterionValue,
+        candidate: CriterionValue,
+        strength: Strength | None,
+    ) -> Verdict:
+        satisfied = self.whitelist.canonical(self.target) in candidate.tokens
+        verdict = resolve_strength_verdict(strength, satisfied=satisfied)
+        return apply_confidence_gate(
+            verdict,
+            value=candidate,
+            target=self.target,
+            whitelist=self.whitelist,
+        )
+
+    def to_signal(self, verdict: Verdict) -> SignalPenalty | None:
+        return _soft_signal(self.name, self.weight, verdict)
 
 
 class CriterionRegistry:
