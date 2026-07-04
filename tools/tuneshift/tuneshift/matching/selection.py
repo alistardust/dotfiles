@@ -33,10 +33,21 @@ from tuneshift.matching.base_scoring import score_signals
 from tuneshift.matching.criteria import Criterion, CriterionValue, Verdict
 from tuneshift.matching.engine import Distance
 from tuneshift.matching.penalties import DEFAULT_WEIGHTS, Weights
-from tuneshift.matching.precedence import PreferenceRef
+from tuneshift.matching.precedence import (
+    PreferenceRef,
+    derive_precedence,
+    resolve_conflict,
+)
 
 if TYPE_CHECKING:
     from tuneshift.matching.aliases import AliasResolver
+
+#: Distance band (fraction of the [0,1] scale) within which the weighted score
+#: cannot confidently separate two survivors. Inside this band the outcome is
+#: decided by per-playlist preference PRECEDENCE (AC-C7), never by a razor-thin
+#: weighted difference or a candidate no preference wanted. Also the AC-S3
+#: ambiguity threshold surfaced for review (Task 3.4).
+AMBIGUITY_DELTA = 0.05
 
 
 @dataclass(frozen=True)
@@ -67,13 +78,16 @@ class SelectionResult:
     ``winner`` is the selected candidate (or ``None`` when every candidate was
     filtered or the input was empty). ``ranked`` is the survivor list scored
     best-first (lowest :class:`Distance` total first). ``filtered`` records the
-    Phase-1 eliminations for the plan/explain surfaces.
+    Phase-1 eliminations for the plan/explain surfaces. ``decided_by`` names the
+    preference criterion that broke a within-delta conflict by precedence (AC-C7),
+    or ``None`` when the weighted score alone chose the winner.
     """
 
     winner: Any | None
     winner_distance: Distance | None
     ranked: list[tuple[Any, Distance]] = field(default_factory=list)
     filtered: list[FilteredCandidate] = field(default_factory=list)
+    decided_by: str | None = None
 
 
 def _extract(criterion: Criterion, meta: object) -> CriterionValue | None:
@@ -129,19 +143,51 @@ def _phase1_filter(
     return survivors, filtered
 
 
+def _soft_prefs(active: list[ActivePreference]) -> list[ActivePreference]:
+    return [ap for ap in active if ap.ref.strength.is_soft]
+
+
+def _precedence_of(soft: list[ActivePreference]) -> list[PreferenceRef]:
+    """Derive the inspectable per-playlist precedence order from soft prefs.
+
+    Refs are bucketed by their own scope and passed to :func:`derive_precedence`
+    under that scope, so the ref objects are preserved by identity (the verdict
+    maps key on the same objects)."""
+
+    buckets: dict[str, list[PreferenceRef]] = {"track": [], "playlist": [], "global": []}
+    for ap in soft:
+        buckets.get(ap.ref.scope, buckets["global"]).append(ap.ref)
+    return derive_precedence(
+        global_refs=buckets["global"],
+        playlist_refs=buckets["playlist"],
+        track_refs=buckets["track"],
+    )
+
+
 def _phase2_score(
     source: object,
     survivors: list[Any],
+    soft: list[ActivePreference],
     *,
     weights: Weights,
     all_durations: list[int] | None,
     prefer: frozenset[str],
     avoid: frozenset[str],
     alias_resolver: "AliasResolver | None",
-) -> list[tuple[Any, Distance]]:
-    """Score each survivor via the single scoring source, best (lowest) first."""
+) -> list[tuple[Any, Distance, dict[PreferenceRef, Verdict]]]:
+    """Score each survivor by base identity distance and record soft verdicts.
 
-    scored: list[tuple[Any, Distance]] = []
+    Returns ``(candidate, distance, verdict_map)`` triples sorted best (lowest
+    distance) first. The :class:`Distance` is the base identity/similarity match
+    quality ONLY — soft preferences are deliberately NOT folded into it, so a
+    preference-neutral candidate cannot win merely by dodging every penalty
+    (the AC-C7 "candidate neither preference wanted" failure). Instead each soft
+    preference's verdict on the candidate is recorded in ``verdict_map`` and used
+    to resolve WITHIN the identity cluster by precedence (see
+    :func:`_resolve_winner`).
+    """
+
+    scored: list[tuple[Any, Distance, dict[PreferenceRef, Verdict]]] = []
     for cand in survivors:
         signals = score_signals(
             source,
@@ -152,11 +198,50 @@ def _phase2_score(
             avoid=avoid,
             alias_resolver=alias_resolver,
         )
-        scored.append((cand, Distance(signals)))
+        vmap: dict[PreferenceRef, Verdict] = {}
+        for ap in soft:
+            cand_val = _extract(ap.criterion, cand)
+            if cand_val is None:
+                vmap[ap.ref] = Verdict.NO_VERDICT
+                continue
+            src_val = _extract(ap.criterion, source) or _EMPTY_VALUE
+            vmap[ap.ref] = ap.criterion.compare(src_val, cand_val, ap.ref.strength)
+        scored.append((cand, Distance(signals), vmap))
     # Stable sort by ascending distance keeps input order for genuine ties, so
     # the deterministic tie-break (Task 3.4) is the only thing that reorders them.
-    scored.sort(key=lambda cd: cd[1].total)
+    scored.sort(key=lambda row: row[1].total)
     return scored
+
+
+def _resolve_winner(
+    scored: list[tuple[Any, Distance, dict[PreferenceRef, Verdict]]],
+    soft: list[ActivePreference],
+) -> tuple[int, str | None]:
+    """Pick the winning index.
+
+    Candidates whose BASE identity distance is within :data:`AMBIGUITY_DELTA` of
+    the best form the same-song contention set; within it soft preferences decide
+    by precedence (AC-C7, lexicographic favor — a neutral candidate has favor 0
+    and loses to one a higher-precedence preference wants). Outside the band the
+    better identity match wins outright: a preference selects among comparable
+    versions, it never rescues a poor match. Returns ``(winner_index,
+    decided_by)``.
+    """
+
+    if not scored:
+        return -1, None
+    best_total = scored[0][1].total
+    cluster = [i for i, row in enumerate(scored) if row[1].total - best_total <= AMBIGUITY_DELTA]
+    if len(cluster) <= 1 or not soft:
+        return 0, None
+
+    precedence = _precedence_of(soft)
+    candidate_verdicts = {i: scored[i][2] for i in cluster}
+    decision = resolve_conflict(candidate_verdicts, precedence)
+    if decision.winner is not None:
+        return decision.winner, decision.decided_by
+    # Precedence could not distinguish -> lowest-distance survivor (tie-break in 3.4).
+    return 0, None
 
 
 def select_version(
@@ -186,9 +271,11 @@ def select_version(
             d for d in (getattr(c, "duration_seconds", None) for c in survivors) if d
         ]
 
-    ranked = _phase2_score(
+    soft = _soft_prefs(active_list)
+    scored = _phase2_score(
         source,
         survivors,
+        soft,
         weights=weights,
         all_durations=all_durations,
         prefer=prefer,
@@ -196,8 +283,15 @@ def select_version(
         alias_resolver=alias_resolver,
     )
 
-    if ranked:
-        winner, winner_distance = ranked[0]
+    winner_index, decided_by = _resolve_winner(scored, soft)
+    ranked = [(cand, dist) for cand, dist, _ in scored]
+
+    if winner_index >= 0:
+        winner, winner_distance = ranked[winner_index]
+        # Surface the resolved winner at the head of the ranking for the plan/
+        # explain surfaces, keeping the remaining survivors in distance order.
+        if winner_index != 0:
+            ranked.insert(0, ranked.pop(winner_index))
     else:
         winner, winner_distance = None, None
 
@@ -206,6 +300,7 @@ def select_version(
         winner_distance=winner_distance,
         ranked=ranked,
         filtered=filtered,
+        decided_by=decided_by,
     )
 
 

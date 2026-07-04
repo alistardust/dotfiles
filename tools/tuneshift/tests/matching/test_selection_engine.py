@@ -12,7 +12,11 @@ failure mode behind "it says the track doesn't exist / picked the dead ID".
 
 from __future__ import annotations
 
-from tuneshift.matching.selection import select_version
+from types import SimpleNamespace
+
+from tuneshift.matching.criteria import Strength, TokenCriterion
+from tuneshift.matching.precedence import PreferenceRef
+from tuneshift.matching.selection import ActivePreference, select_version
 from tuneshift.models import TrackResult
 
 
@@ -75,3 +79,69 @@ def test_empty_candidate_set_yields_no_winner():
     assert result.winner is None
     assert result.winner_distance is None
     assert result.ranked == []
+
+
+# --- Task 3.2: soft preferences + precedence conflict resolution (AC-C4/C7) ---
+
+SPATIAL = TokenCriterion(name="spatial", field_name="audio_modes", target="dolby_atmos")
+EDITION = TokenCriterion(name="edition", field_name="edition_modes", target="remaster")
+
+
+def _rel(pid, *, audio_modes, edition_modes, available=True):
+    # Identical title/artist/album/isrc/duration so BASE scores are equal and the
+    # soft preferences are the only differentiator (isolates the AC-C7 mechanism).
+    return SimpleNamespace(
+        platform_id=pid,
+        title="Flowers",
+        artist="Miley Cyrus",
+        album="Endless Summer Vacation",
+        isrc=None,
+        duration_seconds=200,
+        available=available,
+        audio_modes=audio_modes,
+        edition_modes=edition_modes,
+    )
+
+
+_SOURCE = _rel("src", audio_modes=[], edition_modes=[])
+_ATMOS_REMASTER = _rel("atmos_remaster", audio_modes=["DOLBY_ATMOS"], edition_modes=["remaster"])
+_STEREO_ORIGINAL = _rel("stereo_original", audio_modes=["STEREO"], edition_modes=[])
+
+
+def _active(order, scope="playlist"):
+    refs = {
+        "spatial": ActivePreference(SPATIAL, PreferenceRef("spatial", Strength.PREFER, "dolby_atmos", scope)),
+        "edition": ActivePreference(EDITION, PreferenceRef("edition", Strength.AVOID, "remaster", scope)),
+    }
+    return [refs[name] for name in order]
+
+
+def test_two_playlists_different_precedence_pick_different_winners():
+    candidates = [_ATMOS_REMASTER, _STEREO_ORIGINAL]
+    # Playlist A: spatial outranks edition -> prefer-atmos dominates -> Atmos wins.
+    a = select_version(_SOURCE, candidates, active=_active(["spatial", "edition"]))
+    assert a.winner is _ATMOS_REMASTER
+    assert a.decided_by == "spatial"
+    # Playlist B: edition outranks spatial -> avoid-remaster dominates -> original wins.
+    b = select_version(_SOURCE, candidates, active=_active(["edition", "spatial"]))
+    assert b.winner is _STEREO_ORIGINAL
+    assert b.decided_by == "edition"
+
+
+def test_single_soft_pref_biases_winner_by_weighted_score():
+    # No conflict: one pref, atmos is strictly favoured -> lower distance -> wins.
+    active = [ActivePreference(SPATIAL, PreferenceRef("spatial", Strength.PREFER, "dolby_atmos", "playlist"))]
+    result = select_version(_SOURCE, [_STEREO_ORIGINAL, _ATMOS_REMASTER], active=active)
+    assert result.winner is _ATMOS_REMASTER
+
+
+def test_conflict_never_picks_candidate_neither_pref_wanted():
+    # A neutral release (no atmos, no remaster => NO_VERDICT on both prefs) has the
+    # SAME base score as the contested pair. A naive weighted sum where the opposing
+    # prefs cancel could let it win; precedence must eliminate it (AC-C7).
+    neutral = _rel("neutral_comp", audio_modes=[], edition_modes=[])
+    # neutral listed FIRST so a stable weighted sort would surface it on a tie.
+    candidates = [neutral, _ATMOS_REMASTER, _STEREO_ORIGINAL]
+    result = select_version(_SOURCE, candidates, active=_active(["spatial", "edition"]))
+    assert result.winner is _ATMOS_REMASTER
+    assert result.winner is not neutral
