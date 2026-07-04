@@ -295,6 +295,32 @@ def test_duration_criterion_missing_duration_yields_no_verdict():
     assert crit.compare(empty, src, Strength.REQUIRE) is Verdict.NO_VERDICT
 
 
+def test_duration_criterion_malformed_target_yields_no_verdict_not_crash():
+    # A malformed tolerance target must NOT raise out of select_version; it
+    # degrades to no signal (parity rule §5.1). Regression for the unguarded
+    # float() parse that crashed selection on e.g. `prefs set duration require fast`.
+    from tuneshift.matching.criteria import DurationCriterion
+
+    crit = DurationCriterion(name="duration", target="fast")
+    src = crit.extract(_dur_meta(200))
+    cand = crit.extract(_dur_meta(203))
+    assert crit.compare(src, cand, Strength.REQUIRE) is Verdict.NO_VERDICT
+
+
+def test_duration_criterion_is_valid_target_rejects_malformed():
+    from tuneshift.matching.criteria import DurationCriterion
+
+    assert DurationCriterion.is_valid_target("3s")
+    assert DurationCriterion.is_valid_target("3")
+    assert DurationCriterion.is_valid_target("5%")
+    assert not DurationCriterion.is_valid_target("fast")
+    assert not DurationCriterion.is_valid_target("-3")
+    assert not DurationCriterion.is_valid_target("")
+    # Non-finite values parse via float() but are not a measurable band.
+    assert not DurationCriterion.is_valid_target("nan")
+    assert not DurationCriterion.is_valid_target("inf")
+
+
 # --- M5: ArtistRoleCriterion (main vs featured artist sets) -------------------
 
 

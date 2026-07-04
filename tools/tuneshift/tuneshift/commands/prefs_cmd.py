@@ -39,7 +39,11 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from tuneshift.db import Database
-from tuneshift.matching.criteria import Strength, load_token_whitelist
+from tuneshift.matching.criteria import (
+    DurationCriterion,
+    Strength,
+    load_token_whitelist,
+)
 from tuneshift.matching.preferences import Preferences, resolve_preferences
 from tuneshift.matching.registry import KNOWN_AXES
 
@@ -150,6 +154,10 @@ def _handle_typed_set(args, db: Database, criterion: str, strength: str,
         return 1
     if not target:
         print("A target token is required: prefs set <criterion> <strength> <target>")
+        return 1
+    if criterion == "duration" and not DurationCriterion.is_valid_target(target):
+        print(f'Invalid duration tolerance "{target}". '
+              'Use an absolute ("3s" / "3") or relative ("5%") tolerance.')
         return 1
 
     resolved = _resolve_typed_scope(args, db)

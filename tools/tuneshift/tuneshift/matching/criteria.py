@@ -24,6 +24,7 @@ scoring code, and cannot perturb today's scores until a preference opts in.
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass, field
 from enum import Enum, auto
@@ -556,14 +557,39 @@ class DurationCriterion:
             return None
         return value if value > 0 else None
 
-    def _tolerance_seconds(self, source_seconds: float) -> float:
-        spec = self.target.strip().lower()
-        if spec.endswith("%"):
-            pct = float(spec[:-1])
-            return abs(source_seconds) * pct / 100.0
-        if spec.endswith("s"):
+    @staticmethod
+    def is_valid_target(target: str) -> bool:
+        """True when ``target`` is a parseable, non-negative tolerance spec.
+
+        Accepts ``"5%"`` (relative), ``"3s"`` / ``"3"`` (absolute seconds). Used
+        by the CLI to reject a malformed tolerance at set-time (fail fast) and
+        mirrors the parse in :meth:`_tolerance_seconds` (the runtime safety net).
+        """
+        return DurationCriterion._parse_tolerance(target) is not None
+
+    @staticmethod
+    def _parse_tolerance(target: str) -> tuple[float, bool] | None:
+        """Parse ``target`` into ``(value, is_relative)`` or ``None`` if malformed."""
+        spec = target.strip().lower()
+        relative = spec.endswith("%")
+        if relative:
             spec = spec[:-1]
-        return float(spec)
+        elif spec.endswith("s"):
+            spec = spec[:-1]
+        try:
+            value = float(spec)
+        except ValueError:
+            return None
+        if not math.isfinite(value) or value < 0:
+            return None
+        return value, relative
+
+    def _tolerance_seconds(self, source_seconds: float) -> float | None:
+        parsed = self._parse_tolerance(self.target)
+        if parsed is None:
+            return None
+        value, relative = parsed
+        return abs(source_seconds) * value / 100.0 if relative else value
 
     def extract(self, meta: object) -> CriterionValue | None:
         seconds = self._seconds_of(meta)
@@ -582,6 +608,11 @@ class DurationCriterion:
         ):
             return Verdict.NO_VERDICT
         tolerance = self._tolerance_seconds(float(source.raw))
+        if tolerance is None:
+            # A malformed tolerance target (a typo past validation, or a legacy
+            # row) yields no measurable band -> no signal, rather than crashing
+            # selection (parity rule §5.1).
+            return Verdict.NO_VERDICT
         satisfied = abs(float(candidate.raw) - float(source.raw)) <= tolerance
         # Numeric/structured -> confident; a hard verdict stays hard.
         return resolve_strength_verdict(strength, satisfied=satisfied)
