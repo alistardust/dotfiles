@@ -183,3 +183,62 @@ def apply_plan(
             report.errors.append(f"change {change.change_id}: {exc}")
 
     return report
+
+
+# Journal entries for remote pushes are tagged with this table-name prefix so
+# rollback can recognise them and refuse to un-push inline (AC-P4 forward-only).
+REMOTE_TABLE_PREFIX = "remote:"
+
+
+@dataclass
+class RollbackReport:
+    """Outcome of a rollback run."""
+
+    plan_id: str
+    reverted: int = 0
+    remote_skipped: int = 0
+    # Journal entries for remote pushes that a compensating plan must undo.
+    compensating: list[Any] = field(default_factory=list)
+
+
+def _reverse_one(db: Database, entry: Any) -> None:
+    """Reverse a single LOCAL journal entry. Caller owns the transaction.
+
+    Uniform rule: if the write had no prior state the row was created, so delete
+    it; otherwise restore the prior state. This inverts insert/update/delete
+    symmetrically without needing to branch on the recorded op.
+    """
+    spec = _spec_for(entry.table_name)
+    pk_values = json.loads(entry.row_key)
+    if entry.prior_value is None:
+        _delete_row(db, spec, pk_values)
+    else:
+        _write_row(db, spec, entry.prior_value)
+
+
+def rollback_plan(db: Database, plan_id: str) -> RollbackReport:
+    """Reverse an applied plan in one step by reverse-replaying its journal.
+
+    LOCAL mutations are undone directly. REMOTE pushes are forward-only: they are
+    collected into :attr:`RollbackReport.compensating` for a compensating plan
+    (Task 4.6) and never un-pushed inline. On success the journal is cleared so
+    the plan cannot be rolled back twice.
+    """
+    report = RollbackReport(plan_id=plan_id)
+    entries = db.get_journal_entries(plan_id)  # newest-first == reverse order
+
+    with db.conn:
+        for entry in entries:
+            if entry.table_name.startswith(REMOTE_TABLE_PREFIX):
+                report.remote_skipped += 1
+                report.compensating.append(entry)
+                continue
+            _reverse_one(db, entry)
+            report.reverted += 1
+
+    # Local rollback is complete; drop the local journal entries. Any remote
+    # entries needing a compensating plan are already captured in the report.
+    if report.remote_skipped == 0:
+        db.clear_journal(plan_id)
+
+    return report
