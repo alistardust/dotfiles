@@ -70,11 +70,13 @@ _TABLE_SPECS: dict[str, _TableSpec] = {
         pk=("playlist_id", "track_id", "criterion"),
         columns=("strength", "target"),
     ),
-    # Global default lock lives on platform_tracks (spec §8, AC-L1).
+    # Global default lock lives on platform_tracks (spec §8, AC-L1). A routed
+    # self-heal (planapply/heal.py, AC-L3) re-binds the locked id and refreshes
+    # the same-recording fingerprint, so both are writable through plan/apply.
     "platform_tracks": _TableSpec(
         name="platform_tracks",
         pk=("track_id", "platform"),
-        columns=("platform_track_id", "status", "user_approved"),
+        columns=("platform_track_id", "status", "user_approved", "fingerprint"),
     ),
     # A sync push may find-or-create + link the remote playlist at apply time.
     # That link is a LOCAL write, so it is journaled (see ``_apply_remote``) and

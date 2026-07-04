@@ -1,7 +1,7 @@
 """Track reconciliation: match canonical tracks to platform-specific IDs."""
 import json
 import logging
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 
 from tuneshift.db import Database
@@ -588,29 +588,26 @@ def _identity_lock_from_effective(eff: EffectiveLock, track) -> IdentityLock:
     )
 
 
-def _verify_and_heal_lock(
+def _verify_lock(
     db: Database,
     track,
     client,
     mapping: PlatformMapping,
 ) -> ReconcileResult:
-    """Actively verify a user lock and self-heal it when the platform id died.
+    """Verify a user lock's liveness WITHOUT mutating anything (AC-L3, §7.1).
 
-    - Locked id alive         -> keep it; backfill fingerprint if missing.
+    - Locked id alive          -> keep it (LOCKED, available).
     - Liveness undeterminable  -> trust the lock as-is (per stored status).
-    - Locked id dead, same     -> re-bind to an equivalent live id (LOCK_HEALED).
-      recording found on platform
-    - Locked id dead, no        -> hold as EXACT_UNAVAILABLE (LOCK_HELD); never
-      equivalent found            drop the lock or swap to a different recording.
+    - Locked id dead           -> report HELD (EXACT_UNAVAILABLE / LOCK_HELD),
+                                  surfaced for review. The actual self-heal
+                                  (re-bind to an equivalent recording) is a
+                                  ROUTED operation proposed by
+                                  ``planapply.heal.build_heal_plan`` — never a
+                                  silent inline swap.
     """
     alive = _locked_id_alive(client, mapping.platform_track_id)
 
     if alive is True:
-        if not mapping.fingerprint:
-            fp = _fingerprint_for_track(track, mapping)
-            db.upsert_platform_mapping(
-                replace(mapping, status="matched", fingerprint=json.dumps(fp.as_dict()))
-            )
         return _locked_available_result(mapping, ReasonCode.LOCKED)
 
     if alive is None:
@@ -619,24 +616,7 @@ def _verify_and_heal_lock(
             return _locked_unavailable_result(ReasonCode.LOCKED)
         return _locked_available_result(mapping, ReasonCode.LOCKED)
 
-    # Locked id is dead — attempt to heal to the SAME recording.
-    target_fp = _fingerprint_for_track(track, mapping)
-    cand = _find_equivalent_candidate(track, client, target_fp)
-    if cand is not None:
-        healed = replace(
-            mapping,
-            platform_track_id=cand.platform_id,
-            platform_title=cand.title,
-            platform_artist=cand.artist,
-            platform_album=cand.album,
-            status="matched",
-            fingerprint=json.dumps(target_fp.as_dict()),
-        )
-        db.upsert_platform_mapping(healed)
-        return _locked_available_result(healed, ReasonCode.LOCK_HEALED)
-
-    # No equivalent recording available — hold the lock, do not swap.
-    db.upsert_platform_mapping(replace(mapping, status="unavailable"))
+    # Locked id is dead — hold and surface for a routed heal; never swap inline.
     return _locked_unavailable_result(ReasonCode.LOCK_HELD)
 
 
@@ -699,7 +679,7 @@ def reconcile_track(
         # never shadowed by the global cached mapping.
         if effective_lock is not None:
             if verify_locked and effective_lock.scope == "global" and mapping is not None:
-                return _verify_and_heal_lock(db, track, client, mapping)
+                return _verify_lock(db, track, client, mapping)
             # Per-playlist self-heal is routed through the plan/apply engine
             # (Task 5.3); until then a per-playlist lock is trusted without a
             # liveness probe rather than mutated inline.
