@@ -91,4 +91,19 @@ def tie_break(candidates: list[TieCandidate]) -> TieBreakResult:
     return TieBreakResult(winner=winner.id, decided_by=decided_by)
 
 
-__all__ = ["TieCandidate", "TieBreakResult", "tie_break"]
+def all_tie_on_meaningful_tiers(candidates: list[TieCandidate]) -> bool:
+    """True when every candidate shares the same release-year AND availability rank.
+
+    In that case only the arbitrary ``stable-id`` tier could separate them, so
+    :func:`tie_break`'s winner is a purely lexicographic pick. Callers use this to
+    preserve INSERTION ORDER (winner-parity) instead of imposing a lexicographic
+    winner on an otherwise-indistinguishable band. An empty band is vacuously
+    "all tied".
+    """
+    if not candidates:
+        return True
+    keys = {(c._year_key, c._availability_key) for c in candidates}
+    return len(keys) == 1
+
+
+__all__ = ["TieCandidate", "TieBreakResult", "tie_break", "all_tie_on_meaningful_tiers"]

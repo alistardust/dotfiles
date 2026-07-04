@@ -44,7 +44,11 @@ from tuneshift.matching.precedence import (
     derive_precedence,
     resolve_conflict,
 )
-from tuneshift.matching.tiebreak import TieCandidate, tie_break
+from tuneshift.matching.tiebreak import (
+    TieCandidate,
+    all_tie_on_meaningful_tiers,
+    tie_break,
+)
 
 if TYPE_CHECKING:
     from tuneshift.matching.aliases import AliasResolver
@@ -363,19 +367,23 @@ def _deterministic_tiebreak(
         for i in cluster
     ]
     result = tie_break(tie_candidates)
-    if result.decided_by == "stable-id":
-        # No MEANINGFUL tier (release-year / availability) separated the band.
-        # Preserve INSERTION ORDER — the pre-tiebreak, winner-parity behaviour —
-        # rather than tie_break's arbitrary lexicographic stable-id pick, which
-        # would silently reorder default (no-preference) selections. ``scored`` is
-        # stable-sorted by distance, so ``cluster[0]`` is the first-listed of the
-        # tied candidates. Still report ``None`` so the near-tie surfaces for
-        # review (AC-S3) even though the pick itself is deterministic.
+    if all_tie_on_meaningful_tiers(tie_candidates):
+        # Only the arbitrary stable-id tier could separate this band, so
+        # tie_break's winner is a purely lexicographic pick. Preserve INSERTION
+        # ORDER — the pre-tiebreak, winner-parity behaviour — rather than let a
+        # lexicographic id silently reorder default (no-preference) selections.
+        # ``scored`` is stable-sorted by distance, so ``cluster[0]`` is the
+        # first-listed of the tied candidates. Report ``None`` so the near-tie
+        # still surfaces for review (AC-S3) even though the pick is deterministic.
         return cluster[0], None
+    # A meaningful tier (earliest-original release-year / availability) separated
+    # the band, so tie_break's winner is the correct AC-C6 pick even if a
+    # stable-id sub-tie among the co-leaders left ``decided_by == "stable-id"``.
     winner_pos = next(
         idx for idx, tc in zip(cluster, tie_candidates) if tc.id == result.winner
     )
-    return winner_pos, result.decided_by
+    decided_by = result.decided_by if result.decided_by != "stable-id" else None
+    return winner_pos, decided_by
 
 
 def _resolve_winner(

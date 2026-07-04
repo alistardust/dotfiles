@@ -290,6 +290,35 @@ def test_m3_earliest_original_release_tiebreak_fires_without_prefs():
     assert result.decided_by == "release-year"
 
 
+def test_m3_earliest_original_beats_first_listed_later_reissue():
+    # Regression (AC-C6): when TWO candidates share the earliest release-year and
+    # a LATER reissue is listed FIRST, the earliest-original must still win. The
+    # winner-parity insertion-order fallback applies only when the WHOLE band
+    # ties on the meaningful tiers, not merely when the top two do.
+    src = _dated_rel("src")
+    later_first = _dated_rel("later", release_date="1980-01-01")
+    orig_a = _dated_rel("origA", release_date="1975-11-21")
+    orig_b = _dated_rel("origB", release_date="1975-11-21")
+    result = select_version(src, [later_first, orig_a, orig_b], active=())
+    assert result.winner in (orig_a, orig_b)
+    assert result.winner is not later_first
+    # The two 1975 originals genuinely tie -> surfaced for review (AC-S3).
+    assert result.decided_by is None
+
+
+def test_m3_all_tied_band_preserves_insertion_order_without_prefs():
+    # When candidates tie on ALL meaningful tiers (same release-year, same
+    # availability) the tiebreak preserves INSERTION ORDER (winner-parity) rather
+    # than an arbitrary lexicographic id pick — the first-listed wins even though
+    # the other has a lexicographically smaller id.
+    src = _dated_rel("src")
+    first = _dated_rel("zzz", release_date="1975-11-21")
+    second = _dated_rel("aaa", release_date="1975-11-21")
+    result = select_version(src, [first, second], active=())
+    assert result.winner is first
+    assert result.decided_by is None
+
+
 # --- M4: per-criterion / per-playlist duration tolerance (AC-M4) --------------
 
 
