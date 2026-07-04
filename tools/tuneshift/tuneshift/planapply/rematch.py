@@ -73,18 +73,22 @@ def _change_for_track(
     playlist_mapping = db.get_playlist_track_mapping(playlist_id, track_id, platform)
     global_mapping = db.get_platform_mapping(track_id, platform)
 
+    # Current DB state of the playlist row we would plan (for an accurate diff).
     current_id = ""
     if playlist_mapping is not None:
         current_id = playlist_mapping["platform_track_id"]
     elif global_mapping is not None:
         current_id = global_mapping.platform_track_id
 
-    # A user_approved row at either scope is a lock (AC-P3). The playlist-scoped
-    # approval takes precedence, then the global default.
-    locked = bool(
-        (playlist_mapping and playlist_mapping["user_approved"])
-        or (global_mapping and global_mapping.user_approved)
-    )
+    # The authoritative lock is the two-level EFFECTIVE lock — never raw row
+    # precedence. An unapproved auto-matched playlist row does NOT shadow a global
+    # lock (it falls through to the global default), so deriving "locked" from raw
+    # rows would re-affirm the wrong release. ``locked_id`` is the release the lock
+    # actually pins; the plan re-affirms that, not whatever id the row happens to
+    # hold (AC-L1/L2/L4).
+    effective_lock = db.get_effective_lock(track_id, platform, playlist_id)
+    locked = effective_lock is not None
+    locked_id = effective_lock.platform_track_id if effective_lock is not None else None
 
     op = "update" if playlist_mapping is not None else "insert"
     row_key = row_key_for(
@@ -105,11 +109,11 @@ def _change_for_track(
                 "playlist_id": playlist_id,
                 "track_id": track_id,
                 "platform": platform,
-                "platform_track_id": current_id,
+                "platform_track_id": locked_id,
                 "source": "locked",
                 "user_approved": 1,
             }
-            if current_id
+            if locked_id
             else None
         )
         # AC-L5: the locked id still exists but its metadata may have degraded so
@@ -119,9 +123,9 @@ def _change_for_track(
         downgrades = (
             check_lock_downgrade(
                 db, track_id, client,
-                platform=platform, playlist_id=playlist_id, locked_id=current_id,
+                platform=platform, playlist_id=playlist_id, locked_id=locked_id,
             )
-            if current_id
+            if locked_id
             else []
         )
         if downgrades:

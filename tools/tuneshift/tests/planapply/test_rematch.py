@@ -13,7 +13,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from tuneshift.db import Database
-from tuneshift.models import Track, TrackResult
+from tuneshift.models import PlatformMapping, Track, TrackResult
 from tuneshift.planapply.apply import apply_plan
 from tuneshift.planapply.rematch import build_rematch_plan
 
@@ -114,6 +114,34 @@ def test_rematch_marks_user_approved_mapping_locked(tmp_db: Path) -> None:
     assert report.skipped_locked == 1
     # The pin is untouched.
     assert db.get_playlist_track_mapping(pid, tid, "tidal")["platform_track_id"] == "PINNED"
+
+
+def test_rematch_locked_reaffirms_effective_lock_not_stale_playlist_row(tmp_db: Path) -> None:
+    """AC-L1/L2/L4: when a stale UNAPPROVED playlist row coexists with an approved
+    GLOBAL lock, the plan must re-affirm the effective (global) lock id — never
+    cement the unapproved playlist id as though it were the lock.
+
+    Regression guard: the locked branch previously took ``current_id`` from any
+    playlist row and only checked approval at either scope, so it proposed the
+    unapproved playlist id as the locked release.
+    """
+    db, pid, tid = _seed_playlist(tmp_db)
+    # Approved GLOBAL lock — the authoritative identity.
+    db.upsert_platform_mapping(PlatformMapping(
+        track_id=tid, platform="tidal", platform_track_id="GLOBAL",
+        match_score=97, status="matched", user_approved=True,
+    ))
+    # Stale UNAPPROVED playlist auto-row pointing elsewhere.
+    db.set_playlist_track_mapping(
+        pid, tid, "tidal", "AUTO_PL", source="matched", user_approved=False
+    )
+    plan = build_rematch_plan(db, pid, _client([]), platform="tidal")
+
+    locked = [c for c in plan.changes if c.locked]
+    assert len(locked) == 1
+    assert locked[0].classification == "locked"
+    # Re-affirms the GLOBAL lock, never the stale unapproved playlist id.
+    assert locked[0].proposed["platform_track_id"] == "GLOBAL"
 
 
 def test_rematch_flags_locked_version_downgrade(tmp_db: Path) -> None:
