@@ -518,6 +518,78 @@ class DateCriterion:
         return _soft_signal(self.name, self.weight, verdict)
 
 
+@dataclass
+class DurationCriterion:
+    """A running-length tolerance criterion (M4, AC-M4).
+
+    Unlike the global tiered duration band (``penalties.duration_signal``) which
+    is calibrated against the candidate cluster and cannot be tightened per
+    playlist, this criterion compares the CANDIDATE's length against the SOURCE's
+    within a configurable tolerance. ``target`` is the tolerance:
+
+    - ``"5%"`` — relative: within 5% of the source duration.
+    - ``"3s"`` / ``"3"`` — absolute: within 3 seconds of the source duration.
+
+    A ``require`` tolerance hard-filters candidates outside the band (the "reject
+    an extended mix a lenient global band would accept" case); a ``prefer`` nudges
+    the score. Duration is structured numeric metadata, so the verdict is
+    confident and a hard verdict stays hard. Either side missing a duration →
+    NO_VERDICT → no signal (parity rule §5.1) — a criterion with nothing to
+    measure never perturbs the outcome.
+    """
+
+    name: str
+    target: str
+    weight: int = 10
+    hard_cap: HardCapPolicy = HardCapPolicy.NONE
+
+    @staticmethod
+    def _seconds_of(meta: object) -> float | None:
+        raw = getattr(meta, "duration_seconds", None)
+        if raw is None:
+            raw = getattr(meta, "duration", None)
+        if raw is None:
+            return None
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            return None
+        return value if value > 0 else None
+
+    def _tolerance_seconds(self, source_seconds: float) -> float:
+        spec = self.target.strip().lower()
+        if spec.endswith("%"):
+            pct = float(spec[:-1])
+            return abs(source_seconds) * pct / 100.0
+        if spec.endswith("s"):
+            spec = spec[:-1]
+        return float(spec)
+
+    def extract(self, meta: object) -> CriterionValue | None:
+        seconds = self._seconds_of(meta)
+        if seconds is None:
+            return None
+        return CriterionValue(raw=seconds, tokens=frozenset(), structured=True)
+
+    def compare(
+        self,
+        source: CriterionValue,
+        candidate: CriterionValue,
+        strength: Strength | None,
+    ) -> Verdict:
+        if not isinstance(source.raw, (int, float)) or not isinstance(
+            candidate.raw, (int, float)
+        ):
+            return Verdict.NO_VERDICT
+        tolerance = self._tolerance_seconds(float(source.raw))
+        satisfied = abs(float(candidate.raw) - float(source.raw)) <= tolerance
+        # Numeric/structured -> confident; a hard verdict stays hard.
+        return resolve_strength_verdict(strength, satisfied=satisfied)
+
+    def to_signal(self, verdict: Verdict) -> SignalPenalty | None:
+        return _soft_signal(self.name, self.weight, verdict)
+
+
 class CriterionRegistry:
     """An ordered, name-unique collection of registered criteria.
 

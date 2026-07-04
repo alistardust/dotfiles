@@ -243,3 +243,54 @@ def test_date_criterion_unextractable_yields_no_verdict():
 
     crit = DateCriterion(name="remaster_year", date_field="remaster_year", target="2015")
     assert crit.extract(_date_meta()) is None
+
+
+# --- M4: DurationCriterion (per-criterion / per-playlist duration tolerance) --
+
+
+def _dur_meta(seconds):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(duration_seconds=seconds)
+
+
+def test_duration_criterion_within_absolute_tolerance_satisfies():
+    from tuneshift.matching.criteria import DurationCriterion
+
+    crit = DurationCriterion(name="duration", target="2s")
+    src = crit.extract(_dur_meta(200))
+    close = crit.extract(_dur_meta(201))
+    assert crit.compare(src, close, Strength.REQUIRE) is Verdict.HARD_PASS
+
+
+def test_duration_criterion_beyond_absolute_tolerance_hard_rejects():
+    from tuneshift.matching.criteria import DurationCriterion
+
+    crit = DurationCriterion(name="duration", target="2s")
+    src = crit.extract(_dur_meta(200))
+    extended = crit.extract(_dur_meta(300))
+    # A require tolerance is confident (numeric/structured) -> stays a hard reject.
+    assert crit.compare(src, extended, Strength.REQUIRE) is Verdict.HARD_REJECT
+
+
+def test_duration_criterion_percent_tolerance_relative_to_source():
+    from tuneshift.matching.criteria import DurationCriterion
+
+    crit = DurationCriterion(name="duration", target="5%")
+    src = crit.extract(_dur_meta(200))  # 5% of 200 = 10s tolerance
+    within = crit.extract(_dur_meta(209))
+    beyond = crit.extract(_dur_meta(212))
+    assert crit.compare(src, within, Strength.PREFER) is Verdict.SOFT_BONUS
+    assert crit.compare(src, beyond, Strength.PREFER) is Verdict.SOFT_PENALTY
+
+
+def test_duration_criterion_missing_duration_yields_no_verdict():
+    from tuneshift.matching.criteria import DurationCriterion
+
+    crit = DurationCriterion(name="duration", target="2s")
+    assert crit.extract(_dur_meta(None)) is None
+    src = crit.extract(_dur_meta(200))
+    # Candidate has a duration but the source does not: nothing to measure against.
+    empty = crit.extract(_dur_meta(None)) or CriterionValue(raw=None)
+    assert crit.compare(empty, src, Strength.REQUIRE) is Verdict.NO_VERDICT
+

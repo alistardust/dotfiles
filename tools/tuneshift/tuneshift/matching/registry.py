@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from tuneshift.matching.criteria import (
     Criterion,
     DateCriterion,
+    DurationCriterion,
     EditAxisCriterion,
     Strength,
     TitleTokenCriterion,
@@ -98,6 +99,10 @@ def criterion_for(
         return DateCriterion(
             name=axis, date_field=DATE_AXIS_FIELDS[axis], target=target
         )
+    if axis == "duration":
+        # The duration axis target is a tolerance (e.g. "3s" / "5%"), not a
+        # whitelist token — pass the raw target through unfolded (M4).
+        return DurationCriterion(name=axis, target=target)
     field = STRUCTURED_AXIS_FIELDS.get(axis)
     if field is not None:
         return TokenCriterion(
@@ -112,9 +117,13 @@ def criterion_for(
     raise ValueError(f"unknown preference axis {axis!r}")
 
 
-#: All criterion axes a preference may target (structured + title-derived + date).
+#: All criterion axes a preference may target (structured + title-derived + date
+#: + the numeric duration-tolerance axis).
 KNOWN_AXES: frozenset[str] = (
-    frozenset(STRUCTURED_AXIS_FIELDS) | TITLE_AXES | frozenset(DATE_AXIS_FIELDS)
+    frozenset(STRUCTURED_AXIS_FIELDS)
+    | TITLE_AXES
+    | frozenset(DATE_AXIS_FIELDS)
+    | frozenset({"duration"})
 )
 
 #: Scope name each cascade layer maps onto for engine precedence

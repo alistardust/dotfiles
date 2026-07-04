@@ -288,3 +288,43 @@ def test_m3_earliest_original_release_tiebreak_fires_without_prefs():
     result = select_version(src, [later, original], active=())
     assert result.winner is original
     assert result.decided_by == "release-year"
+
+
+# --- M4: per-criterion / per-playlist duration tolerance (AC-M4) --------------
+
+
+def _len_rel(pid, seconds, *, available=True):
+    # Same identity, differing only by running length — a normal single vs an
+    # extended/club mix of the same recording.
+    return SimpleNamespace(
+        platform_id=pid,
+        title="One More Time",
+        artist="Daft Punk",
+        album="Discovery",
+        isrc="GBDUW0000001",
+        duration_seconds=seconds,
+        available=available,
+    )
+
+
+def test_m4_tight_tolerance_rejects_extended_mix_global_band_accepts():
+    # The global 15% band would accept a 320s "extended mix" against a 200s
+    # source only as a soft penalty; a playlist that REQUIRES duration within 3s
+    # hard-filters it out entirely, leaving the album-length version to win.
+    src = _len_rel("src", 200)
+    album = _len_rel("album", 201)
+    extended = _len_rel("ext", 320)
+    specs = [PreferenceSpec(axis="duration", target="3s",
+                            strength=Strength.REQUIRE, scope="playlist")]
+    active = resolve_active_preferences(specs)
+    result = select_version(src, [extended, album], active=active)
+    assert result.winner is album
+    assert any(
+        fc.candidate is extended and fc.reason.startswith("hard:duration")
+        for fc in result.filtered
+    )
+
+
+def test_m4_duration_is_a_known_axis():
+    assert "duration" in KNOWN_AXES
+
