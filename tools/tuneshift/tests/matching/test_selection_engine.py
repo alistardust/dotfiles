@@ -298,3 +298,38 @@ def test_karaoke_never_wins_over_studio():
 
     assert result.winner is studio
     assert result.needs_review is False
+
+
+def test_tier_restricted_candidate_not_selected_over_playable():
+    # A premium/tier-gated exact match must not win over a playable (if slightly
+    # worse) release: tier_restricted is an unplayable state, filtered in Phase 1
+    # exactly like available=False (review finding, Chunk 3 gate).
+    source = _track("src", "Wonderwall", "Oasis", "(What's the Story) Morning Glory?")
+    gated = TrackResult(
+        platform_id="A", title="Wonderwall", artist="Oasis",
+        album="(What's the Story) Morning Glory?", tier_restricted=True,
+    )
+    playable = _track("B", "Wonderwall", "Oasis", "Time Flies... 1994-2009", available=True)
+
+    result = select_version(source, [gated, playable])
+
+    assert result.winner is playable
+    assert [fc.candidate for fc in result.filtered] == [gated]
+    assert result.filtered[0].reason == "unavailable"
+
+
+def test_identity_lock_isrc_match_is_case_insensitive():
+    # ISRCs are case-insensitive everywhere else in the codebase; a lock must
+    # heal across a platform re-ID that differs only in ISRC casing (review
+    # finding, Chunk 3 gate).
+    source = _track("src", "Song", "Artist", "Album")
+    reidentified = _track(
+        "NEW", "Song", "Artist", "Album", available=True, isrc="usabc1234567"
+    )
+    lock = IdentityLock(platform_id="OLD", isrc="USABC1234567")
+
+    result = select_version(source, [reidentified], lock=lock)
+
+    assert result.lock_applied is True
+    assert result.winner is reidentified
+    assert result.needs_review is False

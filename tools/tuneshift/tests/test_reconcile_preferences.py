@@ -174,3 +174,29 @@ class TestAudioFormatPreferenceEndToEnd:
         )
         assert result.platform_track_id == "stereo"
 
+    def test_typed_pref_winner_not_overridden_by_keyword_bias(
+        self, tmp_db: Path
+    ) -> None:
+        # Review finding (Chunk 3 gate): the free-text keyword/edition tiebreak
+        # must only fire when the engine left the top band unresolved
+        # (decided_by is None). Here "prefer atmos" resolves the winner via the
+        # typed spatial criterion, so a co-listed free-text keyword ("bravo")
+        # that happens to match the STEREO release's album must NOT re-sort the
+        # band and steal the pick back to stereo.
+        db, track_id, playlist_id = self._setup(tmp_db)
+        db.set_preferences(playlist_id, {"prefer": ["atmos", "bravo"]})
+        candidates = [
+            TrackResult(
+                platform_id="stereo", title="Flowerz", artist="Armand",
+                album="Flowerz (Bravo Edition)", audio_modes=["STEREO"],
+            ),
+            TrackResult(
+                platform_id="atmos", title="Flowerz", artist="Armand",
+                album="Flowerz", audio_modes=["DOLBY_ATMOS"],
+            ),
+        ]
+        result = reconcile_track(
+            db, track_id, _client(candidates), playlist_id=playlist_id
+        )
+        assert result.platform_track_id == "atmos"
+

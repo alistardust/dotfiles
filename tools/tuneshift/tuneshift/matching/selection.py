@@ -66,7 +66,7 @@ class IdentityLock:
         if self.platform_id and getattr(candidate, "platform_id", None) == self.platform_id:
             return True
         cand_isrc = getattr(candidate, "isrc", None)
-        if self.isrc and cand_isrc and cand_isrc == self.isrc:
+        if self.isrc and cand_isrc and cand_isrc.upper() == self.isrc.upper():
             return True
         return False
 
@@ -142,6 +142,22 @@ def _hard_capped(distance: Distance) -> bool:
     return distance.capped_recommendation() is Recommendation.REJECT
 
 
+def _is_unplayable(candidate: object) -> bool:
+    """Whether a candidate is known to be unplayable and must not be selected.
+
+    Covers both a platform's explicit unavailability (``available is False``:
+    Spotify ``is_playable``/Tidal ``allowStreaming``) and a premium/tier gate
+    (``tier_restricted``). Either state means the release cannot be committed as
+    a live match, so it is eliminated in Phase 1 (and excluded from a lock's
+    available set) rather than being allowed to win over a playable release.
+    ``available is None`` (unknown) is NOT unplayable — never a guess.
+    """
+    return (
+        getattr(candidate, "available", None) is False
+        or bool(getattr(candidate, "tier_restricted", False))
+    )
+
+
 def _phase1_filter(
     source: object,
     candidates: list[Any],
@@ -159,7 +175,7 @@ def _phase1_filter(
     filtered: list[FilteredCandidate] = []
 
     for cand in candidates:
-        if getattr(cand, "available", None) is False:
+        if _is_unplayable(cand):
             filtered.append(FilteredCandidate(cand, "unavailable"))
             continue
 
@@ -319,7 +335,7 @@ def _resolve_lock(
             review_reason="locked_missing",
         )
 
-    available = [c for c in matched if getattr(c, "available", None) is not False]
+    available = [c for c in matched if not _is_unplayable(c)]
     if not available:
         return SelectionResult(
             winner=None,

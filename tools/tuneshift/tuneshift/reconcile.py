@@ -806,26 +806,29 @@ def reconcile_track(
     survivors = [c for c, _ in selection.ranked] if selection.winner is not None else []
     if survivors:
         # The engine ranked available survivors by Distance (and any typed/soft
-        # preference). Within its top ambiguity band the candidates are
-        # effectively tied on match quality; the per-playlist free-text keyword
-        # bias + the standard-edition tiebreak decide the final pick *there*,
-        # preserving the keyword-preference behaviour without overriding a
-        # confident Distance/typed-preference winner. The sort is stable, so a
-        # band with no keyword/edition signal keeps the engine's order.
+        # preference). When it resolved the winner via a preference or precedence
+        # (decided_by set — e.g. a "prefer atmos" spatial criterion), that choice
+        # is authoritative and must not be second-guessed. Only when the weighted
+        # score alone left the top band unresolved (decided_by is None, an
+        # effective tie) do the per-playlist free-text keyword bias + the
+        # standard-edition tiebreak decide the pick — the legacy keyword-
+        # preference behaviour. The sort is stable, so a band with no keyword/
+        # edition signal keeps the engine's order.
         winner_result = selection.winner
-        base_distance = selection.winner_distance.total
-        band = [
-            cand for cand, dist in selection.ranked
-            if dist.total - base_distance <= AMBIGUITY_DELTA
-        ]
-        if len(band) > 1:
-            band.sort(
-                key=lambda c: (
-                    -preference_sort_bias(c.album or "", prefs),
-                    edition_cost(c.album or ""),
+        if selection.decided_by is None:
+            base_distance = selection.winner_distance.total
+            band = [
+                cand for cand, dist in selection.ranked
+                if dist.total - base_distance <= AMBIGUITY_DELTA
+            ]
+            if len(band) > 1:
+                band.sort(
+                    key=lambda c: (
+                        -preference_sort_bias(c.album or "", prefs),
+                        edition_cost(c.album or ""),
+                    )
                 )
-            )
-            winner_result = band[0]
+                winner_result = band[0]
         ordered = [winner_result, *[c for c in survivors if c is not winner_result]]
     else:
         ordered = []
