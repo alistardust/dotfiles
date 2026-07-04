@@ -114,3 +114,62 @@ def test_rematch_marks_user_approved_mapping_locked(tmp_db: Path) -> None:
     assert report.skipped_locked == 1
     # The pin is untouched.
     assert db.get_playlist_track_mapping(pid, tid, "tidal")["platform_track_id"] == "PINNED"
+
+
+def test_rematch_flags_locked_version_downgrade(tmp_db: Path) -> None:
+    """AC-L5: a still-live locked id whose metadata degraded is FLAGGED, not swapped.
+
+    The playlist prefers ``spatial=atmos`` and the locked release used to carry
+    Atmos. The id still exists, but Tidal has dropped the Atmos mode (now stereo
+    only), so it no longer satisfies the preference. The re-doctor plan surfaces
+    a ``downgrade-flag`` for Alice to decide; the lock is never broken and never
+    silently accepted-as-degraded. Distinct from AC-L3 (disappearance).
+    """
+    db, pid, tid = _seed_playlist(tmp_db)
+    db.set_preferences(pid, {"prefer": ["atmos"]})
+    db.set_playlist_track_mapping(
+        pid, tid, "tidal", "ATMOS_ID", source="locked", user_approved=True
+    )
+    client = _client([])
+    # The locked id is alive but no longer Atmos — the degradation AC-L5 covers.
+    client.get_track.return_value = TrackResult(
+        platform_id="ATMOS_ID", title="Wonderwall", artist="Oasis",
+        album="Morning Glory", available=True, audio_modes=["STEREO"],
+    )
+
+    plan = build_rematch_plan(db, pid, client, platform="tidal")
+
+    flagged = [c for c in plan.changes if c.classification == "downgrade-flag"]
+    assert len(flagged) == 1
+    change = flagged[0]
+    assert change.locked is True
+    assert change.status == "skipped"
+    assert change.proposed["platform_track_id"] == "ATMOS_ID"  # lock re-affirmed
+    assert "spatial" in change.reason and "atmos" in change.reason
+
+    # Applying the plan never touches the lock (surfaced, not acted on).
+    report = apply_plan(db, plan)
+    assert report.applied == 0
+    assert db.get_playlist_track_mapping(pid, tid, "tidal")["platform_track_id"] == "ATMOS_ID"
+    assert db.get_playlist_track_mapping(pid, tid, "tidal")["user_approved"] == 1
+
+
+def test_rematch_locked_no_flag_when_pref_still_satisfied(tmp_db: Path) -> None:
+    """A locked id that STILL satisfies the preference is a plain locked skip."""
+    db, pid, tid = _seed_playlist(tmp_db)
+    db.set_preferences(pid, {"prefer": ["atmos"]})
+    db.set_playlist_track_mapping(
+        pid, tid, "tidal", "ATMOS_ID", source="locked", user_approved=True
+    )
+    client = _client([])
+    client.get_track.return_value = TrackResult(
+        platform_id="ATMOS_ID", title="Wonderwall", artist="Oasis",
+        album="Morning Glory", available=True, audio_modes=["DOLBY_ATMOS", "STEREO"],
+    )
+
+    plan = build_rematch_plan(db, pid, client, platform="tidal")
+
+    assert not [c for c in plan.changes if c.classification == "downgrade-flag"]
+    locked = [c for c in plan.changes if c.locked]
+    assert len(locked) == 1
+    assert locked[0].classification == "locked"

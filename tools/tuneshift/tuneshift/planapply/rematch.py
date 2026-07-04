@@ -14,7 +14,7 @@ from __future__ import annotations
 from tuneshift.db import Database
 from tuneshift.planapply.models import Plan, PlanChange, row_key_for
 from tuneshift.planapply.plan import assign_change_ids, new_plan_id
-from tuneshift.reconcile import reconcile_track
+from tuneshift.reconcile import check_lock_downgrade, reconcile_track
 
 # Confidence levels a re-match will actually propose applying. Anything else is
 # surfaced for human judgement rather than written.
@@ -112,6 +112,31 @@ def _change_for_track(
             if current_id
             else None
         )
+        # AC-L5: the locked id still exists but its metadata may have degraded so
+        # it no longer satisfies an active preference (e.g. Tidal dropped Atmos).
+        # Flag it for the user — the lock is HELD, never silently broken nor
+        # silently accepted-as-degraded.
+        downgrades = (
+            check_lock_downgrade(
+                db, track_id, client,
+                platform=platform, playlist_id=playlist_id, locked_id=current_id,
+            )
+            if current_id
+            else []
+        )
+        if downgrades:
+            return PlanChange(
+                op=op,
+                table="playlist_track_mappings",
+                row_key=row_key,
+                current=current_state,
+                proposed=proposed,
+                reason="; ".join(d.describe() for d in downgrades),
+                provenance="effective_lock",
+                classification="downgrade-flag",
+                locked=True,
+                status="skipped",
+            )
         return PlanChange(
             op=op,
             table="playlist_track_mappings",

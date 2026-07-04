@@ -29,7 +29,12 @@ from tuneshift.matching import (
     scoring_intent,
 )
 from tuneshift.matching.aliases import AliasResolver
-from tuneshift.matching.criteria import Strength, load_token_whitelist
+from tuneshift.matching.criteria import (
+    CriterionValue,
+    Strength,
+    Verdict,
+    load_token_whitelist,
+)
 from tuneshift.matching.registry import (
     STRUCTURED_AXIS_FIELDS,
     PreferenceSpec,
@@ -560,6 +565,91 @@ def _locked_unavailable_result(reason_code: str) -> ReconcileResult:
         reason_code=audit.reason_code,
         audit=audit,
     )
+
+
+def _live_locked_track(client, platform_track_id: str) -> TrackResult | None:
+    """Fetch the CURRENT metadata for a locked id, or None if gone/undeterminable.
+
+    Used by the AC-L5 downgrade check: unlike :func:`_locked_id_alive` it returns
+    the full live :class:`TrackResult` so its structured fields (``audio_modes``
+    ...) can be re-evaluated against active preferences. A missing/blocked id or
+    a client without ``get_track`` yields ``None`` — disappearance is AC-L3's
+    concern, not L5's, so the downgrade check simply stands down.
+    """
+    get_track = getattr(client, "get_track", None)
+    if not callable(get_track):
+        return None
+    try:
+        result = get_track(platform_track_id)
+    except _PLATFORM_ERRORS as exc:
+        logger.warning("lock downgrade check failed for %s: %s", platform_track_id, exc)
+        return None
+    if result is None or result.available is False:
+        return None
+    return result
+
+
+@dataclass(frozen=True)
+class LockDowngrade:
+    """An active preference the STILL-LIVE locked release no longer satisfies (AC-L5)."""
+
+    axis: str
+    target: str
+    strength: str
+
+    def describe(self) -> str:
+        return (
+            f"locked track no longer satisfies preference "
+            f"{self.axis}={self.target} ({self.strength})"
+        )
+
+
+def check_lock_downgrade(
+    db: Database,
+    track_id: int,
+    client,
+    *,
+    platform: str,
+    playlist_id: int | None,
+    locked_id: str,
+) -> list[LockDowngrade]:
+    """Report active preferences the still-live locked release fails (AC-L5).
+
+    Distinct from AC-L3 (disappearance): the locked id still exists, but its
+    current metadata may have degraded (e.g. Tidal dropped the Atmos mode) so it
+    no longer satisfies an active ``prefer``/``require`` on a structured audio
+    axis. The lock is NEVER changed here — the caller surfaces the returned
+    downgrades in a plan for the user to decide (re-pin or accept). Pure query:
+    no writes.
+
+    Returns an empty list when the lock is gone/undeterminable (AC-L3, not L5),
+    when no structured audio preferences are set (byte-parity for default prefs),
+    or when the live release still satisfies every such preference.
+    """
+    prefs = resolve_preferences(
+        db.get_global_preferences(),
+        db.get_preferences(playlist_id) if playlist_id is not None else None,
+        db.get_track_preferences(track_id),
+    )
+    active = _typed_active_prefs(prefs)
+    if not active:
+        return []
+    live = _live_locked_track(client, locked_id)
+    if live is None:
+        return []
+    downgrades: list[LockDowngrade] = []
+    for pref in active:
+        # An absent field can't satisfy a prefer/require, so treat it as an empty
+        # (structured) value — the criterion's verdict routing then flags it.
+        value = pref.criterion.extract(live) or CriterionValue(
+            raw=None, tokens=frozenset(), structured=True
+        )
+        verdict = pref.criterion.compare(value, value, pref.ref.strength)
+        if verdict in (Verdict.SOFT_PENALTY, Verdict.HARD_REJECT):
+            downgrades.append(
+                LockDowngrade(pref.ref.criterion, pref.ref.target, pref.ref.strength.value)
+            )
+    return downgrades
 
 
 def _mapping_from_effective(track_id: int, platform: str, eff: EffectiveLock) -> PlatformMapping:
