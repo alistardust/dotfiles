@@ -7,9 +7,11 @@ from difflib import SequenceMatcher
 from tuneshift.db import Database
 from tuneshift.matching import (
     Availability,
+    CriterionOutcome,
     MatchAudit,
     ReasonCode,
     RejectedCandidate,
+    SignalContribution,
     TrackFingerprint,
     build_fingerprint,
     classify_album_results,
@@ -45,6 +47,7 @@ from tuneshift.matching.selection import (
     AMBIGUITY_DELTA,
     ActivePreference,
     IdentityLock,
+    SelectionResult,
     select_version,
 )
 from tuneshift.models import (
@@ -230,6 +233,97 @@ def _legacy_intent(prefs, active: list[ActivePreference]):
     return prefer_classes, avoid_classes
 
 
+def _criteria_outcomes(
+    active: list[ActivePreference] | None,
+    selection: SelectionResult | None,
+) -> list[CriterionOutcome]:
+    """Record the active user-preference criteria and how each acted (AC-CLI3).
+
+    A hard (require/forbid) criterion ``fired`` when it eliminated ≥1 candidate
+    in Phase 1; a soft (prefer/avoid) criterion ``fired`` when it broke the
+    winning within-delta tie by precedence. A hard criterion that eliminated
+    nothing is recorded ``fired=False`` — in force, yet inert (the transparency
+    behind "mono demoted to soft").
+    """
+    if not active:
+        return []
+    filtered_hard: set[str] = set()
+    if selection is not None:
+        for fc in selection.filtered:
+            reason = fc.reason or ""
+            if reason.startswith("hard:"):
+                filtered_hard.add(reason[len("hard:") :])
+    tie = selection.decided_by if selection is not None else None
+    outcomes: list[CriterionOutcome] = []
+    for ap in active:
+        ref = ap.ref
+        is_hard = ref.strength.is_hard
+        if is_hard:
+            fired = f"{ref.criterion}={ref.target}" in filtered_hard
+        else:
+            fired = tie == ref.criterion
+        outcomes.append(
+            CriterionOutcome(
+                criterion=ref.criterion,
+                strength=ref.strength.value,
+                kind="hard" if is_hard else "soft",
+                target=ref.target,
+                fired=fired,
+            )
+        )
+    return outcomes
+
+
+def _signal_contributions(selection: SelectionResult | None) -> list[SignalContribution]:
+    """The winner's weighted per-signal distance breakdown (AC-CLI3)."""
+    if selection is None or selection.winner_distance is None:
+        return []
+    return [
+        SignalContribution(
+            name=sb.name, contribution=round(sb.contribution, 4), weight=sb.weight
+        )
+        for sb in selection.winner_distance.breakdown
+    ]
+
+
+def _filtered_rejections(
+    selection: SelectionResult | None, already: set[str]
+) -> list[RejectedCandidate]:
+    """Phase-1 eliminations rendered as rejected candidates (AC-CLI5).
+
+    These never appear in the scored list — a candidate that failed a hard filter
+    or is unavailable was dropped before scoring — so the failed-match explain
+    surface would otherwise be silent about *why* they were rejected.
+    """
+    if selection is None:
+        return []
+    out: list[RejectedCandidate] = []
+    for fc in selection.filtered:
+        cand = fc.candidate
+        pid = getattr(cand, "platform_id", None)
+        if pid is None or pid in already:
+            continue
+        already.add(pid)
+        reason = fc.reason or ""
+        if reason.startswith("hard:"):
+            rejection, detail = "hard_filter", reason[len("hard:") :]
+        else:
+            rejection, detail = "unavailable", None
+        out.append(
+            RejectedCandidate(
+                platform_id=pid,
+                title=getattr(cand, "title", "") or "",
+                artist=getattr(cand, "artist", "") or "",
+                album=getattr(cand, "album", "") or "",
+                score=0,
+                decisive_signal=reason or None,
+                rejection=rejection,
+                rejection_detail=detail,
+            )
+        )
+    return out
+
+
 def _build_audit(
     *,
     track,
@@ -239,22 +333,42 @@ def _build_audit(
     prefer: frozenset[str],
     avoid: frozenset[str],
     resolver: AliasResolver | None = None,
+    selection: SelectionResult | None = None,
+    active: list[ActivePreference] | None = None,
 ) -> MatchAudit:
     """Construct the explainable audit + availability verdict for a reconcile.
 
     ``scored`` is the fully ranked ``(score, edition_penalty, result)`` list
     (best first). Empty ``scored`` means no candidates were produced at all.
+
+    When ``selection``/``active`` are supplied (the live reconcile path) the audit
+    is enriched with the criteria that fired (hard vs soft), the winner's weighted
+    signal breakdown, the precedence tie-break, and the Phase-1 eliminations with
+    per-candidate rejection reasons — the AC-CLI3 / AC-CLI5 explain data. Callers
+    that omit them (direct unit tests) get the unenriched availability verdict.
     """
     untrusted = platform_name in _UNTRUSTED_ABSENCE
+
+    criteria = _criteria_outcomes(active, selection)
+    signal_breakdown = _signal_contributions(selection)
+    tie_break = selection.decided_by if selection is not None else None
 
     if not scored:
         availability = Availability.AMBIGUOUS if untrusted else Availability.NOT_FOUND
         reason = (
             ReasonCode.PLATFORM_CANNOT_DISTINGUISH if untrusted else ReasonCode.NO_CANDIDATES
         )
-        return MatchAudit(availability=availability, reason_code=reason)
+        return MatchAudit(
+            availability=availability,
+            reason_code=reason,
+            criteria=criteria,
+            rejected=_filtered_rejections(selection, set()),
+            tie_break=tie_break,
+        )
 
     best_score, _, best = scored[0]
+    seen_ids: set[str] = {best.platform_id}
+    version_lost = confidence == "not_found"
     rejected = [
         RejectedCandidate(
             platform_id=r.platform_id,
@@ -263,9 +377,14 @@ def _build_audit(
             album=r.album,
             score=s,
             decisive_signal=_decisive_signal(track, r, prefer, avoid, resolver),
+            rejection="below_threshold" if version_lost else "lost",
         )
         for s, _, r in scored[1:4]
     ]
+    seen_ids.update(r.platform_id for r in rejected)
+    # Phase-1 eliminations (hard-filter failures / unavailable) never reach the
+    # scored list; append them so the failed-match explain is complete (AC-CLI5).
+    rejected.extend(_filtered_rejections(selection, seen_ids))
     distance = round((100 - best_score) / 100, 4)
     best_signal = _decisive_signal(track, best, prefer, avoid, resolver)
 
@@ -281,6 +400,9 @@ def _build_audit(
             decisive_signal=best_signal,
             distance=distance,
             rejected=rejected,
+            criteria=criteria,
+            signal_breakdown=signal_breakdown,
+            tie_break=tie_break,
         )
 
     if confidence == "not_found":
@@ -300,6 +422,9 @@ def _build_audit(
             decisive_signal=best_signal,
             distance=distance,
             rejected=rejected,
+            criteria=criteria,
+            signal_breakdown=signal_breakdown,
+            tie_break=tie_break,
         )
 
     if confidence == "ambiguous":
@@ -311,6 +436,9 @@ def _build_audit(
             decisive_signal=best_signal,
             distance=distance,
             rejected=rejected,
+            criteria=criteria,
+            signal_breakdown=signal_breakdown,
+            tie_break=tie_break,
         )
 
     # confidence == "high": clear pick. Distinguish an exact recording from an
@@ -329,6 +457,9 @@ def _build_audit(
         decisive_signal=best_signal,
         distance=distance,
         rejected=rejected,
+        criteria=criteria,
+        signal_breakdown=signal_breakdown,
+        tie_break=tie_break,
     )
 
 
@@ -930,7 +1061,7 @@ def reconcile_track(
         audit = _build_audit(
             track=track, platform_name=platform_name, scored=[],
             confidence="not_found", prefer=prefer_classes, avoid=avoid_classes,
-            resolver=resolver,
+            resolver=resolver, active=active_prefs,
         )
         return ReconcileResult(
             confidence="not_found",
@@ -1035,7 +1166,7 @@ def reconcile_track(
         audit = _build_audit(
             track=track, platform_name=platform_name, scored=scored_all,
             confidence=fallback_conf, prefer=prefer_classes, avoid=avoid_classes,
-            resolver=resolver,
+            resolver=resolver, selection=selection, active=active_prefs,
         )
         if audit.availability == Availability.EXACT_UNAVAILABLE and scored_all:
             # The exact recording exists but is unplayable here: report it as
@@ -1065,7 +1196,7 @@ def reconcile_track(
     audit = _build_audit(
         track=track, platform_name=platform_name, scored=scored,
         confidence=confidence, prefer=prefer_classes, avoid=avoid_classes,
-        resolver=resolver,
+        resolver=resolver, selection=selection, active=active_prefs,
     )
     best_score, _, best_result = scored[0]
     is_div = _check_divergence(track.album, best_result.album)
