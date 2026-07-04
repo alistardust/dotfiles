@@ -16,7 +16,7 @@ from types import SimpleNamespace
 
 from tuneshift.matching.criteria import Strength, TokenCriterion
 from tuneshift.matching.precedence import PreferenceRef
-from tuneshift.matching.selection import ActivePreference, select_version
+from tuneshift.matching.selection import ActivePreference, IdentityLock, select_version
 from tuneshift.models import TrackResult
 
 
@@ -145,3 +145,63 @@ def test_conflict_never_picks_candidate_neither_pref_wanted():
     result = select_version(_SOURCE, candidates, active=_active(["spatial", "edition"]))
     assert result.winner is _ATMOS_REMASTER
     assert result.winner is not neutral
+
+
+# --- Task 3.3: IdentityLock short-circuit (AC-S2 / AC-L1) ---
+
+
+def test_locked_available_release_wins_over_better_scoring_unlocked():
+    source = _track("src", "Buddy", "De La Soul", "3 Feet High and Rising")
+    # perfect string match, but NOT the locked release:
+    generic = _track("A", "Buddy", "De La Soul", "3 Feet High and Rising", available=True)
+    # the locked Native Tongues Decision version — worse string match, but pinned:
+    native = _track("B", "Buddy", "De La Soul", "Native Tongues Decision", available=True)
+
+    lock = IdentityLock(platform_id="B")
+    result = select_version(source, [generic, native], lock=lock)
+
+    assert result.winner is native
+    assert result.lock_applied is True
+    assert result.decided_by == "lock"
+
+
+def test_locked_unavailable_surfaces_for_review_never_substituted():
+    source = _track("src", "Buddy", "De La Soul", "3 Feet High and Rising")
+    generic = _track("A", "Buddy", "De La Soul", "3 Feet High and Rising", available=True)
+    native = _track("B", "Buddy", "De La Soul", "Native Tongues Decision", available=False)
+
+    lock = IdentityLock(platform_id="B")
+    result = select_version(source, [generic, native], lock=lock)
+
+    # Never silently substitute the available generic release for the locked one.
+    assert result.winner is None
+    assert result.needs_review is True
+    assert result.review_reason == "locked_unavailable"
+    assert result.lock_applied is True
+
+
+def test_lock_matches_by_isrc_even_when_platform_id_changed():
+    # AC-L1 composite identity: a lock resolves by ISRC when the platform id moved.
+    source = _track("src", "Buddy", "De La Soul", "3 Feet High and Rising", isrc="USABC1234567")
+    moved = _track("NEW_ID", "Buddy", "De La Soul", "Native Tongues Decision",
+                   available=True, isrc="USABC1234567")
+
+    lock = IdentityLock(platform_id="OLD_ID", isrc="USABC1234567")
+    result = select_version(source, [moved], lock=lock)
+
+    assert result.winner is moved
+    assert result.lock_applied is True
+
+
+def test_locked_release_missing_surfaces_for_review_no_silent_pick():
+    source = _track("src", "Buddy", "De La Soul", "3 Feet High and Rising")
+    other = _track("A", "Buddy", "De La Soul", "3 Feet High and Rising", available=True)
+
+    lock = IdentityLock(platform_id="GONE", isrc="USZZZ9999999")
+    result = select_version(source, [other], lock=lock)
+
+    # The locked identity is absent from candidates: never silently pick another
+    # (self-heal with same-identity candidates lands in Chunk 5, AC-L3).
+    assert result.winner is None
+    assert result.needs_review is True
+    assert result.review_reason == "locked_missing"

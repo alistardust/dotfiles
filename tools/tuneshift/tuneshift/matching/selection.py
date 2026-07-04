@@ -51,6 +51,27 @@ AMBIGUITY_DELTA = 0.05
 
 
 @dataclass(frozen=True)
+class IdentityLock:
+    """A pinned composite identity (AC-L1): the specific release this track must
+    resolve to. Matches a candidate by ``platform_id`` OR ``isrc`` (composite key,
+    not ISRC alone), so a lock survives a platform re-ID as long as the ISRC still
+    lines up. This is the engine-level view of a lock; DB-backed storage,
+    fingerprint matching, and full self-heal land in Chunk 5 (AC-L2..L5).
+    """
+
+    platform_id: str | None = None
+    isrc: str | None = None
+
+    def matches(self, candidate: object) -> bool:
+        if self.platform_id and getattr(candidate, "platform_id", None) == self.platform_id:
+            return True
+        cand_isrc = getattr(candidate, "isrc", None)
+        if self.isrc and cand_isrc and cand_isrc == self.isrc:
+            return True
+        return False
+
+
+@dataclass(frozen=True)
 class ActivePreference:
     """A criterion made active by a user preference at some scope.
 
@@ -81,6 +102,11 @@ class SelectionResult:
     Phase-1 eliminations for the plan/explain surfaces. ``decided_by`` names the
     preference criterion that broke a within-delta conflict by precedence (AC-C7),
     or ``None`` when the weighted score alone chose the winner.
+
+    ``lock_applied`` is set when an :class:`IdentityLock` short-circuited normal
+    selection. ``needs_review`` + ``review_reason`` flag an outcome the engine
+    refuses to guess (a locked release that is unavailable or absent — AC-S2/AC-L3
+    — surfaced instead of silently substituted).
     """
 
     winner: Any | None
@@ -88,6 +114,9 @@ class SelectionResult:
     ranked: list[tuple[Any, Distance]] = field(default_factory=list)
     filtered: list[FilteredCandidate] = field(default_factory=list)
     decided_by: str | None = None
+    lock_applied: bool = False
+    needs_review: bool = False
+    review_reason: str | None = None
 
 
 def _extract(criterion: Criterion, meta: object) -> CriterionValue | None:
@@ -244,11 +273,80 @@ def _resolve_winner(
     return 0, None
 
 
+def _resolve_lock(
+    source: object,
+    candidates: list[Any],
+    lock: IdentityLock,
+    *,
+    weights: Weights,
+    all_durations: list[int] | None,
+    prefer: frozenset[str],
+    avoid: frozenset[str],
+    alias_resolver: "AliasResolver | None",
+) -> SelectionResult:
+    """Short-circuit selection for a locked composite identity (AC-S2 / AC-L1).
+
+    The locked release wins outright if it is present and available. If the
+    locked release is present but unavailable, or absent entirely, the engine
+    refuses to substitute another release and surfaces the mapping for review
+    (self-heal with same-identity candidates is Chunk 5, AC-L3).
+    """
+
+    matched = [c for c in candidates if lock.matches(c)]
+    if not matched:
+        return SelectionResult(
+            winner=None,
+            winner_distance=None,
+            lock_applied=True,
+            needs_review=True,
+            review_reason="locked_missing",
+        )
+
+    available = [c for c in matched if getattr(c, "available", None) is not False]
+    if not available:
+        return SelectionResult(
+            winner=None,
+            winner_distance=None,
+            filtered=[FilteredCandidate(c, "unavailable") for c in matched],
+            lock_applied=True,
+            needs_review=True,
+            review_reason="locked_unavailable",
+        )
+
+    # Prefer an exact platform-id match among available locked releases, else the
+    # first (composite identity should resolve to a single recording).
+    winner = next(
+        (c for c in available if lock.platform_id and getattr(c, "platform_id", None) == lock.platform_id),
+        available[0],
+    )
+    if all_durations is None:
+        all_durations = [d for d in (getattr(c, "duration_seconds", None) for c in matched) if d]
+    distance = Distance(
+        score_signals(
+            source,
+            winner,
+            weights=weights,
+            all_durations=all_durations,
+            prefer=prefer,
+            avoid=avoid,
+            alias_resolver=alias_resolver,
+        )
+    )
+    return SelectionResult(
+        winner=winner,
+        winner_distance=distance,
+        ranked=[(winner, distance)],
+        lock_applied=True,
+        decided_by="lock",
+    )
+
+
 def select_version(
     source: object,
     candidates: list[Any],
     *,
     active: list[ActivePreference] | tuple[ActivePreference, ...] = (),
+    lock: IdentityLock | None = None,
     weights: Weights = DEFAULT_WEIGHTS,
     all_durations: list[int] | None = None,
     prefer: frozenset[str] = frozenset(),
@@ -257,11 +355,24 @@ def select_version(
 ) -> SelectionResult:
     """Select the best available release of ``source`` from ``candidates``.
 
-    See the module docstring for the two-phase contract. ``all_durations`` is the
-    duration cluster the duration signal calibrates against; when ``None`` it is
-    derived from the surviving candidates (unavailable releases, already dropped,
-    should not skew the cluster).
+    See the module docstring for the two-phase contract. When a ``lock`` is
+    supplied the locked composite identity short-circuits scoring (AC-S2).
+    ``all_durations`` is the duration cluster the duration signal calibrates
+    against; when ``None`` it is derived from the surviving candidates
+    (unavailable releases, already dropped, should not skew the cluster).
     """
+
+    if lock is not None:
+        return _resolve_lock(
+            source,
+            candidates,
+            lock,
+            weights=weights,
+            all_durations=all_durations,
+            prefer=prefer,
+            avoid=avoid,
+            alias_resolver=alias_resolver,
+        )
 
     active_list = list(active)
     survivors, filtered = _phase1_filter(source, candidates, active_list)
@@ -307,6 +418,7 @@ def select_version(
 __all__ = [
     "ActivePreference",
     "FilteredCandidate",
+    "IdentityLock",
     "SelectionResult",
     "select_version",
 ]
