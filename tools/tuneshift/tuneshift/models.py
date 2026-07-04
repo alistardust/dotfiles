@@ -111,6 +111,60 @@ class TrackResult:
     mb_work_id: str | None = None
 
 
+# Fields snapshotted when persisting a search result as a reusable candidate
+# (everything version selection can score on), excluding ``platform_id`` which
+# is stored as its own column. Used by both the resolver (library `resolve`) and
+# reconcile so the capture/reconstruct round-trip stays in one place.
+_CANDIDATE_METADATA_FIELDS = (
+    "title",
+    "artist",
+    "album",
+    "duration_seconds",
+    "isrc",
+    "available",
+    "tier_restricted",
+    "audio_modes",
+    "audio_quality",
+    "tidal_version",
+    "media_metadata_tags",
+    "album_artist",
+    "album_type",
+    "recording_date",
+    "release_date",
+    "remaster_year",
+    "language",
+    "composer",
+    "mb_work_id",
+)
+
+
+def capture_candidate_metadata(result: "TrackResult") -> dict[str, Any]:
+    """Snapshot every version-selection-relevant field off a search result.
+
+    Persisted as ``track_candidates.captured_metadata`` so a later scoring pass
+    can reconstruct the candidate without another live search (AC-X3/AC-P4).
+    ``platform_id`` is intentionally excluded — it is stored in its own column.
+    """
+    return {name: getattr(result, name) for name in _CANDIDATE_METADATA_FIELDS}
+
+
+def trackresult_from_metadata(
+    platform_id: str, metadata: dict[str, Any] | None
+) -> "TrackResult":
+    """Rebuild a :class:`TrackResult` from persisted candidate metadata.
+
+    Inverse of :func:`capture_candidate_metadata`. Ignores unknown keys (e.g. the
+    ``match_score`` the resolver attaches) so extra annotations never break
+    reconstruction, and tolerates a partial snapshot (missing fields fall back to
+    the dataclass defaults).
+    """
+    payload = metadata or {}
+    kwargs = {
+        name: payload[name] for name in _CANDIDATE_METADATA_FIELDS if name in payload
+    }
+    return TrackResult(platform_id=platform_id, **kwargs)
+
+
 @dataclass(frozen=True)
 class EffectiveLock:
     """The resolved two-level identity lock for a (track, platform, playlist)

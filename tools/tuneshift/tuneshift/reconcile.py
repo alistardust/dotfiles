@@ -56,6 +56,8 @@ from tuneshift.models import (
     EffectiveLock,
     PlatformMapping,
     TrackResult,
+    capture_candidate_metadata,
+    trackresult_from_metadata,
 )
 
 logger = logging.getLogger(__name__)
@@ -719,6 +721,76 @@ def gather_candidates(
     return all_candidates, candidate_strategies
 
 
+def _load_persisted_candidates(
+    db: Database, track_id: int, platform: str
+) -> list[TrackResult]:
+    """Rebuild the persisted candidate set for ``(track, platform)``.
+
+    Returned in discovery order (``track_candidates.discovery_rank``) so
+    selection's default band-tie behaviour is identical to a live gather — the
+    parity guarantee behind AC-P4.
+    """
+    rows = db.get_track_candidates(track_id, platform=platform)
+    return [
+        trackresult_from_metadata(row["platform_track_id"], row["captured_metadata"])
+        for row in rows
+    ]
+
+
+def _persist_candidates(
+    db: Database, track_id: int, platform: str, candidates: list[TrackResult]
+) -> None:
+    """Replace the persisted candidate set with ``candidates`` in discovery order.
+
+    Clears first so a refresh REPLACES the prior set (no stale rows / ranks).
+    """
+    db.clear_track_candidates(track_id, platform)
+    for rank, candidate in enumerate(candidates):
+        db.upsert_track_candidate(
+            track_id, platform, candidate.platform_id,
+            capture_candidate_metadata(candidate), discovery_rank=rank,
+        )
+
+
+def acquire_candidates(
+    db: Database,
+    track,
+    client,
+    resolver: AliasResolver,
+    *,
+    prefer_classes: frozenset[str] | set[str] | None = None,
+    avoid_classes: frozenset[str] | set[str] | None = None,
+    force: bool = False,
+) -> tuple[list[TrackResult], dict[str, str]]:
+    """Obtain the candidate set for selection, reading the cache when possible.
+
+    Implements spec §4.1a: for STEADY-STATE selection the live candidate gather
+    is retired in favour of the persisted ``track_candidates`` set (AC-X3 — no
+    resolution API calls during interactive matching). A live gather runs only
+    when there is no persisted set (cold cache) or when the caller explicitly
+    requests a refresh (``force=True`` — e.g. ``explain``/self-heal), and the
+    fresh set is persisted so the next run is reproducible with no live search
+    (AC-P4).
+
+    Returns ``(candidates, strategy_by_platform_id)`` in discovery order, matching
+    :func:`gather_candidates`. On a cache hit the strategy is reported as
+    ``"cached"`` for every candidate (the original per-strategy attribution is not
+    persisted); on a live gather the real per-strategy names are returned.
+    """
+    platform = client.platform_name
+    if not force:
+        cached = _load_persisted_candidates(db, track.id, platform)
+        if cached:
+            return cached, dict.fromkeys((c.platform_id for c in cached), "cached")
+
+    candidates, strategies = gather_candidates(
+        track, client, resolver,
+        prefer_classes=prefer_classes, avoid_classes=avoid_classes,
+    )
+    _persist_candidates(db, track.id, platform, candidates)
+    return candidates, strategies
+
+
 def _fingerprint_for_track(track, mapping: PlatformMapping) -> TrackFingerprint:
     """Resolve the target fingerprint for a locked mapping.
 
@@ -1081,11 +1153,13 @@ def reconcile_track(
     # aliased artist scores and is retrieved under every equivalent surface form.
     resolver = build_alias_resolver(db)
 
-    # Multi-strategy candidate collection (shared with the library-first
-    # resolver via gather_candidates so both see an identical candidate set).
-    all_candidates, candidate_strategies = gather_candidates(
-        track, client, resolver,
-        prefer_classes=prefer_classes, avoid_classes=avoid_classes,
+    # Candidate acquisition: steady-state selection reads the persisted
+    # candidate set (AC-X3, no live search); a cold cache or an explicit refresh
+    # (force) does one live gather and persists it (AC-P4). Shared with the
+    # library-first resolver via gather_candidates so both see an identical set.
+    all_candidates, candidate_strategies = acquire_candidates(
+        db, track, client, resolver,
+        prefer_classes=prefer_classes, avoid_classes=avoid_classes, force=force,
     )
 
     if not all_candidates:

@@ -58,6 +58,24 @@ class ResolvedCandidate:
 Resolver = Callable[[Track], Sequence[ResolvedCandidate]]
 
 
+def cand_platform(candidates: Sequence[ResolvedCandidate]) -> str | None:
+    """Platform of a candidate set (all share one platform), or None if empty."""
+    return candidates[0].platform if candidates else None
+
+
+def _best_candidate(candidates: Sequence[ResolvedCandidate]) -> ResolvedCandidate:
+    """The highest ``match_score`` candidate — the strongest identity match.
+
+    Candidates are persisted in discovery order (for selection parity), so the
+    best hydration source is chosen by score here rather than by position.
+    """
+    def _score(candidate: ResolvedCandidate) -> float:
+        value = (candidate.metadata or {}).get("match_score")
+        return float(value) if isinstance(value, (int, float)) else -1.0
+
+    return max(candidates, key=_score)
+
+
 class ResolutionWorker:
     """Drains the resolution queue by resolving tracks to platform candidates."""
 
@@ -164,17 +182,21 @@ class ResolutionWorker:
             return False
 
         candidates = list(candidates)
-        for cand in candidates:
+        # Replace any prior candidate set so a re-resolve never leaves stale rows
+        # (or stale ranks) behind, then persist in discovery order.
+        self._db.clear_track_candidates(track_id, cand_platform(candidates))
+        for rank, cand in enumerate(candidates):
             self._db.upsert_track_candidate(
-                track_id, cand.platform, cand.platform_track_id, cand.metadata
+                track_id, cand.platform, cand.platform_track_id, cand.metadata,
+                discovery_rank=rank,
             )
-        # Hydrate the track's core identity metadata from the best candidate
-        # (candidates are returned best-match first). Fill-NULL semantics live in
+        # Hydrate the track's core identity metadata from the BEST-scoring
+        # candidate (discovery order != score order). Fill-NULL semantics live in
         # the DB method, so a prior user edit is never clobbered and re-resolving
         # is idempotent. This is what makes "resolved" mean populated, not just
         # tagged (spec AC-D2 — the gap Alice found: tier=CONFIRMED but isrc/
         # duration/album all NULL).
-        self._hydrate_track(track_id, candidates[0])
+        self._hydrate_track(track_id, _best_candidate(candidates))
         self._db.set_resolution_state(track_id, "resolved", last_error=None)
         # Clear any prior quarantine now that the track resolved.
         if track.quarantine_state:

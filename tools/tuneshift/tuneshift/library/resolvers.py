@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 
 from tuneshift.library.worker import ResolutionRateLimited, ResolvedCandidate
 from tuneshift.matching.track import score_match_with_version
+from tuneshift.models import capture_candidate_metadata
 from tuneshift.reconcile import build_alias_resolver, gather_candidates
 
 if TYPE_CHECKING:
@@ -32,42 +33,16 @@ if TYPE_CHECKING:
 _RATE_LIMIT_MARKERS = ("rate limit", "429", "too many requests")
 
 
-def _capture_metadata(candidate: TrackResult) -> dict[str, object]:
-    """Snapshot every version-selection-relevant field off a search result.
-
-    Persisted as ``track_candidates.captured_metadata`` so a later scoring pass
-    (FL1b) can reconstruct the candidate without another live search.
-    """
-    return {
-        "title": candidate.title,
-        "artist": candidate.artist,
-        "album": candidate.album,
-        "duration_seconds": candidate.duration_seconds,
-        "isrc": candidate.isrc,
-        "available": candidate.available,
-        "tier_restricted": candidate.tier_restricted,
-        "audio_modes": candidate.audio_modes,
-        "audio_quality": candidate.audio_quality,
-        "tidal_version": candidate.tidal_version,
-        "media_metadata_tags": candidate.media_metadata_tags,
-        "album_artist": candidate.album_artist,
-        "album_type": candidate.album_type,
-        "recording_date": candidate.recording_date,
-        "release_date": candidate.release_date,
-        "remaster_year": candidate.remaster_year,
-        "language": candidate.language,
-        "composer": candidate.composer,
-        "mb_work_id": candidate.mb_work_id,
-    }
-
-
 class PlatformResolver:
     """Resolve a library track to hydrated platform candidates.
 
-    Reuses reconcile's multi-strategy search. Candidates are returned best-match
-    first (by the source-aware version score with no preference bias) so the
-    worker can hydrate the track from the strongest identity match; the full
-    per-playlist version selection remains reconcile/selection's job.
+    Reuses reconcile's multi-strategy search and returns candidates in DISCOVERY
+    order (the order the gather cascade found them). That order is deliberate:
+    selection keeps input order for default band-ties, so persisting discovery
+    order is what preserves winner parity (AC-P4). Each candidate carries a
+    ``match_score`` so the worker can hydrate the track from the strongest
+    identity match; the full per-playlist version selection remains
+    reconcile/selection's job.
     """
 
     def __init__(self, db: Database, client: object, *, max_candidates: int = 10) -> None:
@@ -107,13 +82,15 @@ class PlatformResolver:
                 alias_resolver=self._alias_resolver,
             )
 
-        ranked = sorted(candidates, key=_score, reverse=True)[: self._max_candidates]
         platform = self._client.platform_name
+        # Preserve DISCOVERY order (do NOT re-sort): the persisted set is fed to
+        # selection, which keeps input order for default band-ties, so discovery
+        # order is what guarantees winner parity (AC-P4). The per-candidate match
+        # score is attached only so the worker can hydrate the track from the
+        # single best identity match and derive its confidence tier.
         resolved: list[ResolvedCandidate] = []
-        for candidate in ranked:
-            metadata = _capture_metadata(candidate)
-            # Attach the source-aware match score (0-100) so the worker can
-            # derive a confidence tier for the hydrated track without recomputing.
+        for candidate in candidates[: self._max_candidates]:
+            metadata = capture_candidate_metadata(candidate)
             metadata["match_score"] = _score(candidate)
             resolved.append(
                 ResolvedCandidate(

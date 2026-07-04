@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from tuneshift.matching import ReviewItem
     from tuneshift.planapply.models import JournalEntry
 
-_SCHEMA_VERSION = 18
+_SCHEMA_VERSION = 19
 
 # Columns editable via update_track. Constrains f-string interpolation in the
 # UPDATE statement to a fixed, safe set (no SQL identifier injection).
@@ -349,6 +349,7 @@ CREATE TABLE IF NOT EXISTS track_candidates (
     platform TEXT NOT NULL,
     platform_track_id TEXT NOT NULL,
     captured_metadata TEXT,
+    discovery_rank INTEGER NOT NULL DEFAULT 0,
     fetched_at TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (track_id, platform, platform_track_id)
 );
@@ -960,6 +961,24 @@ class Database:
                     "CREATE INDEX IF NOT EXISTS idx_apply_journal_plan "
                     "ON apply_journal(plan_id, id)"
                 )
+
+            if current_version < 19:
+                # Persisted candidate ORDER matters for winner parity: selection
+                # keeps input order for default band-ties (selection.py stable
+                # sort), so the persisted set must be returned in the same
+                # discovery order reconcile's live gather produced (spec §4.1a /
+                # AC-X3, AC-P4). Add a rank column; existing rows default to 0.
+                cols = {
+                    r[1]
+                    for r in self.conn.execute(
+                        "PRAGMA table_info(track_candidates)"
+                    ).fetchall()
+                }
+                if "discovery_rank" not in cols:
+                    self.conn.execute(
+                        "ALTER TABLE track_candidates "
+                        "ADD COLUMN discovery_rank INTEGER NOT NULL DEFAULT 0"
+                    )
 
             self.conn.execute(
                 "UPDATE schema_meta SET value = ? WHERE key = 'version'",
@@ -2098,30 +2117,61 @@ class Database:
         platform: str,
         platform_track_id: str,
         captured_metadata: dict[str, Any] | None,
+        discovery_rank: int = 0,
     ) -> None:
-        """Insert or update a hydrated platform candidate for a track."""
+        """Insert or update a hydrated platform candidate for a track.
+
+        ``discovery_rank`` records the candidate's position in the discovery
+        order so :meth:`get_track_candidates` can return the set in the same
+        order the live gather produced — selection keeps input order for default
+        band-ties, so preserving it is what guarantees winner parity (AC-P4).
+        """
         payload = json.dumps(captured_metadata) if captured_metadata is not None else None
         with self.conn:
             self.conn.execute(
                 """INSERT INTO track_candidates
-                       (track_id, platform, platform_track_id, captured_metadata, fetched_at)
-                   VALUES (?, ?, ?, ?, datetime('now'))
+                       (track_id, platform, platform_track_id, captured_metadata,
+                        discovery_rank, fetched_at)
+                   VALUES (?, ?, ?, ?, ?, datetime('now'))
                    ON CONFLICT(track_id, platform, platform_track_id)
                    DO UPDATE SET captured_metadata = excluded.captured_metadata,
+                                 discovery_rank = excluded.discovery_rank,
                                  fetched_at = excluded.fetched_at""",
-                (track_id, platform, platform_track_id, payload),
+                (track_id, platform, platform_track_id, payload, discovery_rank),
             )
+
+    def clear_track_candidates(self, track_id: int, platform: str | None = None) -> None:
+        """Remove persisted candidates for a track (optionally one platform).
+
+        Called before persisting a fresh candidate set so a refresh REPLACES the
+        prior set rather than leaving stale rows (and stale ranks) behind.
+        """
+        with self.conn:
+            if platform is None:
+                self.conn.execute(
+                    "DELETE FROM track_candidates WHERE track_id = ?", (track_id,)
+                )
+            else:
+                self.conn.execute(
+                    "DELETE FROM track_candidates WHERE track_id = ? AND platform = ?",
+                    (track_id, platform),
+                )
 
     def get_track_candidates(
         self, track_id: int, platform: str | None = None
     ) -> list[dict[str, Any]]:
-        """Return hydrated candidates for a track, optionally filtered by platform."""
+        """Return hydrated candidates for a track, optionally filtered by platform.
+
+        Ordered by ``discovery_rank`` (then a stable id tiebreak) so callers see
+        the persisted set in the original discovery order — the ordering
+        selection relies on for default band-tie parity (AC-P4).
+        """
         query = "SELECT * FROM track_candidates WHERE track_id = ?"
         params: list[Any] = [track_id]
         if platform is not None:
             query += " AND platform = ?"
             params.append(platform)
-        query += " ORDER BY platform, platform_track_id"
+        query += " ORDER BY discovery_rank, platform, platform_track_id"
         rows = self.conn.execute(query, params).fetchall()
         result = []
         for row in rows:
@@ -2135,6 +2185,7 @@ class Database:
                         if row["captured_metadata"]
                         else None
                     ),
+                    "discovery_rank": row["discovery_rank"],
                     "fetched_at": row["fetched_at"],
                 }
             )
