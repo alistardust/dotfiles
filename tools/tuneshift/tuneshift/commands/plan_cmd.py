@@ -18,6 +18,7 @@ import sys
 from tuneshift.db import Database
 from tuneshift.planapply.apply import apply_plan, rollback_plan
 from tuneshift.planapply.migrate import build_migration_plan, migration_summary
+from tuneshift.planapply.heal import build_heal_plan
 from tuneshift.planapply.models import Plan, PlanChange
 from tuneshift.planapply.plan import (
     PlanError,
@@ -41,6 +42,7 @@ def handle_plan(args, db: Database) -> int:
         "sync": _generate_sync,
         "rematch": _generate_rematch,
         "migrate": _generate_migrate,
+        "heal": _generate_heal,
         "list": _list,
         "show": _show,
         "reject": _reject,
@@ -49,7 +51,7 @@ def handle_plan(args, db: Database) -> int:
     }
     handler = dispatch.get(action)
     if handler is None:
-        print("Usage: tuneshift plan {sync|rematch|migrate|list|show|reject|apply|rollback}",
+        print("Usage: tuneshift plan {sync|rematch|migrate|heal|list|show|reject|apply|rollback}",
               file=sys.stderr)
         return 1
     return handler(args, db)
@@ -129,6 +131,28 @@ def _generate_migrate(args, db: Database) -> int:
           f"{summary['unchanged']} unchanged, "
           f"{summary['needs-human-judgment']} need human judgment.")
     return _finish_generation(db, plan, f"migrate {args.platform}")
+
+
+def _generate_heal(args, db: Database) -> int:
+    """Plan a routed self-heal of dead identity locks (AC-L3).
+
+    A locked release that has gone dead is never silently swapped: this proposes
+    re-binding to a same-recording equivalent (or holding it as unavailable) into
+    a reviewable plan. Optionally scoped to a single playlist's override locks.
+    """
+    client = _require_client(args.platform)
+    if client is None:
+        return 1
+    playlist_id = None
+    label = f"heal {args.platform}"
+    playlist = getattr(args, "playlist", None)
+    if playlist:
+        playlist_id = _resolve_playlist_id(db, playlist)
+        if playlist_id is None:
+            return 1
+        label = f'heal "{playlist}"'
+    plan = build_heal_plan(db, client, platform=args.platform, playlist_id=playlist_id)
+    return _finish_generation(db, plan, label)
 
 
 # --- plan inspection & editing -----------------------------------------------

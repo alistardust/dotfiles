@@ -350,6 +350,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_plan_migrate = plan_sub.add_parser("migrate", help="Plan migration of stale global mappings")
     p_plan_migrate.add_argument("--platform", default="tidal", help="Target platform (default: tidal)")
 
+    p_plan_heal = plan_sub.add_parser(
+        "heal", help="Plan a routed self-heal of dead identity locks (AC-L3)")
+    p_plan_heal.add_argument("--platform", default="tidal", help="Target platform (default: tidal)")
+    p_plan_heal.add_argument("--playlist", help="Limit to one playlist's override locks")
+
     plan_sub.add_parser("list", help="List saved plans")
 
     p_plan_show = plan_sub.add_parser("show", help="Show a saved plan")

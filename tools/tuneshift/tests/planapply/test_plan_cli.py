@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -136,6 +137,60 @@ class TestMigrateCli:
             db,
         )
         assert db.get_platform_mapping(tid, "tidal").platform_track_id == "OLD"
+
+
+class TestHealCli:
+    def test_generate_heal_plan_for_dead_lock(
+        self, tmp_db: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """BLOCKER-2b: ``plan heal`` must be a real routed command, not dead code.
+
+        A locked release that has gone dead is never swapped inline (that path
+        was wiping the lock). ``plan heal`` proposes the outcome into a reviewable
+        plan and mutates nothing until an explicit ``include_locked`` apply.
+        """
+        db = Database(tmp_db)
+        tid = db.add_track(Track(title="Song", artist="Artist", album="Album"))
+        # An approved global lock whose platform id has gone dead.
+        db.upsert_platform_mapping(PlatformMapping(
+            track_id=tid, platform="tidal", platform_track_id="DEAD_LOCK",
+            match_score=97, status="matched", user_approved=True,
+        ))
+
+        client = MagicMock()
+        client.platform_name = "tidal"
+        client.load_session.return_value = True
+        client.get_track.return_value = None  # locked id is dead
+        client.search_isrc.return_value = None
+        client.search_track.return_value = []  # no equivalent recording is live
+        client.search_album.return_value = []
+        client.get_album_tracks.return_value = []
+        client.search_artist.return_value = []
+        client.get_artist_albums.return_value = []
+        monkeypatch.setattr(
+            "tuneshift.commands.ingest_cmd._load_client", lambda platform: client
+        )
+
+        rc = plan_cmd.handle_plan(
+            SimpleNamespace(action="heal", platform="tidal", playlist=None), db
+        )
+        assert rc == 0
+
+        plan_ids = list_plans(db.path)
+        assert len(plan_ids) == 1
+        plan = read_plan(db.path, plan_ids[0])
+        assert plan.kind == "heal"
+
+        # Generation applied nothing (AC-P1): the dead lock is untouched.
+        mapping = db.get_platform_mapping(tid, "tidal")
+        assert mapping.platform_track_id == "DEAD_LOCK"
+        assert mapping.status == "matched"
+
+        # It proposed HOLDING the lock (no equivalent found), flagged as locked.
+        change = plan.changes[0]
+        assert change.locked is True
+        assert change.reason == "lock_held"
+        assert change.proposed["status"] == "unavailable"
 
 
 class TestSyncCli:
