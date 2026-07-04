@@ -23,6 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from tuneshift.matching.criteria import (
+    ArtistRoleCriterion,
     Criterion,
     DateCriterion,
     DurationCriterion,
@@ -103,6 +104,10 @@ def criterion_for(
         # The duration axis target is a tolerance (e.g. "3s" / "5%"), not a
         # whitelist token — pass the raw target through unfolded (M4).
         return DurationCriterion(name=axis, target=target)
+    if axis == "artist_role":
+        # Role-aware artist-set match; target selects the role ("main"). Raw
+        # target, not a whitelist token (M5).
+        return ArtistRoleCriterion(name=axis, target=target)
     field = STRUCTURED_AXIS_FIELDS.get(axis)
     if field is not None:
         return TokenCriterion(
@@ -118,12 +123,12 @@ def criterion_for(
 
 
 #: All criterion axes a preference may target (structured + title-derived + date
-#: + the numeric duration-tolerance axis).
+#: + the numeric duration-tolerance axis + role-aware artist matching).
 KNOWN_AXES: frozenset[str] = (
     frozenset(STRUCTURED_AXIS_FIELDS)
     | TITLE_AXES
     | frozenset(DATE_AXIS_FIELDS)
-    | frozenset({"duration"})
+    | frozenset({"duration", "artist_role"})
 )
 
 #: Scope name each cascade layer maps onto for engine precedence

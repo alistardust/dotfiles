@@ -66,6 +66,13 @@ _ARTIST_SPLIT_RE = re.compile(
 )
 _BOUNDARY_PUNCT_RE = re.compile(r"(?:^[^\w]+|[^\w]+$)")  # Leading/trailing non-word chars
 _STANDALONE_PUNCT_RE = re.compile(r"\s+[^\w\s]+\s+")  # Standalone punctuation between words
+# The FEATURED-credit boundary: everything after an explicit feat/ft/featuring
+# marker is a featured artist, not a main one (M5). Deliberately does NOT include
+# "with"/"&"/","/"x" — those join co-billed MAIN artists and stay in the main set.
+_FEAT_ROLE_SPLIT_RE = re.compile(
+    r"\s+(?:feat\.?|ft\.?|featuring)\s+",
+    re.IGNORECASE,
+)
 
 
 def fold_accents(text: str) -> str:
@@ -130,6 +137,35 @@ def artist_set_overlap(
     if not src or not cand:
         return 0.0
     return len(src & cand) / len(src)
+
+
+def split_artist_roles(
+    name: str, *, resolver: "AliasResolver | None" = None
+) -> tuple[set[str], set[str]]:
+    """Split a credit into ``(main_artists, featured_artists)`` sets (M5).
+
+    The portion before an explicit ``feat.``/``ft.``/``featuring`` marker is the
+    MAIN credit; everything after is FEATURED. Co-billed main artists joined by
+    ``&``/``and``/``,``/``x``/``with`` stay together in the main set — only the
+    feat marker separates roles. Each side is normalized/alias-canonicalized via
+    :func:`split_artists` so role sets compare on the same basis as the flat
+    overlap. A credit with no feat marker has an empty featured set.
+
+    KNOWN COVERAGE GAP (spec §11 M5): reliable role data ultimately wants the
+    MusicBrainz artist-credit ``joinphrase``/role fields, which are inconsistent
+    across releases — many carry flat artist strings with no role breakdown. This
+    string-marker heuristic is the best signal available from the platform credit
+    alone; a low fire-rate on role distinctions is expected, not a bug.
+    """
+    if not name:
+        return set(), set()
+    parts = _FEAT_ROLE_SPLIT_RE.split(name, maxsplit=1)
+    main = split_artists(parts[0], resolver=resolver)
+    featured = (
+        split_artists(parts[1], resolver=resolver) if len(parts) > 1 else set()
+    )
+    # A featured artist is never also counted as main.
+    return main, featured - main
 
 
 # A parenthetical or bracketed group anywhere in a title.

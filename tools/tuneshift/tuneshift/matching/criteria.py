@@ -590,6 +590,65 @@ class DurationCriterion:
         return _soft_signal(self.name, self.weight, verdict)
 
 
+@dataclass
+class ArtistRoleCriterion:
+    """A role-aware artist-set criterion (M5, AC-M5).
+
+    Distinguishes MAIN artists from FEATURED ones so a ``feat. X`` variant of the
+    same recording still matches on its main artist, while a candidate on which
+    the source artist is merely *featured* (a different main artist) is rejected.
+    ``target`` selects the role compared; only ``"main"`` is meaningful today —
+    the main-artist set of the source must be a subset of the candidate's main
+    set. Featured artists are carried but never gate the match.
+
+    The credit string is structured metadata, so the verdict is confident and a
+    ``require`` may hard-filter. Either side missing an artist credit -> NO_VERDICT
+    -> no signal. KNOWN COVERAGE GAP (spec §11): precise roles ultimately want the
+    MusicBrainz artist-credit ``joinphrase``/role fields, which are inconsistent;
+    this reads the platform credit's feat/ft markers, so role distinctions fire
+    only where the credit carries them — a low fire-rate is expected, not a bug.
+    """
+
+    name: str
+    target: str = "main"
+    weight: int = 10
+    hard_cap: HardCapPolicy = HardCapPolicy.NONE
+
+    def extract(self, meta: object) -> CriterionValue | None:
+        raw = getattr(meta, "artist", None)
+        if not raw:
+            return None
+        from tuneshift.matching.normalize import split_artist_roles
+
+        main, featured = split_artist_roles(str(raw))
+        if not main:
+            return None
+        return CriterionValue(
+            raw=(frozenset(main), frozenset(featured)),
+            tokens=frozenset(main),
+            structured=True,
+        )
+
+    def compare(
+        self,
+        source: CriterionValue,
+        candidate: CriterionValue,
+        strength: Strength | None,
+    ) -> Verdict:
+        if not isinstance(source.raw, tuple) or not isinstance(candidate.raw, tuple):
+            return Verdict.NO_VERDICT
+        source_main = source.raw[0]
+        cand_main = candidate.raw[0]
+        if not source_main or not cand_main:
+            return Verdict.NO_VERDICT
+        satisfied = source_main.issubset(cand_main)
+        # Structured credit -> confident; a hard verdict stays hard.
+        return resolve_strength_verdict(strength, satisfied=satisfied)
+
+    def to_signal(self, verdict: Verdict) -> SignalPenalty | None:
+        return _soft_signal(self.name, self.weight, verdict)
+
+
 class CriterionRegistry:
     """An ordered, name-unique collection of registered criteria.
 

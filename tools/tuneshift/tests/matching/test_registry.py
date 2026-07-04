@@ -328,3 +328,43 @@ def test_m4_tight_tolerance_rejects_extended_mix_global_band_accepts():
 def test_m4_duration_is_a_known_axis():
     assert "duration" in KNOWN_AXES
 
+
+# --- M5: role-aware artist sets (main vs featured) (AC-M5) --------------------
+
+
+def _artist_rel(pid, artist, *, available=True):
+    # Same recording/title; the candidates differ only in their artist CREDIT
+    # (a feat. variant vs a wrong main artist).
+    return SimpleNamespace(
+        platform_id=pid,
+        title="Love The Way You Lie",
+        artist=artist,
+        album="Recovery",
+        isrc="USUM71013299",
+        duration_seconds=263,
+        available=available,
+    )
+
+
+def test_m5_require_main_matches_feat_variant_rejects_wrong_main():
+    # Source is credited to the main artist only. A "feat. X" candidate still
+    # matches (same main artist); a candidate where the source artist is merely
+    # FEATURED (wrong main) is hard-filtered out.
+    src = _artist_rel("src", "Eminem")
+    feat_variant = _artist_rel("feat", "Eminem feat. Rihanna")
+    wrong_main = _artist_rel("wrong", "Rihanna feat. Eminem")
+    specs = [PreferenceSpec(axis="artist_role", target="main",
+                            strength=Strength.REQUIRE, scope="playlist")]
+    active = resolve_active_preferences(specs)
+    result = select_version(src, [wrong_main, feat_variant], active=active)
+    assert result.winner is feat_variant
+    assert any(
+        fc.candidate is wrong_main and fc.reason.startswith("hard:artist_role")
+        for fc in result.filtered
+    )
+
+
+def test_m5_artist_role_is_a_known_axis():
+    assert "artist_role" in KNOWN_AXES
+
+

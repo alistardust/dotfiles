@@ -294,3 +294,41 @@ def test_duration_criterion_missing_duration_yields_no_verdict():
     empty = crit.extract(_dur_meta(None)) or CriterionValue(raw=None)
     assert crit.compare(empty, src, Strength.REQUIRE) is Verdict.NO_VERDICT
 
+
+# --- M5: ArtistRoleCriterion (main vs featured artist sets) -------------------
+
+
+def _artist_meta(artist):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(artist=artist)
+
+
+def test_artist_role_criterion_feat_variant_matches_main_no_penalty():
+    from tuneshift.matching.criteria import ArtistRoleCriterion
+
+    crit = ArtistRoleCriterion(name="artist_role", target="main")
+    src = crit.extract(_artist_meta("Eminem"))
+    feat = crit.extract(_artist_meta("Eminem feat. Rihanna"))
+    # Same main artist; the added feature must not trigger a spurious reject.
+    assert crit.compare(src, feat, Strength.REQUIRE) is Verdict.HARD_PASS
+
+
+def test_artist_role_criterion_wrong_main_rejected():
+    from tuneshift.matching.criteria import ArtistRoleCriterion
+
+    crit = ArtistRoleCriterion(name="artist_role", target="main")
+    src = crit.extract(_artist_meta("Eminem"))
+    wrong = crit.extract(_artist_meta("50 Cent feat. Eminem"))
+    # Eminem is only FEATURED on the candidate -> the main artist differs -> reject.
+    assert crit.compare(src, wrong, Strength.REQUIRE) is Verdict.HARD_REJECT
+
+
+def test_artist_role_criterion_missing_artist_no_verdict():
+    from tuneshift.matching.criteria import ArtistRoleCriterion
+
+    crit = ArtistRoleCriterion(name="artist_role", target="main")
+    assert crit.extract(_artist_meta("")) is None
+    assert crit.extract(_artist_meta(None)) is None
+
+
