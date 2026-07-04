@@ -17,10 +17,20 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from tuneshift.db import Database
 from tuneshift.planapply.models import Plan, PlanChange
+
+# Journal entries for remote pushes are tagged with this table-name prefix so
+# rollback can recognise them and refuse to un-push inline (AC-P4 forward-only).
+REMOTE_TABLE_PREFIX = "remote:"
+
+# A remote executor performs one forward-only remote push (delegated to the
+# platform client) and returns the prior remote state to journal, or None if
+# there was nothing to capture. Kept as a callable so this module has no
+# platform-SDK dependency.
+RemoteExecutor = Callable[[PlanChange], "dict | None"]
 
 
 class ApplyError(Exception):
@@ -177,8 +187,49 @@ def _delete_row(db: Database, spec: _TableSpec, pk_values: dict[str, Any]) -> No
     )
 
 
-def _apply_one(db: Database, plan_id: str, change: PlanChange) -> None:
-    """Apply a single LOCAL change and journal it. Caller owns the transaction."""
+def _apply_remote(
+    db: Database,
+    plan_id: str,
+    change: PlanChange,
+    remote_executor: RemoteExecutor | None,
+) -> None:
+    """Execute one forward-only remote push and journal it (AC-P4).
+
+    The push itself is delegated to ``remote_executor`` (a closure over the
+    platform client) so this module stays free of platform SDK concerns. The
+    executor returns the prior remote state, which is journaled under a
+    ``remote:`` table name so :func:`rollback_plan` produces a compensating plan
+    rather than silently un-pushing.
+    """
+    if remote_executor is None:
+        raise ApplyError("remote_push change requires a remote_executor")
+    if not change.table.startswith(REMOTE_TABLE_PREFIX):
+        raise ApplyError(
+            f"remote_push change must target a {REMOTE_TABLE_PREFIX!r} table, "
+            f"got {change.table!r}"
+        )
+    prior_remote = remote_executor(change)
+    db.record_journal_entry(
+        plan_id=plan_id,
+        table_name=change.table,
+        row_key=change.row_key,
+        op=change.op,
+        prior_value=prior_remote,
+        new_value=change.proposed,
+    )
+
+
+def _apply_one(
+    db: Database,
+    plan_id: str,
+    change: PlanChange,
+    remote_executor: RemoteExecutor | None = None,
+) -> None:
+    """Apply a single change and journal it. Caller owns the transaction."""
+    if change.op == "remote_push":
+        _apply_remote(db, plan_id, change, remote_executor)
+        return
+
     spec = _spec_for(change.table)
     pk_values = json.loads(change.row_key)
     prior = _read_row(db, spec, pk_values)
@@ -196,7 +247,7 @@ def _apply_one(db: Database, plan_id: str, change: PlanChange) -> None:
     elif change.op == "delete":
         _delete_row(db, spec, pk_values)
         new_value = None
-    else:  # remote_push handled by the sync route (Task 4.6), never here
+    else:
         raise ApplyError(f"apply_plan does not handle op {change.op!r}")
 
     db.record_journal_entry(
@@ -214,12 +265,17 @@ def apply_plan(
     plan: Plan,
     *,
     include_locked: bool = False,
+    remote_executor: RemoteExecutor | None = None,
 ) -> ApplyReport:
-    """Apply a plan's resolved LOCAL changes, journaling each write (AC-P1/P3/P4).
+    """Apply a plan's resolved changes, journaling each write (AC-P1/P3/P4).
 
     Locked changes (touching ``user_approved``/locked rows) are skipped unless
     ``include_locked`` is set. Rejected/skipped/already-applied changes are never
     re-applied, so re-applying a fully-applied plan is a no-op (AC-P4).
+
+    ``remote_push`` changes are forward-only remote mutations; they require a
+    ``remote_executor`` (a closure over the platform client). Rollback of a
+    remote push never un-pushes inline — it yields a compensating plan (AC-P4).
     """
     report = ApplyReport(plan_id=plan.plan_id)
 
@@ -235,7 +291,7 @@ def apply_plan(
             continue
         try:
             with db.conn:
-                _apply_one(db, plan.plan_id, change)
+                _apply_one(db, plan.plan_id, change, remote_executor)
             change.status = "applied"
             report.applied += 1
         except Exception as exc:  # noqa: BLE001 - recorded in report, never swallowed
@@ -244,11 +300,6 @@ def apply_plan(
             report.errors.append(f"change {change.change_id}: {exc}")
 
     return report
-
-
-# Journal entries for remote pushes are tagged with this table-name prefix so
-# rollback can recognise them and refuse to un-push inline (AC-P4 forward-only).
-REMOTE_TABLE_PREFIX = "remote:"
 
 
 @dataclass
