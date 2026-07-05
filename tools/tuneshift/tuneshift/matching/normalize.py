@@ -66,6 +66,13 @@ _ARTIST_SPLIT_RE = re.compile(
 )
 _BOUNDARY_PUNCT_RE = re.compile(r"(?:^[^\w]+|[^\w]+$)")  # Leading/trailing non-word chars
 _STANDALONE_PUNCT_RE = re.compile(r"\s+[^\w\s]+\s+")  # Standalone punctuation between words
+# The FEATURED-credit boundary: everything after an explicit feat/ft/featuring
+# marker is a featured artist, not a main one (M5). Deliberately does NOT include
+# "with"/"&"/","/"x" — those join co-billed MAIN artists and stay in the main set.
+_FEAT_ROLE_SPLIT_RE = re.compile(
+    r"\s+(?:feat\.?|ft\.?|featuring)\s+",
+    re.IGNORECASE,
+)
 
 
 def fold_accents(text: str) -> str:
@@ -130,6 +137,65 @@ def artist_set_overlap(
     if not src or not cand:
         return 0.0
     return len(src & cand) / len(src)
+
+
+def split_artist_roles(
+    name: str, *, resolver: "AliasResolver | None" = None
+) -> tuple[set[str], set[str]]:
+    """Split a credit into ``(main_artists, featured_artists)`` sets (M5).
+
+    The portion before an explicit ``feat.``/``ft.``/``featuring`` marker is the
+    MAIN credit; everything after is FEATURED. Co-billed main artists joined by
+    ``&``/``and``/``,``/``x``/``with`` stay together in the main set — only the
+    feat marker separates roles. Each side is normalized/alias-canonicalized via
+    :func:`split_artists` so role sets compare on the same basis as the flat
+    overlap. A credit with no feat marker has an empty featured set.
+
+    KNOWN COVERAGE GAP (spec §11 M5): reliable role data ultimately wants the
+    MusicBrainz artist-credit ``joinphrase``/role fields, which are inconsistent
+    across releases — many carry flat artist strings with no role breakdown. This
+    string-marker heuristic is the best signal available from the platform credit
+    alone; a low fire-rate on role distinctions is expected, not a bug.
+    """
+    if not name:
+        return set(), set()
+    parts = _FEAT_ROLE_SPLIT_RE.split(name, maxsplit=1)
+    main = split_artists(parts[0], resolver=resolver)
+    featured = (
+        split_artists(parts[1], resolver=resolver) if len(parts) > 1 else set()
+    )
+    # A featured artist is never also counted as main.
+    return main, featured - main
+
+
+# Re-recording markers a title may carry (M2, AC-M2). Matched on the RAW title
+# BEFORE `_EDITION_PARENS_RE` strips "(Taylor's Version)", so the deliberate
+# re-recording stays selectable. Each pattern maps to a canonical marker token
+# a preference can target (e.g. ``prefer work=taylors version``).
+_RERECORDING_MARKERS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"taylor'?s\s+version", re.IGNORECASE), "taylors version"),
+    (re.compile(r"re-?recorded", re.IGNORECASE), "re-recorded"),
+    (re.compile(r"re-?recording", re.IGNORECASE), "re-recorded"),
+)
+
+
+def extract_rerecording_marker(title: str | None) -> str | None:
+    """Return the canonical re-recording marker in a raw title, else ``None`` (M2).
+
+    Scans the *raw* title for deliberate re-recording markers ("Taylor's
+    Version", "Re-Recorded", "Re-Recording") and returns a canonical token
+    (``"taylors version"`` / ``"re-recorded"``) that a ``work``-axis preference
+    can target. Runs on the unmodified title so the marker is captured before
+    :data:`_EDITION_PARENS_RE` strips the parenthetical during title
+    normalization. A title with no such marker is an original recording and
+    returns ``None``.
+    """
+    if not title:
+        return None
+    for pattern, marker in _RERECORDING_MARKERS:
+        if pattern.search(title):
+            return marker
+    return None
 
 
 # A parenthetical or bracketed group anywhere in a title.
@@ -265,6 +331,23 @@ _SPED_UP_RE = re.compile(
     r"\b(sped[\s-]?up|slowed(?:\s+down)?|nightcore|daycore)\b",
     re.IGNORECASE,
 )
+# M1 — DJ/continuous-mix markers safe to read from FREE TEXT (title/album):
+# only unambiguous phrases, never a bare "mixed" (which is a song word, e.g.
+# "Mixed Emotions"). A crossfaded/beatmatched mix track ruins standalone
+# playback, so it is a distinct recording that must be avoided by default.
+_CONTINUOUS_MIX_RE = re.compile(
+    r"\b(continuous(?:\s+dj)?\s+mix|dj\s+mix|non[\s-]?stop\s+mix|"
+    r"mega\s?mix|gapless(?:\s+mix)?|mixed\s+by)\b",
+    re.IGNORECASE,
+)
+# The Tidal `version` field is a controlled vocabulary where a bare "Mixed" or
+# "Continuous" denotes a continuous DJ mix. It is a STRUCTURED field, so these
+# broader tokens are trusted from it (but never inferred from a free-text
+# title/album — see ``infer_version``).
+_CONTINUOUS_MIX_VERSION_RE = re.compile(
+    r"\b(mixed|continuous|dj\s+mix|non[\s-]?stop|mega\s?mix|gapless)\b",
+    re.IGNORECASE,
+)
 
 # Recording/edition version markers whose presence in a *title* should not
 # reduce title similarity: the source-aware version axis (which reads the raw
@@ -273,7 +356,7 @@ _SPED_UP_RE = re.compile(
 _VERSION_MARKER_REGEXES = (
     _LIVE_RE, _REMIX_RE, _REMASTER_RE, _ACOUSTIC_RE, _KARAOKE_RE,
     _INSTRUMENTAL_RE, _TRIBUTE_RE, _RADIO_EDIT_RE, _DELUXE_RE, _COMPILATION_RE,
-    _SPED_UP_RE,
+    _SPED_UP_RE, _CONTINUOUS_MIX_RE,
 )
 _DASH_SUFFIX_RE = re.compile(r"\s+[-\u2013\u2014]\s+([^-\u2013\u2014]+)$")
 _TRAILING_PAREN_RE = re.compile(r"\s*[\(\[][^\(\)\[\]]*[\)\]]\s*$")

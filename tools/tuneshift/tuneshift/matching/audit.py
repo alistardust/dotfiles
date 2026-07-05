@@ -3,7 +3,7 @@
 This module makes matching *explainable*. Every reconcile decision can be
 captured as a :class:`MatchAudit` — what was chosen, what was rejected and why,
 which signal was decisive, and whether a durable lock forced the outcome. The
-``tuneshift why`` command surfaces this record so a human can see exactly why
+``tuneshift explain`` command surfaces this record so a human can see exactly why
 the engine picked (or refused to pick) a platform track.
 
 It also defines the graded availability model. A core Alice failure mode is the
@@ -89,7 +89,12 @@ class RejectedCandidate:
 
     ``decisive_signal`` is the name of the signal that most hurt this candidate
     (e.g. ``version:reject``, ``duration``, ``title``) — the single most useful
-    thing to show a human asking "why not this one?".
+    thing to show a human asking "why not this one?". ``rejection`` is the
+    machine-stable *class* of that loss for the failed-match explain surface
+    (AC-CLI5): ``unavailable`` (blocked/tier-gated), ``hard_filter`` (failed an
+    active require/forbid criterion), ``below_threshold`` (scored too low), or
+    ``lost`` (out-ranked by a better identity match). ``rejection_detail``
+    carries the specific hard filter (``criterion=target``) when known.
     """
 
     platform_id: str
@@ -98,6 +103,8 @@ class RejectedCandidate:
     album: str
     score: int
     decisive_signal: str | None = None
+    rejection: str | None = None
+    rejection_detail: str | None = None
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -111,6 +118,66 @@ class RejectedCandidate:
             album=data.get("album", ""),
             score=int(data.get("score", 0)),
             decisive_signal=data.get("decisive_signal"),
+            rejection=data.get("rejection"),
+            rejection_detail=data.get("rejection_detail"),
+        )
+
+
+@dataclass(frozen=True)
+class CriterionOutcome:
+    """An active user-preference criterion and how it acted in this decision.
+
+    ``kind`` is ``hard`` (require/forbid — a Phase-1 filter) or ``soft``
+    (prefer/avoid — a Phase-2 ranking bias). ``fired`` is True when the criterion
+    actually affected the outcome: a hard criterion that eliminated ≥1 candidate,
+    or a soft criterion that broke the winning tie. A hard criterion that
+    eliminated nothing (e.g. every candidate already satisfied it, or none could
+    be judged) is recorded with ``fired=False`` so the explain surface shows it
+    was in force yet inert — the "mono demoted to soft" transparency (AC-CLI3).
+    """
+
+    criterion: str
+    strength: str
+    kind: str
+    target: str | None = None
+    fired: bool = False
+
+    def as_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> CriterionOutcome:
+        return cls(
+            criterion=data["criterion"],
+            strength=data["strength"],
+            kind=data["kind"],
+            target=data.get("target"),
+            fired=bool(data.get("fired", False)),
+        )
+
+
+@dataclass(frozen=True)
+class SignalContribution:
+    """One signal's weighted contribution to the winner's match distance (AC-CLI3).
+
+    Sourced from :pyattr:`~tuneshift.matching.engine.Distance.breakdown`;
+    ``contribution`` is the clamped ``penalty * weight`` distance term (higher =
+    hurt the match more).
+    """
+
+    name: str
+    contribution: float
+    weight: float
+
+    def as_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> SignalContribution:
+        return cls(
+            name=data["name"],
+            contribution=float(data.get("contribution", 0.0)),
+            weight=float(data.get("weight", 0.0)),
         )
 
 
@@ -122,6 +189,13 @@ class MatchAudit:
     decisive signal and distance behind the pick, the availability verdict and
     reason code, and whether a durable lock forced the outcome. Serializes to a
     compact JSON string for persistence alongside the platform mapping.
+
+    ``criteria`` records the active user-preference criteria (hard vs soft, and
+    whether each fired), ``signal_breakdown`` the winner's weighted per-signal
+    distance breakdown, and ``tie_break`` the preference criterion that resolved
+    a within-delta contention by precedence — together the AC-CLI3 match
+    explanation. The per-candidate ``rejection`` fields drive the AC-CLI5
+    failed-match explanation.
     """
 
     availability: str
@@ -133,6 +207,9 @@ class MatchAudit:
     rejected: list[RejectedCandidate] = field(default_factory=list)
     locked: bool = False
     note: str | None = None
+    criteria: list[CriterionOutcome] = field(default_factory=list)
+    signal_breakdown: list[SignalContribution] = field(default_factory=list)
+    tie_break: str | None = None
 
     def __post_init__(self) -> None:
         if self.availability not in Availability.ALL:
@@ -144,6 +221,8 @@ class MatchAudit:
     def as_dict(self) -> dict:
         data = asdict(self)
         data["rejected"] = [r.as_dict() for r in self.rejected]
+        data["criteria"] = [c.as_dict() for c in self.criteria]
+        data["signal_breakdown"] = [s.as_dict() for s in self.signal_breakdown]
         return data
 
     def to_json(self) -> str:
@@ -161,6 +240,11 @@ class MatchAudit:
             rejected=[RejectedCandidate.from_dict(r) for r in data.get("rejected", [])],
             locked=bool(data.get("locked", False)),
             note=data.get("note"),
+            criteria=[CriterionOutcome.from_dict(c) for c in data.get("criteria", [])],
+            signal_breakdown=[
+                SignalContribution.from_dict(s) for s in data.get("signal_breakdown", [])
+            ],
+            tie_break=data.get("tie_break"),
         )
 
     @classmethod

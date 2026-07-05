@@ -1,4 +1,8 @@
-"""Add command: add a track to a playlist and sync to platforms."""
+"""Add command: add a track to the library and place it on a playlist.
+
+Library-first (AC-D7): resolution/enrichment and any remote push are deferred to
+the async resolution worker; the interactive add path never blocks on network.
+"""
 import sys
 
 from tuneshift.db import Database
@@ -68,21 +72,29 @@ def handle_add(args, db: Database) -> int:
 
     print(f"Added \"{args.title}\" by {args.artist} to \"{args.playlist}\" at position {position}")
 
-    # Auto-enrich: classify track and artist if not already done
-    _auto_enrich(db, track_id, args.artist)
+    # Library-first (AC-D7): enqueue async resolution + enrichment instead of
+    # blocking the interactive add path on MusicBrainz/LLM/remote calls. The
+    # resolution worker resolves candidates and enriches out-of-band; the track
+    # is `pending` until then. No inline remote push (that migrates to
+    # plan/apply in Chunk 4 Task 4.6, which also routes local placement).
+    db.enqueue_resolution(track_id)
 
-    # Auto-reorder if enabled
+    # Auto-reorder if enabled (local compute, non-blocking)
     _auto_reorder(db, playlist_id)
 
-    # Sync to linked platforms
-    had_failures = _sync_add_to_platforms(db, playlist_id, track_id, args.title, args.artist)
-    return 1 if had_failures else 0
+    return 0
 
 
 def _sync_add_to_platforms(db: Database, playlist_id: int, track_id: int, title: str, artist: str) -> bool:
     """Reconcile and add the track on all linked platforms.
 
     Returns True if any platform operation failed.
+
+    NOTE (library-first, AC-D7): no longer called inline from ``handle_add`` —
+    the add path is non-blocking and never pushes remotely. This remote-push
+    logic is retained here (and covered by ``test_sync_persist_order``) because
+    Chunk 4 Task 4.6 relocates it into the plan/apply pipeline; it is not dead
+    code, it is awaiting that relocation.
     """
     from tuneshift.commands.ingest_cmd import _load_client
     from tuneshift.reconcile import reconcile_track
@@ -105,7 +117,7 @@ def _sync_add_to_platforms(db: Database, playlist_id: int, track_id: int, title:
 
         # Reconcile the track
         result = reconcile_track(db, track_id, client, force=False, playlist_id=playlist_id)
-        db.save_match_audit(track_id, platform_name, result.audit)
+        db.save_match_audit(track_id, platform_name, result.audit, playlist_id=playlist_id)
         if result.platform_track_id:
             try:
                 client.add_tracks(platform_playlist_id, [result.platform_track_id])
@@ -118,119 +130,6 @@ def _sync_add_to_platforms(db: Database, playlist_id: int, track_id: int, title:
             print(f"  {platform_name}: could not find \"{title}\" by {artist}")
 
     return failures
-
-
-def _auto_enrich(db: Database, track_id: int, artist_name: str) -> None:
-    """Auto-classify track and enrich artist on add.
-
-    Uses the search-grounded pipeline (Last.fm + Genius + LLM synthesis).
-    Runs silently. Failures are non-fatal.
-    """
-    from tuneshift.sequencer.classifier import TrackClassifier
-    from tuneshift.enrichment.pipeline import classify_track_grounded
-
-    classifier = TrackClassifier()
-    track = db.get_track(track_id)
-    if not track:
-        return
-
-    # Enrich artist first (so we have genre context for track classification)
-    artist = db.get_artist_by_name(artist_name)
-    if artist and not artist.genres and not artist.enriched_at:
-        _enrich_artist_via_llm(db, artist, classifier)
-        artist = db.get_artist_by_name(artist_name)  # reload
-
-    # Classify track if missing vibes/themes (using grounded pipeline)
-    metadata = track.metadata or {}
-    if not metadata.get("vibes") and not metadata.get("narrator_stance"):
-        artist_genres = artist.genres if artist else []
-        result = classify_track_grounded(
-            track.title, track.artist,
-            artist_genres=artist_genres,
-            classifier=classifier if classifier.available else None,
-        )
-        if result:
-            metadata.update(result)
-            import json as _json
-            db.conn.execute(
-                "UPDATE tracks SET metadata = ? WHERE id = ?",
-                (_json.dumps(metadata), track_id),
-            )
-            db.conn.commit()
-
-
-def _enrich_artist_via_llm(db: Database, artist, classifier) -> None:
-    """Enrich artist using MusicBrainz lookup for genres, LLM only as fallback."""
-    import json
-    import musicbrainzngs
-
-    from tuneshift.enrichment.retry import RetryConfig, retry_api_call
-
-    musicbrainzngs.set_useragent("tuneshift", "1.0", "https://github.com/alistardust/dotfiles")
-
-    genres: list[str] = []
-    mb_artist_id: str | None = None
-
-    # Retry on 503/network errors. The musicbrainzngs library handles 1 req/s
-    # pacing internally; this adds backoff for sustained overload.
-    mb_config = RetryConfig(max_retries=3, base_delay=2.0)
-
-    # Try MusicBrainz first (real data, not hallucinated)
-    try:
-        results = retry_api_call(
-            musicbrainzngs.search_artists, artist=artist.name, limit=3,
-            config=mb_config,
-        )
-        artists_found = results.get("artist-list", [])
-        if artists_found:
-            best = artists_found[0]
-            mb_artist_id = best.get("id")
-            # Get tags (genres) from MB
-            mb_tags = best.get("tag-list", [])
-            genres = [t["name"] for t in mb_tags if int(t.get("count", 0)) > 0]
-
-            # If no tags on search result, fetch full artist for tags
-            if not genres and mb_artist_id:
-                full = retry_api_call(
-                    musicbrainzngs.get_artist_by_id, mb_artist_id, includes=["tags"],
-                    config=mb_config,
-                )
-                mb_tags = full.get("artist", {}).get("tag-list", [])
-                genres = [t["name"] for t in mb_tags if int(t.get("count", 0)) > 0]
-    except (musicbrainzngs.MusicBrainzError, OSError, KeyError):
-        pass
-
-    update_fields: dict = {
-        "enrichment_sources": ["musicbrainz"] if genres else [],
-        "enriched_at": "auto",
-    }
-
-    if genres:
-        update_fields["genres"] = genres
-    if mb_artist_id:
-        update_fields["mb_artist_id"] = mb_artist_id
-
-    # If MusicBrainz didn't return genres, fall back to LLM (less reliable)
-    if not genres and classifier and classifier.available:
-        prompt = (
-            f'What genre(s) is the musical artist "{artist.name}"? '
-            f'Return ONLY a JSON array of genre strings. Be specific. '
-            f'Example: ["pop", "boyband", "teen pop"] or ["country", "country pop"]. '
-            f'If unsure, return ["unknown"].'
-        )
-        try:
-            response = classifier._backend.complete(prompt, classifier._model, max_tokens=100)
-            response = response.strip()
-            if response.startswith("```"):
-                response = response.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-            parsed = json.loads(response)
-            if isinstance(parsed, list) and parsed and parsed != ["unknown"]:
-                update_fields["genres"] = parsed
-                update_fields["enrichment_sources"] = ["llm_fallback"]
-        except (json.JSONDecodeError, OSError, RuntimeError, ValueError):
-            pass
-
-    db.update_artist(artist.id, **update_fields)
 
 
 def _auto_reorder(db: Database, playlist_id: int) -> None:

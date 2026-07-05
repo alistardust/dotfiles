@@ -152,3 +152,51 @@ class TestTribeRealWorldCases:
             "People's Instinctive Travels (25th Anniversary Remaster)",
         )
         assert compare_version(src, cand) is VersionVerdict.SOFT
+
+
+class TestContinuousMixAxis:
+    """M1: DJ/continuous-mix hard-avoid (a mix track ruins standalone playback)."""
+
+    def test_continuous_mix_phrase_in_title_detected(self):
+        assert infer_version("Song (Continuous Mix)", "").recording is (
+            RecordingClass.CONTINUOUS_MIX
+        )
+
+    def test_dj_mix_phrase_detected(self):
+        assert infer_version("Song - DJ Mix", "").recording is (
+            RecordingClass.CONTINUOUS_MIX
+        )
+
+    def test_megamix_detected(self):
+        assert infer_version("Ultimate Megamix", "").recording is (
+            RecordingClass.CONTINUOUS_MIX
+        )
+
+    def test_structured_version_field_mixed_detected(self):
+        # Tidal's controlled `version` vocabulary uses a bare "Mixed" for
+        # continuous-mix tracks; trusted because it is a structured field.
+        p = infer_version("Blue Monday", "Substance", version="Mixed")
+        assert p.recording is RecordingClass.CONTINUOUS_MIX
+
+    def test_structured_version_continuous_detected(self):
+        p = infer_version("Insomnia", "Fever Pitch", version="Continuous Mix")
+        assert p.recording is RecordingClass.CONTINUOUS_MIX
+
+    def test_bare_mixed_in_title_is_not_a_continuous_mix(self):
+        # "Mixed Emotions" must never be misread as a DJ mix from the title.
+        assert infer_version("Mixed Emotions", "Steel Wheels").recording is (
+            RecordingClass.STUDIO
+        )
+
+    def test_studio_source_rejects_continuous_mix_candidate(self):
+        # Avoided by default: standalone source must not accept a crossfaded mix.
+        src = infer_version("Insomnia", "Fever Pitch")
+        cand = infer_version("Insomnia", "Clubland", version="Continuous Mix")
+        assert src.recording is RecordingClass.STUDIO
+        assert cand.recording is RecordingClass.CONTINUOUS_MIX
+        assert compare_version(src, cand) is VersionVerdict.REJECT
+
+    def test_continuous_mix_source_matches_continuous_mix_candidate(self):
+        src = infer_version("Insomnia", "Clubland", version="Continuous Mix")
+        cand = infer_version("Insomnia", "Clubland Vol 2", version="DJ Mix")
+        assert compare_version(src, cand) is VersionVerdict.MATCH

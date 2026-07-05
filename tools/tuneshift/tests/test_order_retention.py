@@ -79,12 +79,20 @@ def _client() -> MagicMock:
     client.find_playlist_by_name.return_value = PlaylistInfo(
         platform_id="tidal-pl-123", name="Ordered", num_tracks=0,
     )
+    client.get_playlist_tracks.side_effect = TypeError("no live remote in test")
     client.replace_playlist_tracks.return_value = None
     return client
 
 
+def _order_args() -> Namespace:
+    return Namespace(
+        playlist="Ordered", platform="tidal", all=False,
+        reconcile=False, apply=True, interactive=False,
+    )
+
+
 class TestSyncPushOrderRetention:
-    @patch("tuneshift.commands.sync_cmd.reconcile_track")
+    @patch("tuneshift.planapply.sync.reconcile_track")
     @patch("tuneshift.commands.ingest_cmd._load_client")
     def test_push_preserves_order_and_duplicates(
         self, mock_load, mock_reconcile, tmp_db: Path, capsys
@@ -104,16 +112,12 @@ class TestSyncPushOrderRetention:
 
         mock_reconcile.side_effect = resolve
 
-        args = Namespace(
-            playlist="Ordered", platform="tidal", all=False,
-            reconcile=False, auto=False,
-        )
-        assert handle_sync(args, db) == 0
+        assert handle_sync(_order_args(), db) == 0
 
         pushed = client.replace_playlist_tracks.call_args[0][1]
         assert pushed == ["pid-Intro", "pid-Middle", "pid-Intro", "pid-End"]
 
-    @patch("tuneshift.commands.sync_cmd.reconcile_track")
+    @patch("tuneshift.planapply.sync.reconcile_track")
     @patch("tuneshift.commands.ingest_cmd._load_client")
     def test_repeated_sync_is_idempotent(
         self, mock_load, mock_reconcile, tmp_db: Path, capsys
@@ -130,16 +134,12 @@ class TestSyncPushOrderRetention:
             )
 
         mock_reconcile.side_effect = resolve
-        args = Namespace(
-            playlist="Ordered", platform="tidal", all=False,
-            reconcile=False, auto=False,
-        )
 
         pushes = []
         for _ in range(3):
             client = _client()
             mock_load.return_value = client
-            assert handle_sync(args, db) == 0
+            assert handle_sync(_order_args(), db) == 0
             pushes.append(client.replace_playlist_tracks.call_args[0][1])
 
         expected = ["pid-A", "pid-B", "pid-A", "pid-C", "pid-B"]

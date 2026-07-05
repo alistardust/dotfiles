@@ -28,31 +28,40 @@ def handle_triage(args, db: Database) -> int:
 
     platform = getattr(args, "platform", None)
     items = db.get_review_items(playlist_id=playlist_id, platform=platform)
+    quarantined = db.get_quarantined_tracks()
 
-    if not items:
+    if not items and not quarantined:
         print("No match decisions recorded yet. Run `tuneshift sync` first.")
         return 0
 
-    burden = compute_burden(items, total_tracks=len(items))
-    clusters = cluster_reviews(items)
+    if items:
+        burden = compute_burden(items, total_tracks=len(items))
+        clusters = cluster_reviews(items)
 
-    scope = f'"{args.playlist}"' if playlist_id is not None else "all playlists"
-    print(f"Review burden for {scope}"
-          + (f" on {platform}" if platform else "") + ":")
-    print(f"  {burden.needs_review} of {burden.total_tracks} tracks need review "
-          f"({burden.per_1000:g} per 1,000)")
-    print(f"    ambiguous: {burden.ambiguous}   hard-fail: {burden.hard_fail}")
-    print(f"  zero-intervention playlists: {burden.zero_intervention_playlists}"
-          f"/{burden.total_playlists} ({burden.zero_intervention_pct:g}%)")
+        scope = f'"{args.playlist}"' if playlist_id is not None else "all playlists"
+        print(f"Review burden for {scope}"
+              + (f" on {platform}" if platform else "") + ":")
+        print(f"  {burden.needs_review} of {burden.total_tracks} tracks need review "
+              f"({burden.per_1000:g} per 1,000)")
+        print(f"    ambiguous: {burden.ambiguous}   hard-fail: {burden.hard_fail}")
+        print(f"  zero-intervention playlists: {burden.zero_intervention_playlists}"
+              f"/{burden.total_playlists} ({burden.zero_intervention_pct:g}%)")
 
-    if not clusters:
-        print("\nNothing to review — every track resolved cleanly.")
-        return 0
+        if clusters:
+            print(f"\n{len(clusters)} cluster(s), largest first:\n")
+            for cluster in clusters:
+                print(f"  ▸ {cluster.summary}")
+                for item in cluster.items:
+                    where = f" [{item.playlist_name}]" if item.playlist_name else ""
+                    print(f"      #{item.track_id} {item.title} — {item.artist}{where}")
+        else:
+            print("\nNothing to review — every track resolved cleanly.")
 
-    print(f"\n{len(clusters)} cluster(s), largest first:\n")
-    for cluster in clusters:
-        print(f"  ▸ {cluster.summary}")
-        for item in cluster.items:
-            where = f" [{item.playlist_name}]" if item.playlist_name else ""
-            print(f"      #{item.track_id} {item.title} — {item.artist}{where}")
+    if quarantined:
+        print(f"\nQuarantined ({len(quarantined)}) — "
+              "excluded from selection until resolved or approved:")
+        for q in quarantined:
+            reason = f": {q['reason']}" if q["reason"] else ""
+            print(f"  #{q['track_id']} {q['title']} — {q['artist']}{reason}")
+
     return 0

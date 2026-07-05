@@ -22,6 +22,13 @@ _STANCE_ALIASES: dict[str, set[str]] = {
 
 
 def _normalize_text(value: str) -> str:
+    """Word-tokenize + casefold text for concept/theme overlap scoring.
+
+    NOT a title/artist normalizer: this is the sequencer's CONCEPT tokenizer
+    (deliberately separate from db/matching/identity normalizers). It extracts
+    ``[a-z0-9']+`` word runs and joins them, discarding punctuation. Contract
+    pinned by tests/matching/test_normalizer_contracts.py.
+    """
     return " ".join(_WORD_RE.findall(value.casefold()))
 
 

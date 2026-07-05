@@ -211,6 +211,17 @@ class OllamaBackend:
             result = json.loads(resp.read())
         return result.get("response", "")
 
+    def ping(self) -> bool:
+        """Return True if the Ollama host answers its tags endpoint quickly."""
+        import urllib.request
+        try:
+            with urllib.request.urlopen(f"{self._host}/api/tags", timeout=5) as resp:
+                json.loads(resp.read())
+            return True
+        except (OSError, json.JSONDecodeError):
+            logger.warning("Ollama host %s is not reachable", self._host)
+            return False
+
 
 def detect_backend() -> tuple[str, LLMBackend] | tuple[None, None]:
     """Auto-detect available LLM backend from environment.
@@ -331,6 +342,63 @@ def parse_classification_response(response_text: str) -> list[dict[str, Any]]:
     return []
 
 
+class _TimeoutBackend:
+    """Wrap any backend so ``complete`` fails fast on a stalled service (AC7).
+
+    urllib/SDK socket timeouts only fire on connection inactivity; a backend that
+    dribbles bytes (or an Ollama model stuck generating) can still hang far past
+    any per-track budget. This enforces a hard wall-clock ceiling by running the
+    call on a daemon thread and abandoning it if it overruns, so `enrich` never
+    hangs. All other attributes pass through to the wrapped backend.
+    """
+
+    def __init__(self, inner: LLMBackend, timeout_seconds: float) -> None:
+        self._inner = inner
+        self._timeout = timeout_seconds
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+    def complete(self, prompt: str, model: str, max_tokens: int = 4096) -> str:
+        import threading
+
+        box: dict[str, Any] = {}
+
+        def _target() -> None:
+            try:
+                box["value"] = self._inner.complete(prompt, model, max_tokens)
+            except BaseException as exc:  # noqa: BLE001 - re-raised on the caller thread
+                box["error"] = exc
+
+        worker = threading.Thread(target=_target, daemon=True)
+        worker.start()
+        worker.join(self._timeout)
+        if worker.is_alive():
+            raise TimeoutError(
+                f"LLM backend did not respond within {self._timeout:.0f}s. "
+                "Check that the configured backend is running and reachable "
+                "(e.g. `ollama serve`, or your API key / base URL)."
+            )
+        if "error" in box:
+            raise box["error"]
+        return box.get("value", "")
+
+
+_DEFAULT_LLM_TIMEOUT = 30.0
+
+
+def _resolve_llm_timeout() -> float:
+    """Per-track LLM wall-clock budget (AC7), overridable via env."""
+    raw = os.environ.get("TUNESHIFT_LLM_TIMEOUT")
+    if not raw:
+        return _DEFAULT_LLM_TIMEOUT
+    try:
+        value = float(raw)
+    except ValueError:
+        return _DEFAULT_LLM_TIMEOUT
+    return value if value > 0 else _DEFAULT_LLM_TIMEOUT
+
+
 class TrackClassifier:
     """Classify tracks using any supported LLM backend."""
 
@@ -341,28 +409,57 @@ class TrackClassifier:
         backend_name: str | None = None,
     ) -> None:
         if backend is not None:
-            self._backend = backend
+            raw_backend = backend
             self._backend_name = backend_name or "custom"
         else:
             detected_name, detected_backend = detect_backend()
             if detected_backend is None:
-                self._backend = None  # type: ignore[assignment]
+                raw_backend = None
                 self._backend_name = None
             else:
-                self._backend = detected_backend
+                raw_backend = detected_backend
                 self._backend_name = detected_name
 
         self._model = (
             model
             or os.environ.get("TUNESHIFT_CLASSIFIER_MODEL")
-            or getattr(self._backend, "selected_model", None)
+            or getattr(raw_backend, "selected_model", None)
             or _DEFAULT_MODELS.get(self._backend_name or "", "gpt-4o-mini")
         )
 
+        # Enforce a hard per-call wall-clock timeout so `enrich` never hangs (AC7).
+        self._backend = (
+            _TimeoutBackend(raw_backend, _resolve_llm_timeout())
+            if raw_backend is not None
+            else None  # type: ignore[assignment]
+        )
+        self._reachable: bool | None = None
+
     @property
     def available(self) -> bool:
-        """Whether a backend was successfully configured."""
-        return self._backend is not None
+        """Whether a backend is configured AND actually reachable (AC7).
+
+        Reflects real reachability, not just a configured env var: the first
+        access probes the backend (cheap ``ping`` where the backend exposes one)
+        and the verdict is cached for the classifier's lifetime.
+        """
+        if self._backend is None:
+            return False
+        if self._reachable is None:
+            self._reachable = self._probe_reachable()
+        return self._reachable
+
+    def _probe_reachable(self) -> bool:
+        ping = getattr(self._backend, "ping", None)
+        if ping is None:
+            # No cheap probe available (e.g. cloud SDK): configured is the best
+            # signal we have without spending a paid request.
+            return True
+        try:
+            return bool(ping())
+        except Exception:  # noqa: BLE001 - probe is best-effort
+            logger.warning("Backend reachability probe failed", exc_info=True)
+            return False
 
     @property
     def backend_info(self) -> str:

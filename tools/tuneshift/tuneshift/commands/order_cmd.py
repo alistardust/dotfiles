@@ -34,6 +34,12 @@ def handle_order(args, db: Database) -> int:
         print(f'Playlist "{playlist.name}" is empty.')
         return 0
 
+    # AC8: warn before sequencing when the wave arc is asked to order tracks that
+    # mostly lack energy/valence -- the arc silently falls back to 0.5 otherwise,
+    # producing a flat, meaningless order the user can't diagnose.
+    if arc == "wave":
+        _warn_if_energy_sparse(tracks)
+
     # Resolve weights from CLI argument
     weights_arg = getattr(args, "weights", None)
     if weights_arg:
@@ -68,6 +74,25 @@ def handle_order(args, db: Database) -> int:
             return 1
 
     return 0
+
+
+_ENERGY_COVERAGE_THRESHOLD = 0.5
+
+
+def _warn_if_energy_sparse(tracks) -> None:
+    """Warn (non-fatally) when >50% of tracks lack energy/valence for wave arc."""
+    if not tracks:
+        return
+    missing = sum(1 for t in tracks if t.energy is None or t.valence is None)
+    if missing / len(tracks) > _ENERGY_COVERAGE_THRESHOLD:
+        pct = round(100 * missing / len(tracks))
+        print(
+            f"Warning: {missing}/{len(tracks)} tracks ({pct}%) lack energy/valence "
+            "data; wave-arc ordering will be approximate. Populate it with "
+            "`tuneshift enrich <playlist> --platform tidal` or `tuneshift resolve`, "
+            "or set values manually with `tuneshift edit <id> --energy --valence`.",
+            file=sys.stderr,
+        )
 
 
 def _print_dry_run(db: Database, track_ids: list[int], name: str, arc: str) -> None:

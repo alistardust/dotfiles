@@ -95,8 +95,18 @@ def ingest_from_platform(
 
 
 def _enrich_tracks(db: Database, client: object, tracks: list[tuple[int, str]]) -> None:
-    """Fetch and store audio metadata (BPM, key) for new tracks."""
+    """Fetch and store audio metadata (BPM, key) for new tracks.
+
+    For Tidal, also captures Atmos/catalog metadata and derives the
+    atmos-available tag (AC10) so an imported Atmos track is tagged without a
+    later manual ``enrich --catalog`` run.
+    """
     import sys
+
+    platform_name = getattr(client, "platform_name", None)
+    capture_catalog = platform_name == "tidal"
+    if capture_catalog:
+        from tuneshift.library.enrichment import capture_tidal_catalog
 
     enriched = 0
     for track_id, platform_track_id in tracks:
@@ -107,6 +117,11 @@ def _enrich_tracks(db: Database, client: object, tracks: list[tuple[int, str]]) 
                 enriched += 1
         except (OSError, RuntimeError, ValueError, KeyError, AttributeError):
             continue
+        finally:
+            if capture_catalog:
+                capture_tidal_catalog(
+                    db, track_id, "tidal", platform_track_id, client=client
+                )
 
     if enriched:
         print(f"  Enriched {enriched}/{len(tracks)} tracks with audio metadata", file=sys.stderr)
@@ -126,7 +141,7 @@ def _auto_classify_batch(db: Database, track_ids_to_enrich: list[tuple[int, str]
 
     # Enrich artists first (so we have genre context)
     seen_artists: set[str] = set()
-    from tuneshift.commands.add_cmd import _enrich_artist_via_llm
+    from tuneshift.library.enrichment import _enrich_artist_via_llm
     for track_id, _ in track_ids_to_enrich:
         track = db.get_track(track_id)
         if not track or track.artist in seen_artists:

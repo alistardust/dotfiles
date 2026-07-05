@@ -20,6 +20,22 @@ class Track:
     key: str | None = None
     themes: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
+    album_artist: str | None = None
+    album_type: str | None = None
+    label: str | None = None
+    recording_date: str | None = None
+    release_date: str | None = None
+    remaster_year: int | None = None
+    audio_modes: list[str] = field(default_factory=list)
+    audio_quality: str | None = None
+    tidal_version: str | None = None
+    language: str | None = None
+    composer: str | None = None
+    mb_work_id: str | None = None
+    availability: str | None = None
+    quarantine_state: str | None = None
+    quarantine_reason: str | None = None
+    field_provenance: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -81,6 +97,92 @@ class TrackResult:
     isrc: str | None = None
     available: bool | None = None
     tier_restricted: bool = False
+    audio_modes: list[str] | None = None
+    audio_quality: str | None = None
+    tidal_version: str | None = None
+    media_metadata_tags: list[str] | None = None
+    album_artist: str | None = None
+    album_type: str | None = None
+    recording_date: str | None = None
+    release_date: str | None = None
+    remaster_year: int | None = None
+    language: str | None = None
+    composer: str | None = None
+    mb_work_id: str | None = None
+
+
+# Fields snapshotted when persisting a search result as a reusable candidate
+# (everything version selection can score on), excluding ``platform_id`` which
+# is stored as its own column. Used by both the resolver (library `resolve`) and
+# reconcile so the capture/reconstruct round-trip stays in one place.
+_CANDIDATE_METADATA_FIELDS = (
+    "title",
+    "artist",
+    "album",
+    "duration_seconds",
+    "isrc",
+    "available",
+    "tier_restricted",
+    "audio_modes",
+    "audio_quality",
+    "tidal_version",
+    "media_metadata_tags",
+    "album_artist",
+    "album_type",
+    "recording_date",
+    "release_date",
+    "remaster_year",
+    "language",
+    "composer",
+    "mb_work_id",
+)
+
+
+def capture_candidate_metadata(result: "TrackResult") -> dict[str, Any]:
+    """Snapshot every version-selection-relevant field off a search result.
+
+    Persisted as ``track_candidates.captured_metadata`` so a later scoring pass
+    can reconstruct the candidate without another live search (AC-X3/AC-P4).
+    ``platform_id`` is intentionally excluded — it is stored in its own column.
+    """
+    return {name: getattr(result, name) for name in _CANDIDATE_METADATA_FIELDS}
+
+
+def trackresult_from_metadata(
+    platform_id: str, metadata: dict[str, Any] | None
+) -> "TrackResult":
+    """Rebuild a :class:`TrackResult` from persisted candidate metadata.
+
+    Inverse of :func:`capture_candidate_metadata`. Ignores unknown keys (e.g. the
+    ``match_score`` the resolver attaches) so extra annotations never break
+    reconstruction, and tolerates a partial snapshot (missing fields fall back to
+    the dataclass defaults).
+    """
+    payload = metadata or {}
+    kwargs = {
+        name: payload[name] for name in _CANDIDATE_METADATA_FIELDS if name in payload
+    }
+    return TrackResult(platform_id=platform_id, **kwargs)
+
+
+@dataclass(frozen=True)
+class EffectiveLock:
+    """The resolved two-level identity lock for a (track, platform, playlist)
+    (AC-L1/L4). ``scope`` is ``"playlist"`` when a per-playlist override applies,
+    else ``"global"`` for the library-wide default lock. Carries the composite
+    identity (platform-id + ISRC + fingerprint) so callers can build an
+    :class:`~tuneshift.matching.selection.IdentityLock` that survives a platform
+    re-ID.
+    """
+
+    platform_track_id: str
+    scope: str
+    isrc: str | None = None
+    fingerprint: str | None = None
+    status: str = "matched"
+    is_divergent: bool = False
+    divergence_note: str | None = None
+    match_score: int | None = None
 
 
 @dataclass

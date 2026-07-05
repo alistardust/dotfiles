@@ -34,6 +34,33 @@ def _retry(fn: Callable[[], Any], max_retries: int = 3) -> Any:
     raise RuntimeError("Unreachable retry state")
 
 
+def _release_date_iso(track: Any, album: Any) -> str | None:
+    """Normalise a Tidal track/album release date to an ISO date string.
+
+    tidalapi exposes ``tidal_release_date``/``release_date`` as ``datetime``
+    objects (occasionally already strings). Prefer the track's own date, fall
+    back to the album's. Returns ``None`` when no date is exposed so the
+    DateCriterion treats the field as unextractable (NO_VERDICT) rather than
+    fabricating a year.
+    """
+    for source, attrs in (
+        (track, ("tidal_release_date", "release_date")),
+        (album, ("release_date",)),
+    ):
+        if source is None:
+            continue
+        for attr in attrs:
+            value = getattr(source, attr, None)
+            if value is None:
+                continue
+            if isinstance(value, datetime):
+                return value.date().isoformat()
+            text = str(value).strip()
+            if text:
+                return text
+    return None
+
+
 class TidalClient:
     """Tidal streaming platform client."""
 
@@ -340,6 +367,21 @@ class TidalClient:
                     meta["key_scale"] = str(track.key_scale)
             if track.isrc:
                 meta["isrc"] = str(track.isrc)
+            # Native version/audio metadata (spec §4.2, BUILD-FIRST): these settle
+            # the Atmos/named-mix/fidelity axes without string-parsing. Read
+            # defensively — tidalapi may omit them on some tracks/versions.
+            audio_modes = getattr(track, "audio_modes", None)
+            if audio_modes:
+                meta["audio_modes"] = list(audio_modes)
+            audio_quality = getattr(track, "audio_quality", None)
+            if audio_quality:
+                meta["audio_quality"] = str(audio_quality)
+            version = getattr(track, "version", None)
+            if version:
+                meta["tidal_version"] = str(version)
+            media_tags = getattr(track, "media_metadata_tags", None)
+            if media_tags:
+                meta["media_metadata_tags"] = list(media_tags)
             return meta if meta else None
 
         return self._call_with_retry(_fetch)
@@ -368,15 +410,43 @@ class TidalClient:
         premium = getattr(track, "premium_streaming_only", None)
         pay = getattr(track, "pay_to_stream", None)
         tier_restricted = premium is True or pay is True
+        # Native version/audio metadata (spec §4.2, BUILD-FIRST): the SEARCH
+        # path is the candidate source for matching, so preserve the same fields
+        # get_track_metadata captures — otherwise the Atmos/named-mix/fidelity
+        # axes are blind on every candidate. Read defensively; tidalapi omits
+        # them on some tracks/versions.
+        album = getattr(track, "album", None)
+        album_artist = None
+        album_type = None
+        if album is not None:
+            album_artist_obj = getattr(album, "artist", None)
+            if album_artist_obj is not None:
+                album_artist = getattr(album_artist_obj, "name", None)
+            album_type = getattr(album, "type", None)
+        # Release date (M3 date axes): prefer the track's own release date, fall
+        # back to the album's. tidalapi exposes datetime objects; normalise to an
+        # ISO date string so the DateCriterion year-parse works uniformly.
+        release_date = _release_date_iso(track, album)
+        audio_modes = getattr(track, "audio_modes", None)
+        media_tags = getattr(track, "media_metadata_tags", None)
+        audio_quality = getattr(track, "audio_quality", None)
+        version = getattr(track, "version", None)
         return TrackResult(
             platform_id=str(track.id),
             title=track.name or "",
             artist=track.artist.name if getattr(track, "artist", None) else "",
-            album=track.album.name if getattr(track, "album", None) else "",
+            album=album.name if album is not None else "",
             duration_seconds=track.duration if getattr(track, "duration", None) else None,
             isrc=getattr(track, "isrc", None),
             available=available if isinstance(available, bool) else None,
             tier_restricted=tier_restricted,
+            audio_modes=list(audio_modes) if audio_modes else None,
+            audio_quality=str(audio_quality) if audio_quality else None,
+            tidal_version=str(version) if version else None,
+            media_metadata_tags=list(media_tags) if media_tags else None,
+            album_artist=str(album_artist) if album_artist else None,
+            album_type=str(album_type) if album_type else None,
+            release_date=release_date,
         )
 
 

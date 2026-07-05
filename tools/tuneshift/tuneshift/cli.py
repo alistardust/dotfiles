@@ -1,6 +1,7 @@
 """Command-line entry point for tuneshift."""
 
 import argparse
+import logging
 import os
 import sys
 
@@ -23,6 +24,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--db", type=str, default=None,
         help="Path to database file (default: auto-detect)",
     )
+    parser.add_argument(
+        "-v", "--verbose", action="count", default=0,
+        help="Show per-source detail (MB / Last.fm / Genius / LLM); repeatable",
+    )
+    parser.add_argument(
+        "-q", "--quiet", action="store_true",
+        help="Suppress progress output; show only warnings and errors",
+    )
 
     sub = parser.add_subparsers(dest="command")
 
@@ -32,16 +41,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_ingest.add_argument("playlist_id", help="Platform-specific playlist ID or URL")
 
     # sync
-    p_sync = sub.add_parser("sync", help="Reconcile and push playlist to platform")
+    p_sync = sub.add_parser("sync", help="Plan (or --apply) a routed push of a playlist to a platform")
     p_sync.add_argument("playlist", nargs="?", help="Playlist name")
     p_sync.add_argument("platform", nargs="?", help="Target platform")
     p_sync.add_argument("--all", action="store_true", help="Sync all playlists")
     p_sync.add_argument("--reconcile", action="store_true", help="Force re-reconciliation")
-    p_sync.add_argument("--auto", action="store_true", help="Accept all best matches without prompting")
     p_sync.add_argument(
-        "--verify-locks", action="store_true",
-        help="Probe locked tracks for liveness and self-heal dead platform ids "
-             "to the same recording (skips the API probe by default)",
+        "--apply", action="store_true",
+        help="Build and apply the push in one step (default writes a plan and "
+             "pushes nothing — AC-P1)",
+    )
+    p_sync.add_argument(
+        "--interactive", action="store_true",
+        help="With --apply, step through each push before applying (AC-P2)",
     )
 
     # diff
@@ -96,12 +108,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_pin.add_argument("--list", action="store_true", dest="list_pins", help="Show current pins")
 
     # resolve
-    p_resolve = sub.add_parser("resolve", help="Resolve track identity via MusicBrainz/Discogs")
+    p_resolve = sub.add_parser("resolve", help="Resolve tracks to platform candidates + hydrate metadata")
     p_resolve.add_argument("playlist", nargs="?", help="Playlist name to resolve")
     p_resolve.add_argument("--track", nargs=2, metavar=("TITLE", "ARTIST"), help="Resolve single track")
     p_resolve.add_argument("--all", action="store_true", help="Resolve all unresolved tracks")
+    p_resolve.add_argument("--platform", default="tidal", help="Platform to resolve against (default: tidal)")
     p_resolve.add_argument("--upgrade", action="store_true", help="Re-resolve tracks below CONFIRMED")
-    p_resolve.add_argument("--force", action="store_true", help="Re-resolve all tracks (requires --upgrade)")
+    p_resolve.add_argument("--force", action="store_true", help="Re-resolve tracks already resolved")
     p_resolve.add_argument("--status", action="store_true", help="Show resolution statistics")
     p_resolve.add_argument("--verbose", "-v", action="store_true", help="Show skipped tracks")
 
@@ -184,6 +197,38 @@ def build_parser() -> argparse.ArgumentParser:
     p_unmap.add_argument("--tidal", action="store_true", help="Remove Tidal mapping")
     p_unmap.add_argument("--ytmusic", action="store_true", help="Remove YouTube Music mapping")
 
+    # lock — routed identity lock (global default or per-playlist override)
+    p_lock = sub.add_parser(
+        "lock",
+        help="Lock a track to a specific platform release (routed via plan/apply)",
+    )
+    p_lock.add_argument("playlist", nargs="?", help="Playlist name (track lookup / --scope playlist)")
+    p_lock.add_argument("title", nargs="?", help="Track title, substring match (omit with --track-id)")
+    p_lock.add_argument("--track-id", type=int, help="Canonical track id (locks without playlist/title)")
+    p_lock.add_argument("--tidal", help="Tidal track ID to lock to")
+    p_lock.add_argument("--ytmusic", help="YouTube Music video ID to lock to")
+    p_lock.add_argument("--scope", choices=["global", "playlist"], default="global",
+                        help="global default lock (default) or per-playlist override")
+    p_lock.add_argument("--list", action="store_true", dest="list_locks",
+                        help="List effective locks with precedence (optionally scoped "
+                             "to the positional playlist); ignores other lock args")
+    p_lock.add_argument("--apply", action="store_true", help="Apply immediately instead of writing a plan")
+    p_lock.add_argument("--interactive", action="store_true", help="Step through the change before applying")
+
+    # unlock — release an identity lock (global default or per-playlist override)
+    p_unlock = sub.add_parser(
+        "unlock", help="Release an identity lock (routed via plan/apply)"
+    )
+    p_unlock.add_argument("playlist", nargs="?", help="Playlist name (track lookup / --scope playlist)")
+    p_unlock.add_argument("title", nargs="?", help="Track title, substring match (omit with --track-id)")
+    p_unlock.add_argument("--track-id", type=int, help="Canonical track id (unlocks without playlist/title)")
+    p_unlock.add_argument("--tidal", action="store_true", help="Release the Tidal lock")
+    p_unlock.add_argument("--ytmusic", action="store_true", help="Release the YouTube Music lock")
+    p_unlock.add_argument("--scope", choices=["global", "playlist"], default="global",
+                          help="global default lock (default) or per-playlist override")
+    p_unlock.add_argument("--apply", action="store_true", help="Apply immediately instead of writing a plan")
+    p_unlock.add_argument("--interactive", action="store_true", help="Step through the change before applying")
+
     # edit
     p_edit = sub.add_parser("edit", help="Edit track metadata (title/artist/album)")
     p_edit.add_argument("track_id", nargs="?", type=int, help="Canonical track id to edit")
@@ -191,13 +236,37 @@ def build_parser() -> argparse.ArgumentParser:
     p_edit.add_argument("--title", help="New track title")
     p_edit.add_argument("--artist", help="New track artist")
     p_edit.add_argument("--album", help="New track album")
+    p_edit.add_argument("--energy", type=float,
+                        help="Set energy 0.0-1.0 (manual override, AC8)")
+    p_edit.add_argument("--valence", type=float,
+                        help="Set valence 0.0-1.0 (manual override, AC8)")
     p_edit.add_argument("--strip-album-from-title", action="store_true",
                         help="Remove a trailing parenthetical that repeats the album name")
     p_edit.add_argument("--dry-run", action="store_true", help="Show changes without writing")
 
-    # why
-    p_why = sub.add_parser("why", help="Explain a track's match decision on each platform")
+    # explain (formerly `why`)
+    p_explain = sub.add_parser(
+        "explain",
+        help="Explain a track's match decision (criteria, breakdown, rejections)",
+    )
+    p_explain.add_argument("track_id", type=int, help="Canonical track id to explain")
+    p_explain.add_argument(
+        "playlist", nargs="?",
+        help="Playlist to scope the explanation to (default: global decision)",
+    )
+    p_explain.add_argument("--platform", choices=["spotify", "tidal", "ytmusic"],
+                           help="Limit to one platform (default: all with a stored decision)")
+    p_explain.add_argument("--live", action="store_true",
+                           help="Reconcile now against the platform(s) instead of reading the "
+                                "stored decision (requires login)")
+
+    # why (deprecated alias for explain)
+    p_why = sub.add_parser("why", help="[deprecated] alias for `explain`")
     p_why.add_argument("track_id", type=int, help="Canonical track id to explain")
+    p_why.add_argument(
+        "playlist", nargs="?",
+        help="Playlist to scope the explanation to (default: global decision)",
+    )
     p_why.add_argument("--platform", choices=["spotify", "tidal", "ytmusic"],
                        help="Limit to one platform (default: all with a stored decision)")
     p_why.add_argument("--live", action="store_true",
@@ -237,14 +306,38 @@ def build_parser() -> argparse.ArgumentParser:
     p_curate.add_argument("--hard-limit", type=int, help="Hard limit track count")
 
     # prefs
-    p_prefs = sub.add_parser("prefs", help="Manage version preferences (global/playlist/track)")
-    p_prefs.add_argument("action", choices=["show", "set", "clear"], help="Show, set or clear preferences")
-    p_prefs.add_argument("key", nargs="?", help="Preference key (version.<field>)")
-    p_prefs.add_argument("value", nargs="?", help="Value to set (comma-list for prefer/avoid)")
-    prefs_scope = p_prefs.add_mutually_exclusive_group()
-    prefs_scope.add_argument("--global", dest="global_scope", action="store_true", help="Target global defaults (default)")
-    prefs_scope.add_argument("--playlist", help="Target a playlist by name")
-    prefs_scope.add_argument("--track", type=int, help="Target a track by id")
+    p_prefs = sub.add_parser(
+        "prefs",
+        help="Manage version preferences (typed criterion/strength/target at "
+             "global/playlist/playlist-track scope)",
+    )
+    p_prefs.add_argument(
+        "action", choices=["show", "set", "unset", "list", "clear"],
+        help="set/unset/list typed prefs; show/clear the legacy keyword model",
+    )
+    p_prefs.add_argument(
+        "key", nargs="?",
+        help="criterion axis (spatial/mix/fidelity/performance/content/edit/"
+             "production) — or legacy version.<field>",
+    )
+    p_prefs.add_argument(
+        "value", nargs="?",
+        help="strength (require/prefer/avoid/forbid) — or legacy value",
+    )
+    p_prefs.add_argument(
+        "target", nargs="?",
+        help="target token for a typed pref (e.g. atmos, live, remaster)",
+    )
+    p_prefs.add_argument(
+        "--global", dest="global_scope", action="store_true",
+        help="Target global defaults (default when no scope flag is given)",
+    )
+    p_prefs.add_argument("--playlist", help="Target a playlist by name")
+    p_prefs.add_argument(
+        "--track", type=int,
+        help="Target a track (typed prefs: combine with --playlist for "
+             "playlist-track scope)",
+    )
 
     # alias
     p_alias = sub.add_parser(
@@ -330,6 +423,47 @@ def build_parser() -> argparse.ArgumentParser:
     p_batch.add_argument("--id", type=int, help="History ID for --undo")
     p_batch.add_argument("--history", nargs="?", const=True, help="Show batch history")
     p_batch.add_argument("--interactive", action="store_true", help="Walk through decisions one at a time")
+
+    # plan (terraform-style plan/apply engine: sync/rematch/migrate routes)
+    p_plan = sub.add_parser(
+        "plan", help="Generate, inspect, apply, or roll back a plan/apply plan"
+    )
+    plan_sub = p_plan.add_subparsers(dest="action", required=True)
+
+    p_plan_sync = plan_sub.add_parser("sync", help="Plan a playlist push to a platform")
+    p_plan_sync.add_argument("playlist", help="Playlist name")
+    p_plan_sync.add_argument("--platform", default="tidal", help="Target platform (default: tidal)")
+    p_plan_sync.add_argument("--reconcile", action="store_true", help="Force re-reconcile (ignore cache)")
+
+    p_plan_rematch = plan_sub.add_parser("rematch", help="Plan re-matching a playlist's tracks")
+    p_plan_rematch.add_argument("playlist", help="Playlist name")
+    p_plan_rematch.add_argument("--platform", default="tidal", help="Target platform (default: tidal)")
+    p_plan_rematch.add_argument("--reconcile", action="store_true", help="Force re-reconcile (ignore cache)")
+
+    p_plan_migrate = plan_sub.add_parser("migrate", help="Plan migration of stale global mappings")
+    p_plan_migrate.add_argument("--platform", default="tidal", help="Target platform (default: tidal)")
+
+    p_plan_heal = plan_sub.add_parser(
+        "heal", help="Plan a routed self-heal of dead identity locks (AC-L3)")
+    p_plan_heal.add_argument("--platform", default="tidal", help="Target platform (default: tidal)")
+    p_plan_heal.add_argument("--playlist", help="Limit to one playlist's override locks")
+
+    plan_sub.add_parser("list", help="List saved plans")
+
+    p_plan_show = plan_sub.add_parser("show", help="Show a saved plan")
+    p_plan_show.add_argument("plan_id", help="Plan id")
+
+    p_plan_reject = plan_sub.add_parser("reject", help="Reject a single change in a plan")
+    p_plan_reject.add_argument("plan_id", help="Plan id")
+    p_plan_reject.add_argument("change_id", type=int, help="Change id to reject")
+
+    p_plan_apply = plan_sub.add_parser("apply", help="Apply a saved plan")
+    p_plan_apply.add_argument("plan_id", help="Plan id")
+    p_plan_apply.add_argument("--include-locked", action="store_true", help="Also apply locked changes")
+    p_plan_apply.add_argument("--interactive", action="store_true", help="Step through changes accept/reject")
+
+    p_plan_rollback = plan_sub.add_parser("rollback", help="Roll back an applied plan")
+    p_plan_rollback.add_argument("plan_id", help="Plan id")
 
     # ban
     p_ban = sub.add_parser("ban", help="Manage the global banned artist list")
@@ -618,6 +752,24 @@ def _handle_ban(args, db) -> int:
     return 0
 
 
+def _configure_logging(args) -> None:
+    """Route enrichment/progress logs to stderr at the requested verbosity (AC6).
+
+    Enrichment was silent because nothing configured the root logger. Progress
+    (INFO) is visible by default; ``-v`` drops to DEBUG and annotates each line
+    with its source logger; ``-q`` suppresses everything below WARNING.
+    """
+    verbose = getattr(args, "verbose", 0)
+    if getattr(args, "quiet", False):
+        level = logging.WARNING
+    elif verbose:
+        level = logging.DEBUG
+    else:
+        level = logging.INFO
+    fmt = "%(levelname)s %(name)s: %(message)s" if verbose else "%(message)s"
+    logging.basicConfig(level=level, stream=sys.stderr, format=fmt, force=True)
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run the tuneshift CLI."""
     parser = build_parser()
@@ -626,6 +778,8 @@ def main(argv: list[str] | None = None) -> int:
     if not args.command:
         parser.print_help()
         return 0
+
+    _configure_logging(args)
 
     from pathlib import Path
     db_path = Path(args.db) if args.db else None
@@ -687,11 +841,22 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "unmap":
             from tuneshift.commands.map_cmd import handle_unmap
             return handle_unmap(args, db)
+        elif args.command == "lock":
+            from tuneshift.commands.lock_cmd import handle_lock, handle_lock_list
+            if getattr(args, "list_locks", False):
+                return handle_lock_list(args, db)
+            return handle_lock(args, db)
+        elif args.command == "unlock":
+            from tuneshift.commands.lock_cmd import handle_unlock
+            return handle_unlock(args, db)
         elif args.command == "edit":
             from tuneshift.commands.edit_cmd import handle_edit
             return handle_edit(args, db)
+        elif args.command == "explain":
+            from tuneshift.commands.explain_cmd import handle_explain
+            return handle_explain(args, db)
         elif args.command == "why":
-            from tuneshift.commands.why_cmd import handle_why
+            from tuneshift.commands.explain_cmd import handle_why
             return handle_why(args, db)
         elif args.command == "triage":
             from tuneshift.commands.triage_cmd import handle_triage
@@ -731,6 +896,9 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "batch":
             from tuneshift.commands.batch_cmd import handle_batch
             return handle_batch(args, db)
+        elif args.command == "plan":
+            from tuneshift.commands.plan_cmd import handle_plan
+            return handle_plan(args, db)
         elif args.command == "ban":
             return _handle_ban(args, db)
         elif args.command == "merge":

@@ -25,9 +25,11 @@ from tuneshift.matching.artist import (
 )
 from tuneshift.matching.audit import (
     Availability,
+    CriterionOutcome,
     MatchAudit,
     ReasonCode,
     RejectedCandidate,
+    SignalContribution,
     describe_availability,
     describe_reason,
 )
@@ -121,6 +123,8 @@ __all__ = [
     "ReasonCode",
     "RejectedCandidate",
     "MatchAudit",
+    "CriterionOutcome",
+    "SignalContribution",
     "describe_availability",
     "describe_reason",
     "TrackFingerprint",

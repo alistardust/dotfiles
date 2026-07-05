@@ -189,3 +189,86 @@ def test_get_match_audits_for_track_keyed_by_platform(tmp_db: Path) -> None:
     audits = db.get_match_audits_for_track(track_id)
     assert set(audits) == {"spotify", "tidal"}
     assert audits["tidal"].availability == Availability.EXACT_UNAVAILABLE
+
+
+def test_match_audit_is_playlist_scoped(tmp_db: Path) -> None:
+    """The same (track, platform) can carry a distinct audit per playlist.
+
+    Selection is now playlist-dependent, so ``explain`` must not clobber one
+    playlist's decision with another's (spec §4.1a item 5, AC-CLI3/CLI5).
+    """
+    from tuneshift.matching import Availability, MatchAudit, ReasonCode
+
+    db = Database(tmp_db)
+    track_id = db.add_track(Track(title="Flower", artist="Liam", album="A"))
+    p_atmos = db.create_playlist("Atmos Mix")
+    p_stereo = db.create_playlist("Stereo Mix")
+
+    db.save_match_audit(track_id, "tidal", MatchAudit(
+        availability=Availability.EXACT_AVAILABLE, reason_code=ReasonCode.MATCHED,
+        chosen_platform_id="atmos-id"), playlist_id=p_atmos)
+    db.save_match_audit(track_id, "tidal", MatchAudit(
+        availability=Availability.EXACT_AVAILABLE, reason_code=ReasonCode.MATCHED,
+        chosen_platform_id="stereo-id"), playlist_id=p_stereo)
+
+    a = db.get_match_audit(track_id, "tidal", playlist_id=p_atmos)
+    s = db.get_match_audit(track_id, "tidal", playlist_id=p_stereo)
+    assert a.chosen_platform_id == "atmos-id"
+    assert s.chosen_platform_id == "stereo-id", "second playlist must not clobber the first"
+
+
+def test_match_audit_default_scope_is_global_sentinel(tmp_db: Path) -> None:
+    """Writer/readers default to the global sentinel (playlist_id=0), so legacy
+    call sites that don't pass a playlist keep working after the migration."""
+    from tuneshift.matching import Availability, MatchAudit, ReasonCode
+
+    db = Database(tmp_db)
+    track_id = db.add_track(Track(title="X", artist="Y", album="Z"))
+    db.save_match_audit(track_id, "spotify", MatchAudit(
+        availability=Availability.EXACT_AVAILABLE, reason_code=ReasonCode.MATCHED))
+    assert db.get_match_audit(track_id, "spotify") is not None
+    assert db.get_match_audit(track_id, "spotify", playlist_id=0) is not None
+    # a real playlist scope is a distinct slot, initially empty
+    pid = db.create_playlist("P")
+    assert db.get_match_audit(track_id, "spotify", playlist_id=pid) is None
+
+
+def test_match_audit_playlist_column_migration(tmp_db: Path) -> None:
+    """A pre-v16 match_audits (PK track_id,platform) migrates: existing rows land
+    at the global sentinel and the playlist_id column exists."""
+    import sqlite3
+
+    conn = sqlite3.connect(tmp_db)
+    conn.executescript(
+        """
+        CREATE TABLE tracks (
+            id INTEGER PRIMARY KEY, title TEXT NOT NULL, artist TEXT NOT NULL,
+            album TEXT, norm_title TEXT NOT NULL, norm_artist TEXT NOT NULL,
+            norm_album TEXT, isrc TEXT
+        );
+        CREATE TABLE match_audits (
+            track_id INTEGER NOT NULL, platform TEXT NOT NULL,
+            availability TEXT NOT NULL, reason_code TEXT NOT NULL,
+            audit_json TEXT NOT NULL,
+            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY (track_id, platform)
+        );
+        INSERT INTO tracks (id, title, artist, album, norm_title, norm_artist, norm_album)
+            VALUES (1, 'T', 'A', 'Al', 't', 'a', 'al');
+        INSERT INTO match_audits (track_id, platform, availability, reason_code, audit_json)
+            VALUES (1, 'tidal', 'exact_available', 'matched', '{"availability":"exact_available","reason_code":"matched"}');
+        CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT);
+        INSERT INTO schema_meta (key, value) VALUES ('version', '15');
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    db = Database(tmp_db)
+    cols = {r[1] for r in db.conn.execute("PRAGMA table_info(match_audits)").fetchall()}
+    assert "playlist_id" in cols
+    row = db.conn.execute(
+        "SELECT playlist_id FROM match_audits WHERE track_id=1 AND platform='tidal'"
+    ).fetchone()
+    assert row["playlist_id"] == 0
+    db.close()

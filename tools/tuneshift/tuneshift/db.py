@@ -5,20 +5,42 @@ import os
 import re
 import sqlite3
 from collections.abc import Sequence
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from tuneshift.matching.normalize import _WHITESPACE_RE
 from tuneshift.matching.normalize import normalize_artist as _alias_normalize
-from tuneshift.models import Album, Artist, PlatformMapping, Playlist, PlaylistPin, Track
+from tuneshift.models import (
+    Album,
+    Artist,
+    EffectiveLock,
+    PlatformMapping,
+    Playlist,
+    PlaylistPin,
+    Track,
+)
 
 if TYPE_CHECKING:
     from tuneshift.matching import ReviewItem
+    from tuneshift.planapply.models import JournalEntry
 
-_SCHEMA_VERSION = 14
+_SCHEMA_VERSION = 20
 
 # Columns editable via update_track. Constrains f-string interpolation in the
 # UPDATE statement to a fixed, safe set (no SQL identifier injection).
 _TRACK_EDITABLE_COLUMNS = frozenset({"title", "artist", "album"})
+
+# First-class version-selection metadata columns settable via set_track_fields
+# (spec §4.1). Constrains f-string interpolation in the UPDATE to a safe set.
+_TRACK_FIRST_CLASS_COLUMNS = frozenset({
+    "album_artist", "album_type", "label", "recording_date", "release_date",
+    "remaster_year", "audio_modes", "audio_quality", "tidal_version",
+    "language", "composer", "availability", "quarantine_state",
+    "quarantine_reason", "energy", "valence",
+})
+# First-class columns whose Python value is a list, stored as a JSON string.
+_TRACK_JSON_FIELD_COLUMNS = frozenset({"audio_modes"})
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS tracks (
@@ -46,7 +68,21 @@ CREATE TABLE IF NOT EXISTS tracks (
     resolved_at TEXT,
     artist_id INTEGER REFERENCES artists(id),
     album_id INTEGER REFERENCES albums(id),
-    preferences TEXT
+    album_artist TEXT,
+    album_type TEXT,
+    label TEXT,
+    recording_date TEXT,
+    release_date TEXT,
+    remaster_year INTEGER,
+    audio_modes TEXT,
+    audio_quality TEXT,
+    tidal_version TEXT,
+    language TEXT,
+    composer TEXT,
+    availability TEXT,
+    quarantine_state TEXT,
+    quarantine_reason TEXT,
+    field_provenance TEXT
 );
 
 CREATE TABLE IF NOT EXISTS platform_tracks (
@@ -276,13 +312,14 @@ CREATE TABLE IF NOT EXISTS track_tags (
 CREATE INDEX IF NOT EXISTS idx_track_tags_tag ON track_tags(tag);
 
 CREATE TABLE IF NOT EXISTS match_audits (
+    playlist_id INTEGER NOT NULL DEFAULT 0,
     track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
     platform TEXT NOT NULL,
     availability TEXT NOT NULL,
     reason_code TEXT NOT NULL,
     audit_json TEXT NOT NULL,
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-    PRIMARY KEY (track_id, platform)
+    PRIMARY KEY (playlist_id, track_id, platform)
 );
 
 CREATE TABLE IF NOT EXISTS artist_aliases (
@@ -293,14 +330,95 @@ CREATE TABLE IF NOT EXISTS artist_aliases (
     PRIMARY KEY (class_id, member)
 );
 CREATE INDEX IF NOT EXISTS idx_artist_aliases_norm ON artist_aliases(norm_member);
+
+CREATE TABLE IF NOT EXISTS resolution_queue (
+    track_id INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
+    state TEXT NOT NULL DEFAULT 'pending',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    transient_attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at TEXT,
+    last_error TEXT,
+    enqueued_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_resolution_queue_state
+    ON resolution_queue(state, next_attempt_at);
+
+CREATE TABLE IF NOT EXISTS track_candidates (
+    track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+    platform TEXT NOT NULL,
+    platform_track_id TEXT NOT NULL,
+    captured_metadata TEXT,
+    discovery_rank INTEGER NOT NULL DEFAULT 0,
+    fetched_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (track_id, platform, platform_track_id)
+);
+
+CREATE TABLE IF NOT EXISTS playlist_track_mappings (
+    playlist_id INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+    track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+    platform TEXT NOT NULL,
+    platform_track_id TEXT NOT NULL,
+    source TEXT,
+    user_approved INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (playlist_id, track_id, platform)
+);
+
+CREATE TABLE IF NOT EXISTS playlist_track_prefs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    playlist_id INTEGER REFERENCES playlists(id) ON DELETE CASCADE,
+    track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+    criterion TEXT NOT NULL,
+    strength TEXT NOT NULL,
+    target TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+-- A preference is unique per (scope, criterion, target) so multiple targets on
+-- one axis coexist (e.g. content avoid karaoke + content avoid instrumental).
+-- COALESCE normalises the NULLable playlist_id (NULL = playlist-agnostic
+-- per-track scope) and target so uniqueness is NULL-safe.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_playlist_track_prefs_scope
+    ON playlist_track_prefs(
+        COALESCE(playlist_id, -1), track_id, criterion, COALESCE(target, '')
+    );
+
+CREATE TABLE IF NOT EXISTS apply_journal (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    plan_id TEXT NOT NULL,
+    table_name TEXT NOT NULL,
+    row_key TEXT NOT NULL,
+    op TEXT NOT NULL,
+    prior_value TEXT,
+    new_value TEXT,
+    applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_apply_journal_plan
+    ON apply_journal(plan_id, id);
 """
 
+# STORED-KEY edition strip. Intentionally NARROWER than
+# ``matching.normalize._EDITION_PARENS_RE`` (which also strips Deluxe/Mono/
+# Anniversary/Taylor's Version/etc.). This regex feeds the persisted, indexed
+# ``norm_title``/``norm_album`` columns and the ``albums`` UNIQUE constraint, so
+# broadening it would require a full reindex/backfill migration and could merge
+# rows the UNIQUE constraint currently keeps distinct. Do NOT point this at the
+# aggressive comparison regex. See tests/matching/test_normalizer_contracts.py.
 _REMIX_RE = re.compile(r"\s*\((?:remaster(?:ed)?|deluxe edition)[^)]*\)\s*", re.IGNORECASE)
-_WHITESPACE_RE = re.compile(r"\s+")
 
 
 def normalize_title(value: str | None) -> str | None:
-    """Normalize title-like text for indexed identity lookups."""
+    """Normalize title-like text for the STORED, indexed identity key.
+
+    Deliberately light and STABLE: lowercase, ``&``->``and``, strip
+    remaster/deluxe-edition parens, collapse whitespace. It does NOT fold accents
+    or strip feat/explicit -- that is the job of the transient comparison key
+    (``matching.normalize_title``). Changing this function's output requires
+    reindexing every stored ``norm_*`` value; the contract is pinned by
+    tests/matching/test_normalizer_contracts.py.
+    """
     if value is None:
         return None
     normalized = _REMIX_RE.sub(" ", value.strip().lower())
@@ -310,7 +428,11 @@ def normalize_title(value: str | None) -> str | None:
 
 
 def normalize_artist(value: str) -> str:
-    """Normalize artist text for indexed identity lookups."""
+    """Normalize artist text for the STORED, indexed identity key.
+
+    Light and STABLE (see :func:`normalize_title`): lowercase, ``&``->``and``,
+    collapse whitespace, strip a single leading "the ". Does NOT fold accents.
+    """
     normalized = value.strip().lower().replace("&", "and")
     normalized = _WHITESPACE_RE.sub(" ", normalized)
     if normalized.startswith("the "):
@@ -760,19 +882,264 @@ class Database:
                     "ON artist_aliases(norm_member)"
                 )
 
+            if current_version < 15:
+                # First-class version-selection metadata columns (spec §4.1,
+                # AC-D3/D4). These lift audio/version/release fields out of the
+                # opaque metadata JSON so the matching path can read them, plus a
+                # field_provenance JSON column recording (source, timestamp) per
+                # enrichable field. Idempotent ALTERs guarded by PRAGMA.
+                track_cols = {
+                    r[1] for r in self.conn.execute("PRAGMA table_info(tracks)").fetchall()
+                }
+                first_class_columns = {
+                    "album_artist": "TEXT",
+                    "album_type": "TEXT",
+                    "label": "TEXT",
+                    "recording_date": "TEXT",
+                    "release_date": "TEXT",
+                    "remaster_year": "INTEGER",
+                    "audio_modes": "TEXT",
+                    "audio_quality": "TEXT",
+                    "tidal_version": "TEXT",
+                    "language": "TEXT",
+                    "composer": "TEXT",
+                    "availability": "TEXT",
+                    "quarantine_state": "TEXT",
+                    "quarantine_reason": "TEXT",
+                    "field_provenance": "TEXT",
+                }
+                for column_name, column_type in first_class_columns.items():
+                    if column_name not in track_cols:
+                        self.conn.execute(
+                            f"ALTER TABLE tracks ADD COLUMN {column_name} {column_type}"
+                        )
+
+            if current_version < 16:
+                # Playlist-scope match_audits (spec §4.1a item 5, AC-CLI3/CLI5):
+                # selection is now playlist-dependent, so an audit is keyed by
+                # (playlist_id, track_id, platform). Rebuild the table (SQLite
+                # cannot alter a PK in place); existing rows land at the global
+                # sentinel playlist_id=0. Idempotent via the column-presence guard.
+                audit_cols = {
+                    r[1]
+                    for r in self.conn.execute(
+                        "PRAGMA table_info(match_audits)"
+                    ).fetchall()
+                }
+                if audit_cols and "playlist_id" not in audit_cols:
+                    self.conn.execute("""
+                        CREATE TABLE match_audits_new (
+                            playlist_id INTEGER NOT NULL DEFAULT 0,
+                            track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+                            platform TEXT NOT NULL,
+                            availability TEXT NOT NULL,
+                            reason_code TEXT NOT NULL,
+                            audit_json TEXT NOT NULL,
+                            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                            PRIMARY KEY (playlist_id, track_id, platform)
+                        )
+                    """)
+                    self.conn.execute("""
+                        INSERT INTO match_audits_new
+                            (playlist_id, track_id, platform, availability,
+                             reason_code, audit_json, updated_at)
+                        SELECT 0, track_id, platform, availability,
+                               reason_code, audit_json, updated_at
+                        FROM match_audits
+                    """)
+                    self.conn.execute("DROP TABLE match_audits")
+                    self.conn.execute(
+                        "ALTER TABLE match_audits_new RENAME TO match_audits"
+                    )
+
+            if current_version < 17:
+                # Separate transient (rate-limit) retries from hard-failure
+                # attempts so a burst of 429s can never erode the quarantine
+                # budget (AC-D7 worker semantics). PRAGMA-guarded ALTER.
+                rq_cols = {
+                    r[1]
+                    for r in self.conn.execute(
+                        "PRAGMA table_info(resolution_queue)"
+                    ).fetchall()
+                }
+                if rq_cols and "transient_attempts" not in rq_cols:
+                    self.conn.execute(
+                        "ALTER TABLE resolution_queue "
+                        "ADD COLUMN transient_attempts INTEGER NOT NULL DEFAULT 0"
+                    )
+
+            if current_version < 18:
+                # Plan/apply journal (§7, AC-P4): records every applied write so
+                # a LOCAL apply is reversible in one step by reverse-replay.
+                self.conn.execute("""
+                    CREATE TABLE IF NOT EXISTS apply_journal (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        plan_id TEXT NOT NULL,
+                        table_name TEXT NOT NULL,
+                        row_key TEXT NOT NULL,
+                        op TEXT NOT NULL,
+                        prior_value TEXT,
+                        new_value TEXT,
+                        applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+                    )
+                """)
+                self.conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_apply_journal_plan "
+                    "ON apply_journal(plan_id, id)"
+                )
+
+            if current_version < 19:
+                # Persisted candidate ORDER matters for winner parity: selection
+                # keeps input order for default band-ties (selection.py stable
+                # sort), so the persisted set must be returned in the same
+                # discovery order reconcile's live gather produced (spec §4.1a /
+                # AC-X3, AC-P4). Add a rank column; existing rows default to 0.
+                cols = {
+                    r[1]
+                    for r in self.conn.execute(
+                        "PRAGMA table_info(track_candidates)"
+                    ).fetchall()
+                }
+                if "discovery_rank" not in cols:
+                    self.conn.execute(
+                        "ALTER TABLE track_candidates "
+                        "ADD COLUMN discovery_rank INTEGER NOT NULL DEFAULT 0"
+                    )
+
+            if current_version < 20:
+                # FL3: unify the preference model. playlist_track_prefs gains a
+                # surrogate id + a NULL-safe unique index on
+                # (playlist_id, track_id, criterion, target) so multiple targets
+                # on one axis coexist (Alice's bug: could not avoid karaoke AND
+                # instrumental), and playlist_id becomes NULLable so a NULL row
+                # is a playlist-agnostic per-track preference. The orphan
+                # tracks.preferences blob is folded in and dropped.
+                self.conn.execute(
+                    "ALTER TABLE playlist_track_prefs RENAME TO _ptp_old_v20"
+                )
+                self.conn.execute("""
+                    CREATE TABLE playlist_track_prefs (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        playlist_id INTEGER REFERENCES playlists(id) ON DELETE CASCADE,
+                        track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+                        criterion TEXT NOT NULL,
+                        strength TEXT NOT NULL,
+                        target TEXT,
+                        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+                    )
+                """)
+                self.conn.execute("""
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_playlist_track_prefs_scope
+                        ON playlist_track_prefs(
+                            COALESCE(playlist_id, -1), track_id, criterion,
+                            COALESCE(target, '')
+                        )
+                """)
+                self.conn.execute("""
+                    INSERT INTO playlist_track_prefs
+                        (playlist_id, track_id, criterion, strength, target,
+                         created_at, updated_at)
+                    SELECT playlist_id, track_id, criterion, strength, target,
+                           created_at, updated_at
+                    FROM _ptp_old_v20
+                """)
+                self.conn.execute("DROP TABLE _ptp_old_v20")
+
+                # Fold any typed per-track criteria out of tracks.preferences
+                # into the NULL-playlist (playlist-agnostic) scope, then drop the
+                # orphan column. Legacy prefer/avoid keyword blobs (never wired to
+                # the typed engine) are not carried over.
+                track_cols = {
+                    r[1]
+                    for r in self.conn.execute("PRAGMA table_info(tracks)").fetchall()
+                }
+                if "preferences" in track_cols:
+                    rows = self.conn.execute(
+                        "SELECT id, preferences FROM tracks "
+                        "WHERE preferences IS NOT NULL AND preferences != ''"
+                    ).fetchall()
+                    for row in rows:
+                        try:
+                            blob = json.loads(row[1])
+                        except (ValueError, TypeError):
+                            continue
+                        for crit in (blob or {}).get("criteria") or ():
+                            criterion = crit.get("criterion")
+                            strength = crit.get("strength")
+                            if not criterion or not strength:
+                                continue
+                            self.conn.execute(
+                                """INSERT OR IGNORE INTO playlist_track_prefs
+                                       (playlist_id, track_id, criterion,
+                                        strength, target)
+                                   VALUES (NULL, ?, ?, ?, ?)""",
+                                (row[0], criterion, strength, crit.get("target")),
+                            )
+                    self.conn.execute("ALTER TABLE tracks DROP COLUMN preferences")
+
             self.conn.execute(
                 "UPDATE schema_meta SET value = ? WHERE key = 'version'",
                 (str(_SCHEMA_VERSION),),
             )
 
+    def _get_or_create_artist(self, name: str) -> int:
+        """Return the artists.id for ``name``, creating the row if absent.
+
+        Idempotent via the ``idx_artists_norm`` UNIQUE(norm_name) constraint, so
+        it is consistent with the migration backfill which keys on the same
+        normalized column.
+        """
+        norm = normalize_artist(name)
+        self.conn.execute(
+            "INSERT OR IGNORE INTO artists (name, norm_name) VALUES (?, ?)",
+            (name, norm),
+        )
+        row = self.conn.execute(
+            "SELECT id FROM artists WHERE norm_name = ?", (norm,)
+        ).fetchone()
+        return int(row["id"])
+
+    def _get_or_create_album(self, title: str, artist_id: int) -> int:
+        """Return the albums.id for ``(title, artist_id)`` at the default edition.
+
+        The ``albums`` UNIQUE is ``(norm_title, artist_id, edition)`` and ``edition``
+        defaults to ``'original'``; the INSERT omits it (default applies), so the
+        SELECT filters ``edition='original'`` to key on the same columns and avoid a
+        lookup miss.
+        """
+        norm = normalize_title(title)
+        self.conn.execute(
+            "INSERT OR IGNORE INTO albums (title, norm_title, artist_id) VALUES (?, ?, ?)",
+            (title, norm, artist_id),
+        )
+        row = self.conn.execute(
+            "SELECT id FROM albums WHERE norm_title = ? AND artist_id = ? AND edition = 'original'",
+            (norm, artist_id),
+        ).fetchone()
+        return int(row["id"])
+
     def insert_track(self, track: Track) -> int:
-        """Insert a track and return its ID."""
+        """Insert a track and return its ID.
+
+        Links the track to the normalized ``artists``/``albums`` tables at insert
+        time (get-or-create), so every runtime-added track carries ``artist_id`` and
+        (when an album is present) ``album_id`` — not only tracks touched by the
+        one-time migration backfill. Gate on AC-D1/AC-D3.
+        """
+        artist_id: int | None = None
+        album_id: int | None = None
+        if track.artist:
+            artist_id = self._get_or_create_artist(track.artist)
+            if track.album:
+                album_id = self._get_or_create_album(track.album, artist_id)
         cursor = self.conn.execute(
             """INSERT INTO tracks (
                    title, artist, album, norm_title, norm_artist, norm_album,
-                   duration_seconds, isrc, energy, valence, tempo, key, themes, metadata
+                   duration_seconds, isrc, energy, valence, tempo, key, themes, metadata,
+                   artist_id, album_id
                )
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 track.title,
                 track.artist,
@@ -788,6 +1155,8 @@ class Database:
                 track.key,
                 json.dumps(track.themes) if track.themes else None,
                 json.dumps(track.metadata) if track.metadata else None,
+                artist_id,
+                album_id,
             ),
         )
         self.conn.commit()
@@ -1393,48 +1762,64 @@ class Database:
         )
         self.conn.commit()
 
-    def save_match_audit(self, track_id: int, platform: str, audit) -> None:
-        """Persist the explainable MatchAudit for a (track, platform) pair.
+    def save_match_audit(
+        self, track_id: int, platform: str, audit, playlist_id: int = 0
+    ) -> None:
+        """Persist the explainable MatchAudit for a (playlist, track, platform).
 
         Stored for every reconcile outcome — including misses — so ``tuneshift
-        why`` can explain a decision without re-running a live search. The audit
-        is serialized to JSON via ``MatchAudit.to_json``; availability and
+        explain`` can explain a decision without re-running a live search. The
+        audit is serialized to JSON via ``MatchAudit.to_json``; availability and
         reason_code are also stored as plain columns for cheap filtering.
+
+        ``playlist_id`` scopes the audit: selection is playlist-dependent, so the
+        same (track, platform) can carry a distinct audit per playlist. It
+        defaults to the global sentinel ``0`` for legacy/non-playlist call sites.
         """
         if audit is None:
             return
         self.conn.execute(
             """INSERT INTO match_audits
-               (track_id, platform, availability, reason_code, audit_json, updated_at)
-               VALUES (?, ?, ?, ?, ?, datetime('now'))
-               ON CONFLICT(track_id, platform) DO UPDATE SET
+               (playlist_id, track_id, platform, availability, reason_code, audit_json, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+               ON CONFLICT(playlist_id, track_id, platform) DO UPDATE SET
                  availability = excluded.availability,
                  reason_code = excluded.reason_code,
                  audit_json = excluded.audit_json,
                  updated_at = excluded.updated_at""",
-            (track_id, platform, audit.availability, audit.reason_code, audit.to_json()),
+            (playlist_id, track_id, platform, audit.availability, audit.reason_code, audit.to_json()),
         )
         self.conn.commit()
 
-    def get_match_audit(self, track_id: int, platform: str):
-        """Return the persisted ``MatchAudit`` for a (track, platform), or None."""
+    def get_match_audit(self, track_id: int, platform: str, playlist_id: int = 0):
+        """Return the persisted ``MatchAudit`` for a (playlist, track, platform).
+
+        ``playlist_id`` defaults to the global sentinel ``0``.
+        """
         from tuneshift.matching import MatchAudit
 
         row = self.conn.execute(
-            "SELECT audit_json FROM match_audits WHERE track_id = ? AND platform = ?",
-            (track_id, platform),
+            "SELECT audit_json FROM match_audits "
+            "WHERE playlist_id = ? AND track_id = ? AND platform = ?",
+            (playlist_id, track_id, platform),
         ).fetchone()
         if row is None:
             return None
         return MatchAudit.from_json(row["audit_json"])
 
-    def get_match_audits_for_track(self, track_id: int) -> dict[str, object]:
-        """Return all persisted audits for a track, keyed by platform name."""
+    def get_match_audits_for_track(
+        self, track_id: int, playlist_id: int = 0
+    ) -> dict[str, object]:
+        """Return all persisted audits for a (playlist, track), keyed by platform.
+
+        ``playlist_id`` defaults to the global sentinel ``0``.
+        """
         from tuneshift.matching import MatchAudit
 
         rows = self.conn.execute(
-            "SELECT platform, audit_json FROM match_audits WHERE track_id = ?",
-            (track_id,),
+            "SELECT platform, audit_json FROM match_audits "
+            "WHERE track_id = ? AND playlist_id = ?",
+            (track_id, playlist_id),
         ).fetchall()
         return {row["platform"]: MatchAudit.from_json(row["audit_json"]) for row in rows}
 
@@ -1462,6 +1847,14 @@ class Database:
             JOIN tracks t ON t.id = ma.track_id
             JOIN playlist_tracks pt ON pt.track_id = ma.track_id
             JOIN playlists p ON p.id = pt.playlist_id
+            WHERE ma.playlist_id IN (pt.playlist_id, 0)
+              AND ma.playlist_id = (
+                    SELECT MAX(ma2.playlist_id)
+                    FROM match_audits ma2
+                    WHERE ma2.track_id = ma.track_id
+                      AND ma2.platform = ma.platform
+                      AND ma2.playlist_id IN (pt.playlist_id, 0)
+                  )
         """
         conditions: list[str] = []
         params: list[object] = []
@@ -1472,7 +1865,7 @@ class Database:
             conditions.append("ma.platform = ?")
             params.append(platform)
         if conditions:
-            sql += " WHERE " + " AND ".join(conditions)
+            sql += " AND " + " AND ".join(conditions)
         sql += " ORDER BY p.name, t.artist, t.title"
 
         rows = self.conn.execute(sql, params).fetchall()
@@ -1504,6 +1897,11 @@ class Database:
         Tracks with no audit for the platform are treated as available (not
         excluded): a playlist that has never been reconciled is unaffected. The
         sequencer uses this to keep unavailable tracks from distorting the arc.
+
+        Audits are playlist-scoped: a playlist-specific audit
+        (``playlist_id = this playlist``) takes precedence over the legacy
+        global sentinel (``playlist_id = 0``), so one playlist's verdict never
+        leaks into another.
         """
         rows = self.conn.execute(
             """
@@ -1511,8 +1909,16 @@ class Database:
             FROM playlist_tracks pt
             JOIN match_audits ma
               ON ma.track_id = pt.track_id AND ma.platform = ?
+             AND ma.playlist_id IN (pt.playlist_id, 0)
             WHERE pt.playlist_id = ?
               AND ma.availability IN ('not_found', 'exact_unavailable')
+              AND ma.playlist_id = (
+                    SELECT MAX(ma2.playlist_id)
+                    FROM match_audits ma2
+                    WHERE ma2.track_id = pt.track_id
+                      AND ma2.platform = ma.platform
+                      AND ma2.playlist_id IN (pt.playlist_id, 0)
+                  )
             """,
             (platform, playlist_id),
         ).fetchall()
@@ -1611,6 +2017,13 @@ class Database:
 
     def _row_to_track(self, row: sqlite3.Row) -> Track:
         """Convert a DB row to a Track model."""
+        cols = set(row.keys())
+
+        def _get(name: str) -> Any:
+            return row[name] if name in cols else None
+
+        audio_modes_raw = _get("audio_modes")
+        provenance_raw = _get("field_provenance")
         return Track(
             id=row["id"],
             title=row["title"],
@@ -1624,7 +2037,771 @@ class Database:
             key=row["key"],
             themes=json.loads(row["themes"]) if row["themes"] else [],
             metadata=json.loads(row["metadata"]) if row["metadata"] else {},
+            album_artist=_get("album_artist"),
+            album_type=_get("album_type"),
+            label=_get("label"),
+            recording_date=_get("recording_date"),
+            release_date=_get("release_date"),
+            remaster_year=_get("remaster_year"),
+            audio_modes=json.loads(audio_modes_raw) if audio_modes_raw else [],
+            audio_quality=_get("audio_quality"),
+            tidal_version=_get("tidal_version"),
+            language=_get("language"),
+            composer=_get("composer"),
+            availability=_get("availability"),
+            quarantine_state=_get("quarantine_state"),
+            quarantine_reason=_get("quarantine_reason"),
+            field_provenance=json.loads(provenance_raw) if provenance_raw else {},
         )
+
+    def set_track_fields(
+        self, track_id: int, fields: dict[str, Any], source: str
+    ) -> None:
+        """Set first-class metadata columns on a track and record provenance.
+
+        ``fields`` keys must be in ``_TRACK_FIRST_CLASS_COLUMNS``. Each updated
+        field records ``{"source": source, "at": <utc iso>}`` in the
+        ``field_provenance`` JSON column (AC-D4), merged with any existing
+        provenance so successive enrichment passes accumulate rather than clobber.
+        List-valued columns (audio_modes) are JSON-serialized.
+        """
+        invalid = set(fields) - _TRACK_FIRST_CLASS_COLUMNS
+        if invalid:
+            raise ValueError(f"Cannot set track fields: {sorted(invalid)}")
+        if not fields:
+            return
+
+        row = self.conn.execute(
+            "SELECT field_provenance FROM tracks WHERE id = ?", (track_id,)
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"Track id not found: {track_id}")
+        provenance = json.loads(row["field_provenance"]) if row["field_provenance"] else {}
+
+        now = datetime.now(timezone.utc).isoformat()
+        set_clauses: list[str] = []
+        params: list[Any] = []
+        for column, value in fields.items():
+            # column is constrained to the allowlist above — safe to interpolate.
+            set_clauses.append(f"{column} = ?")
+            if column in _TRACK_JSON_FIELD_COLUMNS:
+                params.append(json.dumps(value) if value is not None else None)
+            else:
+                params.append(value)
+            provenance[column] = {"source": source, "at": now}
+        set_clauses.append("field_provenance = ?")
+        params.append(json.dumps(provenance))
+        set_clauses.append("updated_at = datetime('now')")
+
+        with self.conn:
+            self.conn.execute(
+                f"UPDATE tracks SET {', '.join(set_clauses)} WHERE id = ?",
+                (*params, track_id),
+            )
+
+    # --- resolution_queue (spec §4.1a: resumable enrich/resolve worker) ---
+
+    def enqueue_resolution(self, track_id: int, next_attempt_at: str | None = None) -> None:
+        """Enqueue a track for resolution/enrichment.
+
+        Idempotent per track. Re-enqueuing a track that previously QUARANTINED
+        reopens it for another attempt (a re-add/re-import is a user signal to
+        retry) and resets its counters; a ``pending`` or ``resolved`` row is left
+        untouched so already-resolved work is never needlessly redone.
+        """
+        with self.conn:
+            self.conn.execute(
+                """INSERT INTO resolution_queue (track_id, state, next_attempt_at)
+                   VALUES (?, 'pending', ?)
+                   ON CONFLICT(track_id) DO UPDATE SET
+                       state = 'pending',
+                       attempts = 0,
+                       transient_attempts = 0,
+                       last_error = NULL,
+                       next_attempt_at = excluded.next_attempt_at,
+                       updated_at = datetime('now')
+                   WHERE resolution_queue.state = 'quarantined'""",
+                (track_id, next_attempt_at),
+            )
+
+    def approve_resolution(self, track_id: int) -> None:
+        """Manually approve/release a quarantined track (AC-D6).
+
+        Clears the quarantine on BOTH sources of truth in one transaction: the
+        track's ``quarantine_state`` (which drives selectability) and the
+        ``resolution_queue`` row (which drives coverage). Marking the queue row
+        ``resolved`` keeps ``coverage_report`` consistent with
+        ``get_quarantined_tracks`` — an approved track counts as resolved, never
+        lingering as quarantined.
+        """
+        with self.conn:
+            self.conn.execute(
+                """UPDATE resolution_queue
+                   SET state = 'resolved', last_error = NULL,
+                       next_attempt_at = NULL, updated_at = datetime('now')
+                   WHERE track_id = ?""",
+                (track_id,),
+            )
+            self.conn.execute(
+                "UPDATE tracks SET quarantine_state = NULL, "
+                "quarantine_reason = NULL WHERE id = ?",
+                (track_id,),
+            )
+
+    def get_resolution_queue_state(self, track_id: int) -> str | None:
+        """Return the resolution_queue state for a track, or None if unqueued.
+
+        Distinct from :meth:`get_resolution_state` (which reads the track's
+        identity confidence): this reflects the worker's queue lifecycle
+        (pending/resolved/quarantined) that drives the drain loop and coverage.
+        """
+        row = self.conn.execute(
+            "SELECT state FROM resolution_queue WHERE track_id = ?", (track_id,)
+        ).fetchone()
+        return row["state"] if row else None
+
+    def next_pending_resolution(self) -> int | None:
+        """Return the next track_id whose resolution work is due, or None.
+
+        Due means state='pending' and (no backoff set, or backoff has elapsed).
+        Ordered by enqueue time so the queue drains FIFO.
+        """
+        row = self.conn.execute(
+            """SELECT track_id FROM resolution_queue
+               WHERE state = 'pending'
+                 AND (next_attempt_at IS NULL OR next_attempt_at <= datetime('now'))
+               ORDER BY enqueued_at
+               LIMIT 1"""
+        ).fetchone()
+        return int(row["track_id"]) if row else None
+
+    def set_resolution_state(
+        self,
+        track_id: int,
+        state: str,
+        *,
+        last_error: str | None = None,
+        next_attempt_at: str | None = None,
+        increment_attempts: bool = False,
+        increment_transient: bool = False,
+    ) -> None:
+        """Update a queued track's resolution state (and optional backoff/error).
+
+        ``increment_attempts`` bumps the hard-failure counter that drives the
+        quarantine ceiling. ``increment_transient`` bumps a SEPARATE counter used
+        only for rate-limit backoff — transient throttling must never consume the
+        quarantine budget (AC-D7).
+        """
+        set_clauses = ["state = ?", "last_error = ?", "updated_at = datetime('now')"]
+        params: list[Any] = [state, last_error]
+        if next_attempt_at is not None:
+            set_clauses.append("next_attempt_at = ?")
+            params.append(next_attempt_at)
+        if increment_attempts:
+            set_clauses.append("attempts = attempts + 1")
+        if increment_transient:
+            set_clauses.append("transient_attempts = transient_attempts + 1")
+        with self.conn:
+            self.conn.execute(
+                f"UPDATE resolution_queue SET {', '.join(set_clauses)} WHERE track_id = ?",
+                (*params, track_id),
+            )
+
+    # --- track_candidates (spec §4.1a: hydrated top-N platform candidates) ---
+
+    def upsert_track_candidate(
+        self,
+        track_id: int,
+        platform: str,
+        platform_track_id: str,
+        captured_metadata: dict[str, Any] | None,
+        discovery_rank: int = 0,
+    ) -> None:
+        """Insert or update a hydrated platform candidate for a track.
+
+        ``discovery_rank`` records the candidate's position in the discovery
+        order so :meth:`get_track_candidates` can return the set in the same
+        order the live gather produced — selection keeps input order for default
+        band-ties, so preserving it is what guarantees winner parity (AC-P4).
+        """
+        payload = json.dumps(captured_metadata) if captured_metadata is not None else None
+        with self.conn:
+            self.conn.execute(
+                """INSERT INTO track_candidates
+                       (track_id, platform, platform_track_id, captured_metadata,
+                        discovery_rank, fetched_at)
+                   VALUES (?, ?, ?, ?, ?, datetime('now'))
+                   ON CONFLICT(track_id, platform, platform_track_id)
+                   DO UPDATE SET captured_metadata = excluded.captured_metadata,
+                                 discovery_rank = excluded.discovery_rank,
+                                 fetched_at = excluded.fetched_at""",
+                (track_id, platform, platform_track_id, payload, discovery_rank),
+            )
+
+    def clear_track_candidates(self, track_id: int, platform: str | None = None) -> None:
+        """Remove persisted candidates for a track (optionally one platform).
+
+        Called before persisting a fresh candidate set so a refresh REPLACES the
+        prior set rather than leaving stale rows (and stale ranks) behind.
+        """
+        with self.conn:
+            if platform is None:
+                self.conn.execute(
+                    "DELETE FROM track_candidates WHERE track_id = ?", (track_id,)
+                )
+            else:
+                self.conn.execute(
+                    "DELETE FROM track_candidates WHERE track_id = ? AND platform = ?",
+                    (track_id, platform),
+                )
+
+    def get_track_candidates(
+        self, track_id: int, platform: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Return hydrated candidates for a track, optionally filtered by platform.
+
+        Ordered by ``discovery_rank`` (then a stable id tiebreak) so callers see
+        the persisted set in the original discovery order — the ordering
+        selection relies on for default band-tie parity (AC-P4).
+        """
+        query = "SELECT * FROM track_candidates WHERE track_id = ?"
+        params: list[Any] = [track_id]
+        if platform is not None:
+            query += " AND platform = ?"
+            params.append(platform)
+        query += " ORDER BY discovery_rank, platform, platform_track_id"
+        rows = self.conn.execute(query, params).fetchall()
+        result = []
+        for row in rows:
+            result.append(
+                {
+                    "track_id": row["track_id"],
+                    "platform": row["platform"],
+                    "platform_track_id": row["platform_track_id"],
+                    "captured_metadata": (
+                        json.loads(row["captured_metadata"])
+                        if row["captured_metadata"]
+                        else None
+                    ),
+                    "discovery_rank": row["discovery_rank"],
+                    "fetched_at": row["fetched_at"],
+                }
+            )
+        return result
+
+    def hydrate_identity_metadata(
+        self,
+        track_id: int,
+        *,
+        isrc: str | None = None,
+        duration_seconds: int | None = None,
+        album: str | None = None,
+        confidence_tier: str | None = None,
+        confidence_score: float | None = None,
+        mb_recording_id: str | None = None,
+        mb_release_group_id: str | None = None,
+        source: str = "resolver",
+    ) -> dict[str, Any]:
+        """Promote a resolved candidate's core identity metadata onto the track.
+
+        This is the single source of truth for turning a "resolved" verdict into
+        populated ``tracks`` columns (spec AC-D2). It is deliberately conservative:
+
+        * ``isrc``/``duration_seconds``/``album`` use **fill-NULL** semantics —
+          a field is written only when the track's current value is NULL/empty,
+          so a prior user edit or an earlier higher-signal hydration is never
+          clobbered. Idempotent: re-running promotes nothing new.
+        * ``confidence_tier``/``confidence_score`` and the MusicBrainz ids are the
+          resolver's to own, so they are updated whenever provided, and
+          ``resolved_at`` is stamped so the track drops out of ``find_unresolved``.
+
+        Provenance for each *newly filled* column is recorded in
+        ``field_provenance`` (AC-D4) so downstream passes can see the source.
+        Returns the map of columns actually written (empty when a no-op).
+        """
+        row = self.conn.execute(
+            "SELECT isrc, duration_seconds, album, field_provenance "
+            "FROM tracks WHERE id = ?",
+            (track_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"Track id not found: {track_id}")
+
+        written: dict[str, Any] = {}
+        # Fill-NULL only: never overwrite a value the track already holds.
+        if isrc and not row["isrc"]:
+            written["isrc"] = isrc
+        if duration_seconds and not row["duration_seconds"]:
+            written["duration_seconds"] = duration_seconds
+        if album and not row["album"]:
+            written["album"] = album
+            written["norm_album"] = normalize_title(album)
+
+        provenance = json.loads(row["field_provenance"]) if row["field_provenance"] else {}
+        now = datetime.now(timezone.utc).isoformat()
+        for column in written:
+            if column == "norm_album":
+                continue
+            provenance[column] = {"source": source, "at": now}
+
+        set_clauses: list[str] = [f"{col} = ?" for col in written]
+        params: list[Any] = list(written.values())
+
+        # Resolution owns identity confidence + MB linkage; refresh when provided.
+        if confidence_tier is not None:
+            set_clauses.append("confidence_tier = ?")
+            params.append(confidence_tier)
+        if confidence_score is not None:
+            set_clauses.append("confidence_score = ?")
+            params.append(confidence_score)
+        if mb_recording_id is not None:
+            set_clauses.append("mb_recording_id = ?")
+            params.append(mb_recording_id)
+        if mb_release_group_id is not None:
+            set_clauses.append("mb_release_group_id = ?")
+            params.append(mb_release_group_id)
+
+        if not set_clauses:
+            return {}
+
+        if confidence_tier is not None or confidence_score is not None:
+            set_clauses.append("resolved_at = ?")
+            params.append(now)
+        set_clauses.append("field_provenance = ?")
+        params.append(json.dumps(provenance))
+        set_clauses.append("updated_at = datetime('now')")
+
+        with self.conn:
+            self.conn.execute(
+                f"UPDATE tracks SET {', '.join(set_clauses)} WHERE id = ?",
+                (*params, track_id),
+            )
+        return written
+
+    # --- apply_journal (spec §7, AC-P4: reversible plan/apply) ---
+
+    def record_journal_entry(
+        self,
+        *,
+        plan_id: str,
+        table_name: str,
+        row_key: str,
+        op: str,
+        prior_value: dict[str, Any] | None,
+        new_value: dict[str, Any] | None,
+    ) -> None:
+        """Record one applied write so the plan can be reversed (AC-P4).
+
+        ``prior_value``/``new_value`` are JSON-serialized row snapshots; either
+        may be ``None`` (insert has no prior, delete has no new).
+        """
+        with self.conn:
+            self.conn.execute(
+                """INSERT INTO apply_journal
+                       (plan_id, table_name, row_key, op, prior_value, new_value)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (
+                    plan_id,
+                    table_name,
+                    row_key,
+                    op,
+                    json.dumps(prior_value) if prior_value is not None else None,
+                    json.dumps(new_value) if new_value is not None else None,
+                ),
+            )
+
+    def get_journal_entries(self, plan_id: str) -> list["JournalEntry"]:
+        """Return a plan's journal entries newest-first (reverse-replay order)."""
+        from tuneshift.planapply.models import JournalEntry
+
+        rows = self.conn.execute(
+            """SELECT id, plan_id, table_name, row_key, op,
+                      prior_value, new_value, applied_at
+               FROM apply_journal WHERE plan_id = ? ORDER BY id DESC""",
+            (plan_id,),
+        ).fetchall()
+        return [
+            JournalEntry(
+                id=row["id"],
+                plan_id=row["plan_id"],
+                table_name=row["table_name"],
+                row_key=row["row_key"],
+                op=row["op"],
+                prior_value=json.loads(row["prior_value"]) if row["prior_value"] else None,
+                new_value=json.loads(row["new_value"]) if row["new_value"] else None,
+                applied_at=row["applied_at"],
+            )
+            for row in rows
+        ]
+
+    def has_journal(self, plan_id: str) -> bool:
+        """Whether any journal entries exist for ``plan_id``."""
+        row = self.conn.execute(
+            "SELECT 1 FROM apply_journal WHERE plan_id = ? LIMIT 1", (plan_id,)
+        ).fetchone()
+        return row is not None
+
+    def clear_journal(self, plan_id: str) -> None:
+        """Remove a plan's journal entries (after a successful rollback)."""
+        with self.conn:
+            self.conn.execute(
+                "DELETE FROM apply_journal WHERE plan_id = ?", (plan_id,)
+            )
+
+    # --- coverage + quarantine surface (spec §4.4; AC-D1, AC-D6) ---
+
+    # Key first-class fields whose backfill coverage AC-D1 tracks. Fixed
+    # allowlist -> safe to interpolate into the fill-rate query below.
+    _COVERAGE_FIELDS = (
+        "isrc",
+        "duration_seconds",
+        "album_artist",
+        "album_type",
+        "label",
+        "release_date",
+        "audio_modes",
+    )
+
+    def coverage_report(self) -> dict[str, Any]:
+        """Return backfill coverage and per-field fill rates.
+
+        Coverage uses the AC-D1 denominator ``resolved / (resolved +
+        quarantined)`` — ``pending`` tracks are excluded so an in-progress
+        backfill does not depress the number, and quarantined tracks stay in the
+        denominator so quarantine cannot game the floor.
+        """
+        rows = self.conn.execute(
+            "SELECT state, COUNT(*) AS c FROM resolution_queue GROUP BY state"
+        ).fetchall()
+        counts = {row["state"]: row["c"] for row in rows}
+        resolved = counts.get("resolved", 0)
+        quarantined = counts.get("quarantined", 0)
+        pending = counts.get("pending", 0)
+        denom = resolved + quarantined
+        coverage = (resolved / denom) if denom else 0.0
+
+        total = self.conn.execute("SELECT COUNT(*) AS c FROM tracks").fetchone()["c"]
+        fill: dict[str, float] = {}
+        for column in self._COVERAGE_FIELDS:
+            if not total:
+                fill[column] = 0.0
+                continue
+            filled = self.conn.execute(
+                f"SELECT COUNT(*) AS c FROM tracks "
+                f"WHERE {column} IS NOT NULL AND {column} != ''"
+            ).fetchone()["c"]
+            fill[column] = filled / total
+
+        return {
+            "resolved": resolved,
+            "quarantined": quarantined,
+            "pending": pending,
+            "coverage": coverage,
+            "total_tracks": total,
+            "field_fill_rates": fill,
+        }
+
+    def get_quarantined_tracks(self) -> list[dict[str, Any]]:
+        """List quarantined tracks with machine-readable reasons (AC-D6)."""
+        rows = self.conn.execute(
+            """SELECT t.id, t.title, t.artist, t.quarantine_reason,
+                      rq.last_error
+               FROM tracks t
+               LEFT JOIN resolution_queue rq ON rq.track_id = t.id
+               WHERE t.quarantine_state IS NOT NULL
+               ORDER BY t.artist, t.title"""
+        ).fetchall()
+        return [
+            {
+                "track_id": row["id"],
+                "title": row["title"],
+                "artist": row["artist"],
+                "reason": row["quarantine_reason"] or row["last_error"] or "",
+            }
+            for row in rows
+        ]
+
+    def get_selectable_track_ids(self, playlist_id: int) -> list[int]:
+        """Return a playlist's track ids that are eligible for selection.
+
+        Quarantined tracks (``quarantine_state`` set) are excluded until they
+        are resolved or manually approved (AC-D6). Order is preserved.
+        """
+        rows = self.conn.execute(
+            """SELECT pt.track_id
+               FROM playlist_tracks pt
+               JOIN tracks t ON t.id = pt.track_id
+               WHERE pt.playlist_id = ?
+                 AND t.quarantine_state IS NULL
+               ORDER BY pt.position""",
+            (playlist_id,),
+        ).fetchall()
+        return [row[0] for row in rows]
+
+    # --- playlist_track_mappings (spec §4.1a: per-playlist release override) ---
+
+    def set_playlist_track_mapping(
+        self,
+        playlist_id: int,
+        track_id: int,
+        platform: str,
+        platform_track_id: str,
+        *,
+        source: str | None = None,
+        user_approved: bool = False,
+    ) -> None:
+        """Set the per-playlist platform release for a track (upsert on PK)."""
+        with self.conn:
+            self.conn.execute(
+                """INSERT INTO playlist_track_mappings
+                       (playlist_id, track_id, platform, platform_track_id,
+                        source, user_approved, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+                   ON CONFLICT(playlist_id, track_id, platform)
+                   DO UPDATE SET platform_track_id = excluded.platform_track_id,
+                                 source = excluded.source,
+                                 user_approved = excluded.user_approved,
+                                 updated_at = excluded.updated_at""",
+                (
+                    playlist_id,
+                    track_id,
+                    platform,
+                    platform_track_id,
+                    source,
+                    1 if user_approved else 0,
+                ),
+            )
+
+    def get_playlist_track_mapping(
+        self, playlist_id: int, track_id: int, platform: str
+    ) -> dict[str, Any] | None:
+        """Return the per-playlist release override for a track, or None."""
+        row = self.conn.execute(
+            """SELECT * FROM playlist_track_mappings
+               WHERE playlist_id = ? AND track_id = ? AND platform = ?""",
+            (playlist_id, track_id, platform),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "playlist_id": row["playlist_id"],
+            "track_id": row["track_id"],
+            "platform": row["platform"],
+            "platform_track_id": row["platform_track_id"],
+            "source": row["source"],
+            "user_approved": bool(row["user_approved"]),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+
+    # --- two-level identity-lock resolution (spec §8, AC-L1/L4) ---
+
+    def get_effective_lock(
+        self, track_id: int, platform: str, playlist_id: int | None = None
+    ) -> EffectiveLock | None:
+        """Resolve the effective identity lock for a track on a platform (AC-L1/L4).
+
+        A lock is two-level: a per-playlist override (``playlist_track_mappings``
+        with ``user_approved=1``) takes precedence over the library-wide default
+        lock (``platform_tracks`` with ``user_approved=1``). Returns ``None`` when
+        neither level is locked. The result carries the composite identity
+        (platform-id + ISRC + fingerprint) so selection can honour the lock even
+        after a platform re-ID.
+
+        Only an ``user_approved`` mapping is a lock; an auto-matched (unapproved)
+        per-playlist row does NOT shadow a global lock — it falls through to the
+        global default.
+        """
+        track = self.get_track(track_id)
+        isrc = track.isrc if track is not None else None
+        global_mapping = self.get_platform_mapping(track_id, platform)
+
+        if playlist_id is not None:
+            pl = self.get_playlist_track_mapping(playlist_id, track_id, platform)
+            if pl is not None and pl["user_approved"] and pl["platform_track_id"]:
+                # A per-playlist override reuses the global mapping's fingerprint
+                # only when it points at the SAME release; otherwise the override
+                # is a distinct release and carries no cached fingerprint yet.
+                fingerprint = None
+                if (
+                    global_mapping is not None
+                    and global_mapping.platform_track_id == pl["platform_track_id"]
+                ):
+                    fingerprint = global_mapping.fingerprint
+                return EffectiveLock(
+                    platform_track_id=pl["platform_track_id"],
+                    scope="playlist",
+                    isrc=isrc,
+                    fingerprint=fingerprint,
+                    status="matched",
+                )
+
+        if (
+            global_mapping is not None
+            and global_mapping.user_approved
+            and global_mapping.platform_track_id
+        ):
+            return EffectiveLock(
+                platform_track_id=global_mapping.platform_track_id,
+                scope="global",
+                isrc=isrc,
+                fingerprint=global_mapping.fingerprint,
+                status=global_mapping.status or "matched",
+                is_divergent=global_mapping.is_divergent,
+                divergence_note=global_mapping.divergence_note,
+                match_score=global_mapping.match_score,
+            )
+        return None
+
+    def get_global_locks(self) -> list[dict]:
+        """All library-wide default locks (``platform_tracks`` ``user_approved=1``).
+
+        Returns one dict per (track, platform) lock with the track title/artist
+        for display, ordered by track then platform. Drives ``locks list``
+        (AC-CLI4) at global scope.
+        """
+        rows = self.conn.execute(
+            """SELECT pt.track_id, pt.platform, pt.platform_track_id, pt.status,
+                      t.title, t.artist
+               FROM platform_tracks pt
+               JOIN tracks t ON t.id = pt.track_id
+               WHERE pt.user_approved = 1 AND pt.platform_track_id != ''
+               ORDER BY t.title, pt.platform"""
+        ).fetchall()
+        return [
+            {
+                "track_id": r["track_id"],
+                "platform": r["platform"],
+                "platform_track_id": r["platform_track_id"],
+                "status": r["status"],
+                "title": r["title"],
+                "artist": r["artist"],
+            }
+            for r in rows
+        ]
+
+    def get_playlist_locks(self, playlist_id: int) -> list[dict]:
+        """All per-playlist override locks for a playlist (``user_approved=1``).
+
+        Returns one dict per (track, platform) override lock. These win over the
+        global default for the playlist; ``locks list --playlist`` renders both
+        layers with precedence (AC-CLI4).
+        """
+        rows = self.conn.execute(
+            """SELECT m.track_id, m.platform, m.platform_track_id,
+                      t.title, t.artist
+               FROM playlist_track_mappings m
+               JOIN tracks t ON t.id = m.track_id
+               WHERE m.playlist_id = ? AND m.user_approved = 1
+                     AND m.platform_track_id != ''
+               ORDER BY t.title, m.platform""",
+            (playlist_id,),
+        ).fetchall()
+        return [
+            {
+                "track_id": r["track_id"],
+                "platform": r["platform"],
+                "platform_track_id": r["platform_track_id"],
+                "title": r["title"],
+                "artist": r["artist"],
+            }
+            for r in rows
+        ]
+
+    # --- playlist_track_prefs (spec §4.1a: most-specific preference scope) ---
+
+    def set_playlist_track_pref(
+        self,
+        playlist_id: int | None,
+        track_id: int,
+        criterion: str,
+        strength: str,
+        target: str | None = None,
+    ) -> None:
+        """Upsert one preference at the ``(playlist_id, track_id, criterion,
+        target)`` scope.
+
+        A ``None`` ``playlist_id`` denotes a playlist-agnostic per-track
+        preference (it applies to the track on every playlist). Keying on
+        ``target`` (not just ``criterion``) is what lets multiple targets coexist
+        on one axis — e.g. ``content avoid karaoke`` and ``content avoid
+        instrumental`` — instead of the second overwriting the first. Re-setting
+        the same ``(scope, criterion, target)`` replaces its strength in place.
+
+        Uses a NULL-safe delete-then-insert (``IS`` matches NULL) rather than
+        ``ON CONFLICT`` so the ``COALESCE`` unique index and the NULLable
+        ``playlist_id`` are both honoured.
+        """
+        with self.conn:
+            self.conn.execute(
+                """DELETE FROM playlist_track_prefs
+                   WHERE playlist_id IS ? AND track_id = ?
+                     AND criterion = ? AND target IS ?""",
+                (playlist_id, track_id, criterion, target),
+            )
+            self.conn.execute(
+                """INSERT INTO playlist_track_prefs
+                       (playlist_id, track_id, criterion, strength, target)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (playlist_id, track_id, criterion, strength, target),
+            )
+
+    def get_playlist_track_prefs(
+        self, playlist_id: int | None, track_id: int
+    ) -> list[dict[str, Any]]:
+        """Return the preferences stored at exactly this scope for the track.
+
+        ``playlist_id=None`` returns the playlist-agnostic per-track rows (see
+        :meth:`get_track_global_prefs`); a concrete id returns only that
+        playlist's own rows (NULL rows are a distinct scope and never leak in).
+        """
+        rows = self.conn.execute(
+            """SELECT criterion, strength, target FROM playlist_track_prefs
+               WHERE playlist_id IS ? AND track_id = ?
+               ORDER BY criterion, target""",
+            (playlist_id, track_id),
+        ).fetchall()
+        return [
+            {"criterion": r["criterion"], "strength": r["strength"], "target": r["target"]}
+            for r in rows
+        ]
+
+    def get_track_global_prefs(self, track_id: int) -> list[dict[str, Any]]:
+        """Return the playlist-agnostic per-track preferences (NULL playlist).
+
+        These apply to the track on every playlist and form the folded successor
+        to the retired ``tracks.preferences`` blob (FL3 decision #4).
+        """
+        return self.get_playlist_track_prefs(None, track_id)
+
+    def remove_playlist_track_pref(
+        self,
+        playlist_id: int | None,
+        track_id: int,
+        criterion: str,
+        target: str | None = None,
+    ) -> bool:
+        """Delete preference(s) for a criterion at the given scope.
+
+        With ``target`` omitted, every target on the criterion is removed; with a
+        ``target`` given, only that exact ``(criterion, target)`` row. Returns
+        True if at least one row was deleted. NULL-safe on ``playlist_id``.
+        """
+        with self.conn:
+            if target is None:
+                cur = self.conn.execute(
+                    """DELETE FROM playlist_track_prefs
+                       WHERE playlist_id IS ? AND track_id = ? AND criterion = ?""",
+                    (playlist_id, track_id, criterion),
+                )
+            else:
+                cur = self.conn.execute(
+                    """DELETE FROM playlist_track_prefs
+                       WHERE playlist_id IS ? AND track_id = ?
+                         AND criterion = ? AND target IS ?""",
+                    (playlist_id, track_id, criterion, target),
+                )
+        return cur.rowcount > 0
 
     def update_track_metadata(self, track_id: int, meta: dict) -> None:
         """Update a track's audio metadata fields from enrichment data."""
@@ -1821,19 +2998,6 @@ class Database:
         """Get the account-wide default preferences, or None if unset."""
         row = self.conn.execute(
             "SELECT value FROM schema_meta WHERE key = 'global_preferences'"
-        ).fetchone()
-        return json.loads(row[0]) if row and row[0] else None
-
-    def set_track_preferences(self, track_id: int, prefs: dict | None) -> None:
-        """Set the per-track preferences (highest-precedence override layer)."""
-        val = json.dumps(prefs) if prefs else None
-        self.conn.execute("UPDATE tracks SET preferences = ? WHERE id = ?", (val, track_id))
-        self.conn.commit()
-
-    def get_track_preferences(self, track_id: int) -> dict | None:
-        """Get the per-track preferences, or None if unset."""
-        row = self.conn.execute(
-            "SELECT preferences FROM tracks WHERE id = ?", (track_id,)
         ).fetchone()
         return json.loads(row[0]) if row and row[0] else None
 

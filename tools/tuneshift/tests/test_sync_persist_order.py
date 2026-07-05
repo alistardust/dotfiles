@@ -34,6 +34,7 @@ def _mock_client() -> MagicMock:
     client.find_playlist_by_name.return_value = PlaylistInfo(
         platform_id="tidal-pl-123", name="Test Playlist", num_tracks=3,
     )
+    client.get_playlist_tracks.side_effect = TypeError("no live remote in test")
     client.replace_playlist_tracks.return_value = None
     return client
 
@@ -42,15 +43,22 @@ def _playlist_id(db: Database) -> int:
     return db.find_playlist_by_name("Test Playlist").id
 
 
+def _sync_args(**overrides: object) -> Namespace:
+    base = dict(
+        playlist="Test Playlist", platform="tidal", all=False,
+        reconcile=False, apply=True, interactive=False,
+    )
+    base.update(overrides)
+    return Namespace(**base)
+
+
 class TestSyncPersistsOnlyAfterPush:
-    @patch("tuneshift.commands.sync_cmd.reconcile_track")
-    @patch("tuneshift.commands.ingest_cmd._load_client")
-    def test_not_synced_before_any_push(self, mock_load, mock_reconcile, tmp_db: Path):
+    def test_not_synced_before_any_push(self, tmp_db: Path):
         """A freshly linked playlist has never been synced."""
         db = _setup_db_with_playlist(tmp_db)
         assert db.get_last_synced(_playlist_id(db), "tidal") is None
 
-    @patch("tuneshift.commands.sync_cmd.reconcile_track")
+    @patch("tuneshift.planapply.sync.reconcile_track")
     @patch("tuneshift.commands.ingest_cmd._load_client")
     def test_marked_synced_after_successful_push(self, mock_load, mock_reconcile, tmp_db: Path):
         db = _setup_db_with_playlist(tmp_db)
@@ -59,15 +67,13 @@ class TestSyncPersistsOnlyAfterPush:
         mock_reconcile.return_value = ReconcileResult(
             platform_track_id="tidal-track-1", score=95, confidence="high",
         )
-        args = Namespace(playlist="Test Playlist", platform="tidal", all=False,
-                         reconcile=False, auto=False)
-        result = handle_sync(args, db)
+        result = handle_sync(_sync_args(), db)
 
         assert result == 0
         client.replace_playlist_tracks.assert_called_once()
         assert db.get_last_synced(_playlist_id(db), "tidal") is not None
 
-    @patch("tuneshift.commands.sync_cmd.reconcile_track")
+    @patch("tuneshift.planapply.sync.reconcile_track")
     @patch("tuneshift.commands.ingest_cmd._load_client")
     def test_push_failure_leaves_state_pending(self, mock_load, mock_reconcile, tmp_db: Path):
         db = _setup_db_with_playlist(tmp_db)
@@ -77,15 +83,13 @@ class TestSyncPersistsOnlyAfterPush:
         mock_reconcile.return_value = ReconcileResult(
             platform_track_id="tidal-track-1", score=95, confidence="high",
         )
-        args = Namespace(playlist="Test Playlist", platform="tidal", all=False,
-                         reconcile=False, auto=False)
-        result = handle_sync(args, db)
+        result = handle_sync(_sync_args(), db)
 
         assert result == 1
         # Push failed, so the playlist must NOT be recorded as synced.
         assert db.get_last_synced(_playlist_id(db), "tidal") is None
 
-    @patch("tuneshift.commands.sync_cmd.reconcile_track")
+    @patch("tuneshift.planapply.sync.reconcile_track")
     @patch("tuneshift.commands.ingest_cmd._load_client")
     def test_nothing_to_push_does_not_mark_synced(self, mock_load, mock_reconcile, tmp_db: Path):
         """If every track is unavailable there is no push, so no synced state."""
@@ -93,9 +97,7 @@ class TestSyncPersistsOnlyAfterPush:
         client = _mock_client()
         mock_load.return_value = client
         mock_reconcile.return_value = ReconcileResult(confidence="not_found")
-        args = Namespace(playlist="Test Playlist", platform="tidal", all=False,
-                         reconcile=False, auto=False)
-        result = handle_sync(args, db)
+        result = handle_sync(_sync_args(), db)
 
         assert result == 0
         assert db.get_last_synced(_playlist_id(db), "tidal") is None

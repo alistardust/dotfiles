@@ -1,0 +1,69 @@
+# Committed token whitelist for confidence-gated hard filters (AC-C3).
+#
+# Only tokens listed here are trusted to drive a HARD filter (require/forbid)
+# when they are parsed from free text (e.g. a release title) rather than a
+# structured metadata field. Every entry is an UNAMBIGUOUS, well-understood
+# version marker. A token NOT on this list is treated as ambiguous: a hard
+# verdict derived from it is demoted to a soft signal (it can nudge the score
+# but never eliminate a candidate).
+#
+# Grouping is by AXIS. Two tokens sharing an axis are mutually-exclusive
+# alternatives; if a single value carries more than one token from the same
+# axis (e.g. a title reading "Mono & Stereo Mix"), that value is ambiguous and
+# its hard verdict is likewise demoted.
+#
+# Deliberately EXCLUDED (ambiguous edition/marketing markers, handled as soft
+# preferences only): deluxe, anniversary, special, expanded, bonus, edition,
+# collectors, taylors_version, super, ultimate, complete, definitive.
+#
+# Tokens are matched after folding to lowercase alphanumerics
+# (e.g. "Dolby Atmos" -> "dolbyatmos"), with the aliases below normalising
+# surface variants onto a canonical token.
+
+axes:
+  mix:
+    - mono
+    - stereo
+  spatial:
+    - dolby_atmos
+    - sony_360
+  fidelity:
+    - hires
+    - lossless
+    - mqa
+  performance:
+    - live
+    - studio
+    - acoustic
+    - unplugged
+  content:
+    - instrumental
+    - karaoke
+    - acappella
+    - clean
+    - explicit
+  edit:
+    - radio_edit
+    - extended
+    - single_version
+    - album_version
+  production:
+    - remaster
+    - remix
+    - demo
+
+# Surface-form variants folded onto a canonical token above. Keys and values
+# are compared after the same lowercase-alphanumeric folding.
+aliases:
+  atmos: dolby_atmos
+  dolbyatmos: dolby_atmos
+  360ra: sony_360
+  sony360realityaudio: sony_360
+  hi_res: hires
+  hires_lossless: hires
+  acapella: acappella
+  radioedit: radio_edit
+  singleversion: single_version
+  albumversion: album_version
+  remastered: remaster
+  remixed: remix

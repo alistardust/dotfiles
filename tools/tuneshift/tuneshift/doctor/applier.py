@@ -183,6 +183,10 @@ def _reenrich_track(db: Database, client, item: PlanItem, stats: RetryStats) -> 
             db.upsert_track_platform_metadata(
                 item.track_id, PLATFORM, pid, **report["metadata"]
             )
+            # AC10: derive the atmos-available tag from the freshly captured
+            # metadata (the upsert alone never wrote tags -- that gap is why an
+            # Atmos-mapped track stayed untagged after doctor --apply).
+            platform_metadata.derive_tags(db, item.track_id)
     except Exception:  # noqa: BLE001 - enrichment is non-critical
         pass
 

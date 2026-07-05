@@ -46,8 +46,8 @@ def test_lock_not_verified_by_default(tmp_db: Path) -> None:
     client.get_track.assert_not_called()
 
 
-def test_lock_alive_kept_and_fingerprint_backfilled(tmp_db: Path) -> None:
-    """A live locked id is kept; a missing fingerprint is backfilled for future heals."""
+def test_lock_alive_kept_verify_is_pure(tmp_db: Path) -> None:
+    """A live locked id is kept, and verify writes nothing (self-heal is routed)."""
     db = Database(tmp_db)
     track_id = _seed_locked(db, fingerprint=None)
     client = _client()
@@ -61,17 +61,21 @@ def test_lock_alive_kept_and_fingerprint_backfilled(tmp_db: Path) -> None:
     assert result.platform_track_id == "old123"
     assert result.reason_code == "locked"
     assert result.availability == "exact_available"
+    # Verify is a pure query: no inline fingerprint backfill (that's routed now).
     stored = db.get_platform_mapping(track_id, "tidal")
-    assert stored.fingerprint is not None  # backfilled
+    assert stored.fingerprint is None
 
 
-def test_lock_dead_heals_to_equivalent(tmp_db: Path) -> None:
-    """A dead locked id re-binds to an equivalent live id for the SAME recording."""
+def test_lock_dead_reported_held_no_inline_swap(tmp_db: Path) -> None:
+    """A dead locked id is reported HELD; verify never swaps or writes inline.
+
+    The actual re-bind to an equivalent recording is a routed plan
+    (planapply.heal.build_heal_plan), covered in tests/planapply/test_heal.py.
+    """
     db = Database(tmp_db)
     track_id = _seed_locked(db, pid="dead999", duration=195)
     client = _client()
     client.get_track.return_value = None  # locked id is gone
-    # Search surfaces the same recording under a new id.
     client.search_track.return_value = [TrackResult(
         platform_id="new456", title="Heroes", artist="David Bowie",
         album="Heroes", duration_seconds=195, available=True,
@@ -79,22 +83,21 @@ def test_lock_dead_heals_to_equivalent(tmp_db: Path) -> None:
 
     result = reconcile_track(db, track_id, client, verify_locked=True)
 
-    assert result.platform_track_id == "new456"
-    assert result.reason_code == "lock_healed"
-    assert result.availability == "exact_available"
+    assert result.availability == "exact_unavailable"
+    assert result.reason_code == "lock_held"
+    # DB is untouched — no silent swap, no status flip.
     stored = db.get_platform_mapping(track_id, "tidal")
-    assert stored.platform_track_id == "new456"
-    assert stored.user_approved is True  # still locked
-    assert stored.fingerprint is not None
+    assert stored.platform_track_id == "dead999"
+    assert stored.status == "matched"
+    assert stored.user_approved is True
 
 
-def test_lock_dead_no_equivalent_is_held(tmp_db: Path) -> None:
-    """When only a DIFFERENT recording is available, the lock is held, not swapped."""
+def test_lock_dead_no_equivalent_reported_held(tmp_db: Path) -> None:
+    """A dead lock is reported held; verify still writes nothing."""
     db = Database(tmp_db)
     track_id = _seed_locked(db, pid="dead999", duration=195)
     client = _client()
     client.get_track.return_value = None
-    # Only a live version exists — a different recording class.
     client.search_track.return_value = [TrackResult(
         platform_id="live777", title="Heroes (Live)", artist="David Bowie",
         album="Stage", duration_seconds=360, available=True,
@@ -105,28 +108,10 @@ def test_lock_dead_no_equivalent_is_held(tmp_db: Path) -> None:
     assert result.availability == "exact_unavailable"
     assert result.reason_code == "lock_held"
     stored = db.get_platform_mapping(track_id, "tidal")
-    # Never swapped to the different recording.
+    # Never swapped, never mutated inline.
     assert stored.platform_track_id == "dead999"
-    assert stored.status == "unavailable"
+    assert stored.status == "matched"
     assert stored.user_approved is True
-
-
-def test_lock_dead_heals_via_isrc(tmp_db: Path) -> None:
-    """ISRC equivalence heals even when title/duration differ cosmetically."""
-    db = Database(tmp_db)
-    track_id = _seed_locked(db, pid="dead999", isrc="GBAYE7700012", duration=195)
-    client = _client()
-    client.get_track.return_value = None
-    client.search_track.return_value = [TrackResult(
-        platform_id="new456", title="Heroes (2017 Remaster)", artist="David Bowie",
-        album="Heroes (2017 Remaster)", duration_seconds=372,
-        isrc="GBAYE7700012", available=True,
-    )]
-
-    result = reconcile_track(db, track_id, client, verify_locked=True)
-
-    assert result.platform_track_id == "new456"
-    assert result.reason_code == "lock_healed"
 
 
 def test_lock_liveness_undeterminable_trusts_lock(tmp_db: Path) -> None:

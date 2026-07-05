@@ -1,7 +1,19 @@
-"""Map command: manually link a track to a platform ID."""
+"""Map command: manually link a track to a platform ID.
+
+``map`` writes the GLOBAL platform mapping directly (with optional ``--verify``
+metadata capture) and ``unmap`` deletes it. For a REVIEWABLE, journaled, and
+reversible identity lock — at global OR per-playlist scope — prefer the routed
+``lock`` / ``unlock`` commands (see ``commands/lock_cmd.py``), which produce a
+plan by default (§7.1 mutation routing, AC-L1/AC-P1). ``map``/``unmap`` remain
+the immediate manual path (``map`` additionally captures platform metadata via
+``--verify``).
+"""
+import logging
 import sys
 
 from tuneshift.db import Database
+
+logger = logging.getLogger(__name__)
 
 
 def _load_client(platform: str):
@@ -69,6 +81,24 @@ def handle_map(args, db: Database) -> int:
         match_score=100,
     )
     print(f'Mapped "{track.title}" -> {platform}:{platform_id}')
+
+    # AC10: a new Tidal mapping auto-captures Atmos/catalog metadata + derives
+    # the atmos-available tag. Reuse the --verify client if present; otherwise
+    # load one best-effort (a fresh manual map should still capture). No login
+    # or a non-Tidal platform simply skips -- the mapping itself is unaffected.
+    if platform == "tidal":
+        from tuneshift.library.enrichment import capture_tidal_catalog
+
+        try:
+            catalog_client = client if args.verify else _load_client(platform)
+            if catalog_client is not None and catalog_client.load_session():
+                tags = capture_tidal_catalog(
+                    db, track.id, platform, platform_id, client=catalog_client
+                )
+                if "atmos-available" in tags:
+                    print("  Captured catalog metadata (Atmos available)")
+        except Exception:  # noqa: BLE001 - capture is best-effort; mapping already succeeded
+            logger.warning("catalog capture after mapping failed", exc_info=True)
     return 0
 
 

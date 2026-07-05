@@ -87,29 +87,32 @@ class TestHandleAdd:
         assert len(tracks) == 4
         assert tracks[3].title == "Song 3"
 
-    def test_syncs_to_linked_platform(self, tmp_path: Path) -> None:
+    def test_add_enqueues_not_pushes(self, tmp_path: Path) -> None:
+        """Library-first (AC-D7): add enqueues resolution and does NOT push
+        remotely inline."""
         db = Database(tmp_path / "test.db")
         pid = db.create_playlist("Synced")
         db.link_platform_playlist(pid, "tidal", "tidal-pl-123")
 
         mock_client = MagicMock()
         mock_client.load_session.return_value = True
-        mock_client.search_track.return_value = [{"id": "t-999", "title": "KQ", "artist": "Queen"}]
 
-        mock_reconcile = MagicMock()
-        mock_reconcile.return_value = MagicMock(platform_track_id="t-999", audit=None)
-
-        with patch("tuneshift.commands.ingest_cmd._load_client", return_value=mock_client), \
-             patch("tuneshift.reconcile.reconcile_track", mock_reconcile):
+        with patch("tuneshift.commands.ingest_cmd._load_client", return_value=mock_client):
             args = SimpleNamespace(
                 playlist="Synced",
                 title="Killer Queen",
                 artist="Queen",
                 album=None,
             )
-            handle_add(args, db)
+            result = handle_add(args, db)
 
-        mock_client.add_tracks.assert_called_once_with("tidal-pl-123", ["t-999"])
+        assert result == 0
+        mock_client.add_tracks.assert_not_called()
+        track = db.find_track("Killer Queen", "Queen", None)
+        row = db.conn.execute(
+            "SELECT state FROM resolution_queue WHERE track_id=?", (track.id,)
+        ).fetchone()
+        assert row is not None and row["state"] == "pending"
 
 
 def test_add_with_replace_swaps_track(tmp_path: Path) -> None:

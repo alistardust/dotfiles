@@ -118,13 +118,13 @@ def test_reconcile_not_found(tmp_db: Path) -> None:
 
 
 def test_reconcile_force_bypasses_cache(tmp_db: Path) -> None:
-    """force=True ignores cached mapping."""
+    """force=True ignores a cached (non-locked) mapping and re-searches."""
     db = Database(tmp_db)
     track_id = db.add_track(Track(title="Heroes", artist="David Bowie", album="Heroes"))
     db.upsert_platform_mapping(PlatformMapping(
         track_id=track_id, platform="spotify",
         platform_track_id="old_id", match_score=80,
-        status="matched", user_approved=True,
+        status="matched", user_approved=False,
     ))
 
     client = MagicMock()
@@ -141,6 +141,35 @@ def test_reconcile_force_bypasses_cache(tmp_db: Path) -> None:
     result = reconcile_track(db, track_id, client, force=True)
     assert result.from_cache is False
     assert result.platform_track_id == "new_id"
+
+
+def test_reconcile_force_still_honours_global_lock(tmp_db: Path) -> None:
+    """force=True re-searches but a global lock is never re-picked away (AC-L2)."""
+    db = Database(tmp_db)
+    track_id = db.add_track(Track(title="Heroes", artist="David Bowie", album="Heroes"))
+    db.upsert_platform_mapping(PlatformMapping(
+        track_id=track_id, platform="spotify",
+        platform_track_id="locked_id", match_score=90,
+        status="matched", user_approved=True,
+    ))
+
+    client = MagicMock()
+    client.platform_name = "spotify"
+    client.search_isrc.return_value = None
+    # Search surfaces both the locked release and a "better" alternative.
+    client.search_track.return_value = [
+        TrackResult(platform_id="locked_id", title="Heroes", artist="David Bowie",
+                    album="Heroes", available=True),
+        TrackResult(platform_id="alt_id", title="Heroes", artist="David Bowie",
+                    album="Heroes (2017 Remaster)", available=True),
+    ]
+    client.search_album.return_value = []
+    client.get_album_tracks.return_value = []
+    client.search_artist.return_value = []
+    client.get_artist_albums.return_value = []
+
+    result = reconcile_track(db, track_id, client, force=True)
+    assert result.platform_track_id == "locked_id"
 
 
 class TestReconcileWithIdentity:

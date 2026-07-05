@@ -17,6 +17,7 @@ from tuneshift.matching.normalize import base_title, strip_version_markers
 from tuneshift.matching.normalize import (
     artist_set_overlap,
     fold_accents,
+    split_artist_roles,
     split_artists,
 )
 
@@ -110,6 +111,32 @@ class TestMultiArtistSetOverlap:
 
     def test_single_artist_overlap(self):
         assert artist_set_overlap("Adele", "Adele") == 1.0
+
+
+class TestArtistRoles:
+    """split_artist_roles separates main from featured credits (M5)."""
+
+    def test_no_feature_all_main(self):
+        main, featured = split_artist_roles("Jay-Z & Alicia Keys")
+        assert main == {"jay-z", "alicia keys"}
+        assert featured == set()
+
+    def test_feat_marker_splits_roles(self):
+        main, featured = split_artist_roles("Eminem feat. Rihanna")
+        assert main == {"eminem"}
+        assert featured == {"rihanna"}
+
+    def test_co_billed_mains_stay_main(self):
+        # "with"/"&" join co-billed MAIN artists; only feat/ft/featuring is a role
+        # boundary.
+        main, featured = split_artist_roles("Calvin Harris & Dua Lipa")
+        assert main == {"calvin harris", "dua lipa"}
+        assert featured == set()
+
+    def test_featured_never_also_main(self):
+        main, featured = split_artist_roles("A feat. A")
+        assert main == {"a"}
+        assert featured == set()
 
 
 class TestBaseTitle:
