@@ -18,3 +18,12 @@ dist/
 build/
 .idea/
 .vscode/
+
+# Python test/coverage artifacts
+.coverage
+.coverage.*
+.pytest_cache/
+
+# SQLite WAL sidecars (tuneshift.db itself is tracked)
+*.db-shm
+*.db-wal
