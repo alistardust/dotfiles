@@ -49,15 +49,19 @@ changes matching behavior. Documented as a known limit in
 
 These are sometimes proposed but are deliberate design decisions **not** to build.
 
-### Do not consolidate the four normalizers
+### Do not unify the four normalizers into one output
 TuneShift has four normalization functions serving three distinct concerns
 (comparison keys in `matching`, stored/indexed identity keys in `db`, external
-search query strings in `identity`, and concept tokenization in `composer`). They
-must **not** be collapsed into shared primitives: their outputs mean different
-things, some are persisted and indexed (collapsing them would require a reindex
-migration and could merge rows the UNIQUE constraint keeps distinct, e.g.
-accented vs unaccented titles). This separation is enforced by drift-guard contract
-tests (`tests/matching/test_normalizer_contracts.py`).
+search query strings in `identity`, and concept tokenization in `composer`). FL4
+already refactored them to build on shared low-level primitives (`fold_accents`,
+`strip_version_markers`, and friends), so the code is not duplicated. The non-goal is the
+next step some propose: unifying them onto a **single normalization path** so they
+all emit **identical output**. They must **not** produce identical output, because
+their results mean different things and some are persisted and indexed. Collapsing
+them would require a reindex migration and could merge rows the UNIQUE constraint
+keeps distinct (for example accented vs unaccented titles). Each normalizer's
+distinct output contract is pinned by drift-guard tests
+(`tests/matching/test_normalizer_contracts.py`).
 
 ### Matching limits that stay surfaced, not auto-resolved
 Classical/long-form disambiguation, acoustic fingerprinting, re-record vs original
