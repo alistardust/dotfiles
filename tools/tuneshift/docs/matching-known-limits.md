@@ -1,10 +1,10 @@
-# Matching — Known Limits
+# Matching: Known Limits
 
 The matching engine is built to be best-in-class: high recall, correct
 version by default, order-independent, and durable. This document is the
 honest register of what it deliberately does **not** attempt to solve
 automatically, and how each limit surfaces to the user. Each entry states the
-limit, why it exists, and the observable behaviour — so a "we can't be sure
+limit, why it exists, and the observable behaviour: so a "we can't be sure
 here" is always a visible review item, never a silent wrong guess.
 
 ## 1. Classical / long-form disambiguation
@@ -15,9 +15,9 @@ I. Allegro con brio" under two different conductors is treated as the same
 piece by title/artist similarity.
 
 **Why.** Reliable classical disambiguation needs a structured work/recording
-graph (composer → work → movement → performance) that the consumer streaming
+graph (composer -> work -> movement -> performance) that the consumer streaming
 APIs do not expose consistently. Guessing between performances would produce
-confident wrong matches — exactly the failure mode this engine exists to
+confident wrong matches: exactly the failure mode this engine exists to
 avoid.
 
 **Behaviour.** When multiple credible performances exist, the candidates land
@@ -54,7 +54,8 @@ recall one.
 **Behaviour.** Both the original and the re-record are legitimate results.
 When the requested master is not the obvious best available, the alternative
 is surfaced for review, and the user can express a durable preference
-(`version.prefer` / `version.avoid`) and lock the chosen master so re-syncs
+(`prefs set performance prefer ...` / `avoid`, see [Preferences](preferences.md))
+and lock the chosen master so re-syncs
 never overwrite it.
 
 ## 4. Multi-disc / disc-and-track ordering
@@ -78,11 +79,11 @@ engine claims to reconstruct.
 Tidal (`allowStreaming`) and Spotify (`is_playable` / `available_markets`)
 expose a per-track availability signal, so a found-but-blocked track can be
 classified `exact_unavailable`. YouTube Music does **not** expose a
-pre-add availability signal — unavailability is only discovered at add time
+pre-add availability signal: unavailability is only discovered at add time
 (e.g. a 404 for a removed video).
 
 **Why.** The engine only classifies what the platform actually tells it.
-`TrackResult.available = None` means "unknown", never "blocked" — inventing a
+`TrackResult.available = None` means "unknown", never "blocked": inventing a
 blocked verdict from silence would be a confident wrong guess.
 
 **Behaviour.** On a platform without an availability signal, a track that
@@ -97,7 +98,7 @@ arc and appended at the end (never dropped).
 ## 6. Differing trailing descriptive subtitles (same core title)
 
 **Limit.** Some tracks are the *same recording* released with a different
-*trailing descriptive subtitle* — a parenthetical phrase that is neither a
+*trailing descriptive subtitle*: a parenthetical phrase that is neither a
 version marker nor part of the core song name (e.g. `Song Name (One Phrase)`
 vs. `Song Name (Another Phrase)`). A naive title comparison scores these as
 divergent and can drop a correct match below the auto threshold.
@@ -113,11 +114,11 @@ the version-stripped titles are scored as-is, then again on their *base titles*
 the two is kept minus a small residual penalty. This rescues same-core retitles
 while keeping a gap below an identical-title match, so two genuinely different
 songs that merely share a base title (e.g. two unrelated tracks both titled
-`Untitled (…)`) are **not** merged — album, artist, duration and ISRC remain the
+`Untitled (...)`) are **not** merged; album, artist, duration and ISRC remain the
 tiebreakers. Only *trailing* parentheticals are collapsed; integral leading
 parentheticals ("(You Drive Me) Crazy") are preserved.
 
-**Related — tempo-altered edits.** "Sped up", "slowed"/"slowed down" and
+**Related: tempo-altered edits.** "Sped up", "slowed"/"slowed down" and
 "nightcore" edits are a distinct recording class (`RecordingClass.ALTERED`), not
 a descriptive subtitle. A studio source therefore **rejects** a tempo-altered
 candidate (it is a different recording), and the marker is handled on the version
@@ -126,7 +127,7 @@ axis rather than being collapsed into the base title.
 ## 7. Regional core-text retitles
 
 **Limit.** When a region ships the *same recording* under a title whose **core
-text differs** — not just the trailing subtitle — the base-title blend in §6
+text differs** (not just the trailing subtitle), the base-title blend in section 6
 cannot bridge it, because the words being compared genuinely differ. The
 motivating real case is Christina Aguilera's "Come On Over Baby (All I Wanna
 Do)" (US canonical) vs. the international Tidal title "Come On Over (All I Want
@@ -139,7 +140,7 @@ picks the correct Christina recording over near-title collisions (e.g. Shania
 Twain's unrelated "Come On Over", which artist and duration separate) but at
 **low confidence**, so the track **surfaces for review** (`triage`) instead of
 being auto-matched or silently mismatched. A shared ISRC across the regional
-releases — when the platform exposes one — is the reliable bridge; ISRC-based
+releases (when the platform exposes one) is the reliable bridge; ISRC-based
 title bypass is the intended future fix and is not built yet.
 
 ---

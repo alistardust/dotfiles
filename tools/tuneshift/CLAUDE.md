@@ -38,34 +38,66 @@ and it is a one-time import operation.
 The separation between committed data (DB) and uncommitted secrets (tokens) is
 load-bearing.
 
-**Schema migrations are in-DB.** The `user_version` pragma tracks schema version.
-Migrations run automatically on open. New migrations go in `db.py:_migrate_schema()`.
+**Schema migrations are in-DB.** The schema version is stored in the `schema_meta`
+table (key `version`), not the `user_version` pragma. Migrations run automatically
+on open; new migrations go in `db.py:_migrate_schema()`.
 
 ### Module Layout
 
+`matching` is a package; `reconcile.py` and `models.py` remain flat modules.
+
 | Module | Responsibility |
 |--------|---------------|
-| `db.py` | SQLite schema, migrations, all persistence |
+| `db.py` | SQLite schema, migrations, all persistence (schema version stored in `schema_meta`) |
 | `cli.py` | Argument parsing, command dispatch |
-| `commands/` | One file per CLI subcommand |
-| `platforms/` | Platform API clients (tidal, spotify, ytmusic) |
-| `sequencer/` | Track ordering algorithm (energy arcs, pinning) |
-| `identity/` | Cross-platform track identity resolution |
-| `matching.py` | Fuzzy title/artist matching and version scoring |
-| `reconcile.py` | Find platform equivalents for canonical tracks |
 | `models.py` | Shared dataclasses |
+| `reconcile.py` | Track reconciliation: match canonical tracks to platform IDs (wraps `matching/`) |
+| `commands/` | One file per CLI subcommand (~35 modules) |
+| `platforms/` | Platform clients + `auth`, `protocol`, `rate_limiter` |
+| `matching/` | Version-selection engine (`registry`, `criteria`, `engine`, `selection`, `version`, `confidence`, `precedence`, `tiebreak`, `preferences`, `normalize`, `aliases`, `similarity`, `review`, `audit`) |
+| `identity/` | Cross-platform identity resolution + locks (`resolver`, `matching`, `confidence`, `models`) |
+| `library/` | Library-first resolution worker + enrichment glue (`worker`, `resolvers`, `enrichment`) |
+| `enrichment/` | Metadata enrichment (`pipeline`, `platform_metadata`, `audio_features`, `genius`, `lastfm`, `retry`) |
+| `planapply/` | Plan model + journaled apply engine (`models`, `plan`, `apply`, `builders`, `sync`, `rematch`, `migrate`, `heal`) |
+| `sequencer/` | Track ordering (energy arcs, pinning, 2-opt, narrative) |
+| `composer/` | Narrative-driven playlist composition |
+| `curation/` | Playlist trim / gap-fill / scoring |
+| `doctor/` | Mapping-issue scan + repair |
+
+### Feature guides
+
+Deep documentation for each major subsystem lives in `docs/`:
+
+| Guide | Covers |
+|-------|--------|
+| `docs/version-selection.md` | Criteria axes, strengths, source-aware verdicts, confidence tiers, tie-breaks, ambiguity |
+| `docs/preferences.md` | Typed `(criterion, strength, target)` prefs, scopes, precedence, multi-target |
+| `docs/locks.md` | Two-level composite locks, precedence, self-heal, downgrade flagging |
+| `docs/plan-apply.md` | Plan model, journaled apply engine, rollback, routing |
+| `docs/resolution-enrichment.md` | Library-first queue, worker, candidate persistence, coverage/quarantine, enrichment |
+| `docs/CLI.md` | Complete flag-by-flag command reference |
+| `docs/matching-known-limits.md` | What matching deliberately does not auto-resolve |
 
 ### DB Schema (key tables)
 
 | Table | Purpose |
 |-------|---------|
-| `tracks` | Canonical track metadata (title, artist, album, ISRC, energy, etc.) |
+| `tracks` | Canonical track metadata (title, artist, album, ISRC, energy, quarantine_state) |
 | `playlists` | Playlist definitions (name, auto_reorder flag, reorder_arc) |
 | `playlist_tracks` | Track membership and position (playlist_id, track_id, position) |
 | `playlist_pins` | Sequencer constraints (opener, closer, position, anchor groups) |
-| `platform_tracks` | Platform-specific track IDs and match metadata |
+| `platform_tracks` | Platform-specific track IDs and match metadata (global lock: `user_approved=1`) |
 | `platform_playlists` | Links canonical playlists to platform playlist IDs |
+| `playlist_track_mappings` | Per-playlist track-to-platform mappings (playlist-override lock: `user_approved=1`) |
+| `track_platform_metadata` | Native platform metadata (Atmos/quality, release year, genres) |
+| `resolution_queue` | Library-first resolution work queue (state, attempts, transient_attempts) |
+| `track_candidates` | Persisted top-N discovery candidates per track (discovery_rank) |
+| `match_audits` | Per-(playlist,track,platform) match decision + reason_code |
+| `playlist_track_prefs` | Typed version prefs; unique per `(scope, criterion, target)` (multi-target) |
+| `apply_journal` | Forward-only journal of applied plan changes (for rollback) |
+| `artist_aliases` | Artist equivalence classes (Ke$ha / Kesha) |
 | `evidence` | Identity resolution evidence from MusicBrainz/Discogs |
+| `collections` / `tidal_folders` | Playlist grouping + Tidal folder mirror |
 | `sync_log` | Sync history |
 
 ## Pin System
@@ -89,7 +121,7 @@ distribution) protects all pinned positions.
 The reconcile pipeline selects platform tracks in this priority:
 1. **ISRC lookup** is a *discovery strategy*, not ground truth. An ISRC hit
    surfaces a candidate, but that candidate is still scored like any other and
-   can be down-ranked or rejected — ISRCs are shared/mislabelled often enough
+   can be down-ranked or rejected; ISRCs are shared/mislabelled often enough
    (clean vs. explicit, single vs. album edit) that a blind accept is unsafe.
    The short-circuit only fires when the found candidate *also* scores a clean
    title+artist+album match.
