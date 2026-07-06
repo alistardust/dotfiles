@@ -1,0 +1,454 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "click>=8.0",
+#     "anthropic>=0.40",
+#     "openai>=1.0",
+#     "requests>=2.28",
+#     "beautifulsoup4>=4.12",
+#     "python-docx>=1.0",
+#     "markdown>=3.5",
+# ]
+# ///
+"""Resume tailoring tool.
+
+Takes a base resume and a job posting, uses an LLM to produce a tailored
+version optimized for the specific role, then outputs in multiple formats.
+
+Usage:
+    resume-tailor <job-posting-url-or-file>
+    resume-tailor --stdin
+    resume-tailor --help
+
+LLM backend selection (in order of priority):
+    1. RESUME_TAILOR_BACKEND env var (ollama, anthropic, openai)
+    2. Ollama if reachable at OLLAMA_HOST (default: http://localhost:11434)
+    3. ANTHROPIC_API_KEY if set
+    4. OPENAI_API_KEY if set
+"""
+
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import urllib.request
+from pathlib import Path
+
+import click
+import markdown
+import requests
+from bs4 import BeautifulSoup
+from docx import Document
+from docx.shared import Inches, Pt
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+
+DEFAULT_RESUME = Path.home() / "Documents" / "copilot-output" / "resume-draft.md"
+DEFAULT_OUTPUT_DIR = Path.home() / "Documents" / "copilot-output" / "tailored"
+OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+OLLAMA_MODEL = os.environ.get("RESUME_TAILOR_MODEL", "qwen2.5:32b")
+
+TAILORING_PROMPT = """You are a resume tailoring expert. Your job is to take a base resume and a job posting, analyze the match, and produce a tailored version of the resume.
+
+## Instructions
+
+1. Analyze the job posting for: required skills, preferred skills, seniority level, industry, key responsibilities, and cultural signals.
+
+2. Compare against the base resume and determine tailoring strategy:
+   - LIGHT: Role is very similar to current experience. Reorder bullets to lead with most relevant, adjust a few keywords.
+   - MODERATE: Role overlaps significantly but emphasizes different aspects. Rewrite some bullets to highlight relevant experience, adjust summary, reorder sections.
+   - HEAVY: Role is a stretch or different domain. Substantially rework bullets to draw parallels, reframe experience, adjust summary significantly, possibly drop irrelevant bullets.
+
+3. Produce the tailored resume in markdown format. Rules:
+   - Never fabricate experience or skills the candidate doesn't have
+   - Never remove jobs from the timeline (you may trim bullets from older roles)
+   - Keep the same markdown structure (headers, bullet points, etc.)
+   - The summary should be adjusted to speak to this specific role
+   - Bullet points can be reordered, reworded, or trimmed (not invented)
+   - Skills section can be reordered to lead with most relevant
+   - Add a brief "match notes" comment at the top (HTML comment) explaining your strategy
+
+4. Output ONLY the tailored resume in markdown. No preamble, no explanation outside the HTML comment.
+
+## Base Resume
+
+{resume}
+
+## Job Posting
+
+{job_posting}
+
+## Tailored Resume (markdown only):
+"""
+
+
+def ollama_available():
+    """Check if Ollama is reachable and has the configured model."""
+    try:
+        with urllib.request.urlopen(f"{OLLAMA_HOST}/api/tags", timeout=3) as resp:
+            data = json.loads(resp.read())
+            available = [m["name"] for m in data.get("models", [])]
+            return OLLAMA_MODEL in available
+    except (OSError, json.JSONDecodeError):
+        return False
+
+
+def call_ollama(prompt):
+    """Call Ollama local model."""
+    click.echo(f"Tailoring with Ollama ({OLLAMA_MODEL})...", err=True)
+    payload = json.dumps({
+        "model": OLLAMA_MODEL,
+        "prompt": prompt,
+        "stream": False,
+        "options": {"num_predict": 8000},
+    }).encode()
+    req = urllib.request.Request(
+        f"{OLLAMA_HOST}/api/generate",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=300) as resp:
+        data = json.loads(resp.read())
+        return data.get("response", "")
+
+
+def get_llm_client():
+    """Get an LLM client, preferring Ollama, then Anthropic, then OpenAI."""
+    explicit = os.environ.get("RESUME_TAILOR_BACKEND", "").lower()
+
+    if explicit == "ollama" or (not explicit and ollama_available()):
+        return "ollama", None
+    
+    anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
+    openai_key = os.environ.get("OPENAI_API_KEY")
+
+    if explicit == "anthropic" or (not explicit and anthropic_key):
+        import anthropic
+        return "anthropic", anthropic.Anthropic(api_key=anthropic_key)
+    elif explicit == "openai" or (not explicit and openai_key):
+        import openai
+        return "openai", openai.OpenAI(api_key=openai_key)
+    elif ollama_available():
+        return "ollama", None
+    else:
+        click.echo(
+            "Error: No LLM backend available.\n"
+            "Options: run Ollama locally, or set ANTHROPIC_API_KEY or OPENAI_API_KEY.",
+            err=True,
+        )
+        sys.exit(1)
+
+
+def call_llm(provider, client, prompt):
+    """Call the LLM with the tailoring prompt."""
+    if provider == "ollama":
+        return call_ollama(prompt)
+    elif provider == "anthropic":
+        click.echo("Tailoring with Claude...", err=True)
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=8000,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return response.content[0].text
+    else:
+        click.echo("Tailoring with GPT...", err=True)
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            max_tokens=8000,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return response.choices[0].message.content
+
+
+def scrape_url(url):
+    """Scrape a job posting from a URL."""
+    click.echo(f"Scraping: {url}", err=True)
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        )
+    }
+    resp = requests.get(url, headers=headers, timeout=30)
+    resp.raise_for_status()
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    # Remove script/style elements
+    for element in soup(["script", "style", "nav", "footer", "header"]):
+        element.decompose()
+
+    text = soup.get_text(separator="\n", strip=True)
+    # Collapse excessive newlines
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text
+
+
+def read_job_posting(source):
+    """Read job posting from URL, file, or stdin."""
+    if source == "-":
+        click.echo("Paste job posting (Ctrl+D when done):", err=True)
+        return sys.stdin.read()
+    elif source.startswith("http://") or source.startswith("https://"):
+        return scrape_url(source)
+    else:
+        path = Path(source).expanduser()
+        if not path.exists():
+            click.echo(f"Error: File not found: {path}", err=True)
+            sys.exit(1)
+        return path.read_text()
+
+
+def write_markdown(content, output_path):
+    """Write markdown output."""
+    output_path.write_text(content)
+    click.echo(f"  Markdown: {output_path}", err=True)
+
+
+def write_html(content, output_path):
+    """Convert markdown to styled HTML."""
+    html_body = markdown.markdown(content, extensions=["tables"])
+    html_doc = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Resume - Alice Thomas</title>
+<style>
+    body {{
+        font-family: 'Helvetica Neue', Arial, sans-serif;
+        max-width: 800px;
+        margin: 2em auto;
+        padding: 0 1em;
+        line-height: 1.5;
+        color: #333;
+        font-size: 11pt;
+    }}
+    h1 {{ font-size: 1.8em; margin-bottom: 0.2em; color: #1a1a1a; }}
+    h2 {{ font-size: 1.3em; border-bottom: 1px solid #ccc; padding-bottom: 0.3em; color: #2a2a2a; }}
+    h3 {{ font-size: 1.1em; margin-bottom: 0.2em; color: #333; }}
+    ul {{ padding-left: 1.5em; }}
+    li {{ margin-bottom: 0.4em; }}
+    strong {{ color: #1a1a1a; }}
+    hr {{ border: none; border-top: 1px solid #ddd; margin: 1.5em 0; }}
+    @media print {{
+        body {{ margin: 0; padding: 0; font-size: 10pt; }}
+        h2 {{ page-break-after: avoid; }}
+        li {{ page-break-inside: avoid; }}
+    }}
+</style>
+</head>
+<body>
+{html_body}
+</body>
+</html>"""
+    output_path.write_text(html_doc)
+    click.echo(f"  HTML:     {output_path}", err=True)
+
+
+def write_pdf(md_content, output_path):
+    """Convert markdown to PDF via weasyprint (HTML intermediate)."""
+    try:
+        # Build HTML first, then convert to PDF with weasyprint
+        html_body = markdown.markdown(md_content, extensions=["tables"])
+        html_doc = f"""<!DOCTYPE html>
+<html><head><style>
+    body {{
+        font-family: 'Helvetica Neue', Arial, sans-serif;
+        max-width: 750px;
+        margin: 0 auto;
+        padding: 1.5em;
+        line-height: 1.4;
+        color: #333;
+        font-size: 10.5pt;
+    }}
+    h1 {{ font-size: 1.6em; margin-bottom: 0.2em; }}
+    h2 {{ font-size: 1.2em; border-bottom: 1px solid #ccc; padding-bottom: 0.2em; }}
+    h3 {{ font-size: 1.05em; margin-bottom: 0.1em; }}
+    ul {{ padding-left: 1.3em; }}
+    li {{ margin-bottom: 0.3em; }}
+    hr {{ border: none; border-top: 1px solid #ddd; margin: 1em 0; }}
+</style></head><body>{html_body}</body></html>"""
+        with tempfile.NamedTemporaryFile(suffix=".html", mode="w", delete=False) as f:
+            f.write(html_doc)
+            tmp_html = f.name
+        subprocess.run(
+            ["weasyprint", tmp_html, str(output_path)],
+            check=True,
+            capture_output=True,
+        )
+        os.unlink(tmp_html)
+        click.echo(f"  PDF:      {output_path}", err=True)
+    except FileNotFoundError:
+        click.echo("  PDF:      SKIPPED (weasyprint not found)", err=True)
+    except subprocess.CalledProcessError as e:
+        click.echo(f"  PDF:      FAILED ({e.stderr.decode()[:100]})", err=True)
+
+
+def write_docx(content, output_path):
+    """Convert markdown to docx using python-docx."""
+    doc = Document()
+
+    # Set default font
+    style = doc.styles["Normal"]
+    font = style.font
+    font.name = "Calibri"
+    font.size = Pt(11)
+
+    for line in content.split("\n"):
+        line = line.rstrip()
+
+        if not line:
+            continue
+
+        # Headers
+        if line.startswith("# "):
+            p = doc.add_heading(line[2:], level=0)
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        elif line.startswith("## "):
+            doc.add_heading(line[3:], level=1)
+        elif line.startswith("### "):
+            doc.add_heading(line[4:], level=2)
+        elif line.startswith("- "):
+            doc.add_paragraph(line[2:], style="List Bullet")
+        elif line.startswith("**") and line.endswith("**"):
+            p = doc.add_paragraph()
+            run = p.add_run(line.strip("*"))
+            run.bold = True
+        elif line == "---":
+            # Skip horizontal rules in docx
+            continue
+        elif line.startswith("<!--"):
+            # Skip HTML comments
+            continue
+        else:
+            # Handle inline bold
+            p = doc.add_paragraph()
+            parts = re.split(r"(\*\*.*?\*\*)", line)
+            for part in parts:
+                if part.startswith("**") and part.endswith("**"):
+                    run = p.add_run(part[2:-2])
+                    run.bold = True
+                else:
+                    p.add_run(part)
+
+    doc.save(str(output_path))
+    click.echo(f"  DOCX:     {output_path}", err=True)
+
+
+def write_plaintext(content, output_path):
+    """Strip markdown formatting to plain text."""
+    text = content
+    # Remove HTML comments
+    text = re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL)
+    # Remove markdown headers
+    text = re.sub(r"^#{1,6}\s+", "", text, flags=re.MULTILINE)
+    # Remove bold/italic markers
+    text = re.sub(r"\*{1,2}(.*?)\*{1,2}", r"\1", text)
+    # Remove horizontal rules
+    text = re.sub(r"^---+$", "", text, flags=re.MULTILINE)
+    # Collapse multiple blank lines
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    output_path.write_text(text.strip() + "\n")
+    click.echo(f"  Text:     {output_path}", err=True)
+
+
+def slugify(text):
+    """Create a filename-safe slug from text."""
+    text = text.lower().strip()
+    text = re.sub(r"[^\w\s-]", "", text)
+    text = re.sub(r"[\s_]+", "-", text)
+    return text[:60].rstrip("-")
+
+
+@click.command()
+@click.argument("source", default="-")
+@click.option(
+    "--resume", "-r",
+    type=click.Path(exists=True),
+    default=str(DEFAULT_RESUME),
+    help="Path to base resume markdown.",
+)
+@click.option(
+    "--output-dir", "-o",
+    type=click.Path(),
+    default=str(DEFAULT_OUTPUT_DIR),
+    help="Output directory for tailored resumes.",
+)
+@click.option(
+    "--formats", "-f",
+    default="md,pdf,docx,html,txt",
+    help="Comma-separated output formats (md,pdf,docx,html,txt).",
+)
+@click.option(
+    "--name", "-n",
+    default=None,
+    help="Custom name for output files (default: derived from job posting).",
+)
+def main(source, resume, output_dir, formats, name):
+    """Tailor a resume for a specific job posting.
+
+    SOURCE can be a URL, file path, or '-' for stdin.
+    """
+    # Read inputs
+    base_resume = Path(resume).read_text()
+    job_posting = read_job_posting(source)
+
+    if not job_posting.strip():
+        click.echo("Error: Empty job posting.", err=True)
+        sys.exit(1)
+
+    # Get LLM and tailor
+    provider, client = get_llm_client()
+    prompt = TAILORING_PROMPT.format(resume=base_resume, job_posting=job_posting)
+    tailored = call_llm(provider, client, prompt)
+
+    # Clean up LLM output (remove code fences if present)
+    if tailored.startswith("```"):
+        tailored = re.sub(r"^```\w*\n", "", tailored)
+        tailored = re.sub(r"\n```\s*$", "", tailored)
+
+    # Determine output name
+    if not name:
+        # Try to extract company/role from first few lines of job posting
+        first_lines = job_posting[:500].replace("\n", " ")
+        name = slugify(first_lines[:80]) or "tailored"
+
+    # Create output directory
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Write outputs
+    fmt_list = [f.strip().lower() for f in formats.split(",")]
+    click.echo(f"\nOutputting to: {out_dir}/", err=True)
+
+    md_path = out_dir / f"{name}.md"
+
+    if "md" in fmt_list or "markdown" in fmt_list:
+        write_markdown(tailored, md_path)
+    else:
+        # Still write md as intermediate
+        write_markdown(tailored, md_path)
+
+    if "html" in fmt_list:
+        write_html(tailored, out_dir / f"{name}.html")
+
+    if "pdf" in fmt_list:
+        write_pdf(tailored, out_dir / f"{name}.pdf")
+
+    if "docx" in fmt_list:
+        write_docx(tailored, out_dir / f"{name}.docx")
+
+    if "txt" in fmt_list or "text" in fmt_list or "plain_text" in fmt_list:
+        write_plaintext(tailored, out_dir / f"{name}.txt")
+
+    click.echo("\nDone!", err=True)
+
+
+if __name__ == "__main__":
+    main()

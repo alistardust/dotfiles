@@ -142,6 +142,36 @@ Copy `wslconfig.template` to `%USERPROFILE%\.wslconfig` on Windows and adjust
 | Script | Description |
 |--------|-------------|
 | `scripts/clean_python_cache` | Recursively remove `.pyc` files and `__pycache__` directories from the current directory |
+| `scripts/resume-tailor` | Tailor a resume to a specific job posting using a local LLM; outputs md, html, pdf, docx, txt |
+
+### resume-tailor
+
+Accepts a base resume (markdown) and a job posting, uses an LLM to analyze the
+role and produce a tailored version, then outputs in multiple formats.
+
+```bash
+resume-tailor https://example.com/job-posting    # scrape URL
+resume-tailor ./posting.txt                      # from file
+resume-tailor -                                  # paste, Ctrl+D when done
+resume-tailor -n "company-role" <source>         # custom output filename
+resume-tailor -f md,pdf <source>                 # specific formats only
+```
+
+**Requirements:** Ollama running locally with a model available (default:
+`qwen2.5:32b`). Falls back to Anthropic or OpenAI API if keys are set.
+
+**Configuration (environment variables):**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RESUME_TAILOR_MODEL` | `qwen2.5:32b` | Ollama model to use |
+| `RESUME_TAILOR_BACKEND` | *(auto-detect)* | Force backend: `ollama`, `anthropic`, `openai` |
+| `OLLAMA_HOST` | `http://localhost:11434` | Ollama API endpoint |
+
+**Output directory:** `~/Documents/copilot-output/tailored/`
+
+**Setup:** Symlinked to `~/.local/bin/resume-tailor` (on PATH). Dependencies are
+managed automatically via `uv run --script` inline metadata on first invocation.
 
 ## KDE Plasma (Linux)
 
