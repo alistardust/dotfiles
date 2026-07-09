@@ -101,6 +101,13 @@ def _sync_one(db: Database, playlist, platforms, args) -> int:
 
         if plan.is_empty() or not plan.actionable_changes():
             print(f"{label}: already in sync (nothing to push).")
+            # BUG-6c: a confirmed no-op (the remote already holds exactly the ids
+            # we would push) is a successful verification that the playlist is
+            # synced, so record it. Otherwise status reports "never synced"
+            # forever for a fully-pushed playlist. The all-unavailable no-op
+            # (nothing resolved) is NOT a confirmed sync and is excluded.
+            if _is_confirmed_in_sync(plan):
+                db.mark_playlist_synced(playlist.id, platform_name)
             continue
 
         if not apply_mode:
@@ -184,3 +191,22 @@ def _describe_push(change: PlanChange) -> str:
     proposed = change.proposed or {}
     ids = proposed.get("track_ids") or []
     return f"  #{change.change_id} push {len(ids)} tracks to {proposed.get('platform')}"
+
+
+def _is_confirmed_in_sync(plan: Plan) -> bool:
+    """True when a no-op plan is a confirmed match against the live remote.
+
+    The remote-push change is ``skipped`` for two reasons: the remote already
+    holds exactly the ids we would push (a real in-sync verification), or nothing
+    resolved this run (an all-unavailable no-op, not a sync). Only the former
+    should stamp ``last_synced_at`` (BUG-6c), so require a non-empty proposed set
+    that equals the current remote set.
+    """
+    for change in plan.changes:
+        if not change.remote:
+            continue
+        proposed = (change.proposed or {}).get("track_ids") or []
+        current = (change.current or {}).get("track_ids")
+        if proposed and current == proposed:
+            return True
+    return False
