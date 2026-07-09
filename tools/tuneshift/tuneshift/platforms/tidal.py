@@ -12,6 +12,7 @@ import tidalapi
 from tuneshift.models import AlbumResult, ArtistResult, PlaylistInfo, TrackResult
 from tuneshift.platforms.auth import secure_write, validate_no_symlink
 from tuneshift.platforms.rate_limiter import RateLimiter
+from tuneshift.platforms.timeout import PlatformTimeout, call_with_timeout
 
 _TOKEN_DIR = Path.home() / ".local" / "share" / "tuneshift"
 _TOKEN_FILE = _TOKEN_DIR / "tidal.json"
@@ -19,10 +20,18 @@ _LEGACY_TOKEN_FILE = Path.home() / ".local" / "share" / "tidal-importer" / "sess
 
 
 def _retry(fn: Callable[[], Any], max_retries: int = 3) -> Any:
-    """Retry a Tidal API call with exponential backoff."""
+    """Retry a Tidal API call with exponential backoff and a per-call timeout.
+
+    Each attempt is bounded by a wall-clock timeout (BUG-4): a stalled TCP
+    connection can otherwise hang a resolve run forever. A PlatformTimeout is
+    not retried here (it is not a rate-limit signal); it propagates so the
+    resolution worker can classify it as a transient network failure.
+    """
     for attempt in range(max_retries + 1):
         try:
-            return fn()
+            return call_with_timeout(fn)
+        except PlatformTimeout:
+            raise
         except Exception as exc:
             if attempt == max_retries:
                 raise
