@@ -199,3 +199,10 @@ grows slowly: expect a few KB per added track, plus candidate and metadata rows 
 tracks resolve and enrich. Its WAL sidecars (`*.db-shm`, `*.db-wal`) and coverage
 artifacts are gitignored. Auth tokens live in `~/.local/share/tuneshift/` (mode
 `0700`) and are never committed.
+
+Because the DB is committed and shared, two sessions writing it concurrently can
+clobber each other (last writer wins). Guardrails: `resolve` takes a PID
+single-flight lock (`.tuneshift/resolve.lock`) so only one resolve runs at a time,
+and `export --format json` + `import-json` gives a per-playlist backup/restore
+round-trip to recover a clobbered playlist. Operationally, prefer one DB writer at
+a time.

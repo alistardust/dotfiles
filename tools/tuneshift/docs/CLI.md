@@ -235,6 +235,16 @@ links for a playlist.
 `export <playlist> [-f {text,csv,json,soundiiz,tunemymusic}] [-o OUTPUT]`
 Export a playlist to a file or stdout.
 
+### `import-json`
+`import-json <file> [--into NAME]`
+Restore a playlist from a JSON snapshot produced by `export --format json`. This
+is the recovery path for the concurrent-DB hazard (a playlist clobbered by a
+last-writer-wins DB overwrite). Restore is DB-only and canonical-first: it
+recreates the playlist (or, with `--into`, under a different name) and its track
+membership, then enqueues each track for resolution; it never pushes to a
+platform (a later `sync` distributes). Idempotent: tracks already present are
+skipped, so re-running restores nothing new.
+
 ### `doctor`
 `doctor [playlist] [--all] [--apply] [--only ITEM_ID] [--override ITEM_ID=TIDAL_ID] [--no-sync] [--dry-run] [--max-retries N] [-y] [--quiet] [--orphans] [--enqueue-orphans]`
 Scan playlists for mapping issues and apply fixes (plan/apply model). `--apply`

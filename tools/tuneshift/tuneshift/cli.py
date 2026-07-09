@@ -191,6 +191,14 @@ def build_parser() -> argparse.ArgumentParser:
                           help="Output format (default: text)")
     p_export.add_argument("-o", "--output", default="-", help="Output file (default: stdout)")
 
+    # import-json
+    p_import_json = sub.add_parser(
+        "import-json", help="Restore a playlist from an exported JSON snapshot")
+    p_import_json.add_argument(
+        "file", help="Path to a JSON file from `export --format json`")
+    p_import_json.add_argument(
+        "--into", default=None, help="Restore under a different playlist name")
+
     # map
     p_map = sub.add_parser("map", help="Manually map a track to a platform ID")
     p_map.add_argument("playlist", nargs="?", help="Playlist name (omit when using --track-id)")
@@ -846,6 +854,9 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "export":
             from tuneshift.commands.export_cmd import handle_export
             return handle_export(args, db)
+        elif args.command == "import-json":
+            from tuneshift.commands.import_json_cmd import handle_import_json
+            return handle_import_json(args, db)
         elif args.command == "map":
             from tuneshift.commands.map_cmd import handle_map
             return handle_map(args, db)

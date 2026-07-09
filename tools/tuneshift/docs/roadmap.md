@@ -73,6 +73,14 @@ is in [matching-known-limits.md](matching-known-limits.md).
 
 For reviewers working from older notes, the following are **done**, not pending:
 
+- **Concurrent-DB safety.** `resolve` takes a PID single-flight lock
+  (`.tuneshift/resolve.lock`) so concurrent resolve runs cannot corrupt the
+  shared SQLite DB, and `import-json` restores a playlist from an
+  `export --format json` snapshot (recovery for a clobbered playlist). Operational
+  single-writer discipline remains the primary guard; these are the safety net.
+- **Bounded network calls.** Every Tidal and MusicBrainz call has a wall-clock
+  timeout (`TUNESHIFT_NETWORK_TIMEOUT`, default 45s); a stalled call is a
+  transient resolve retry, not an indefinite hang or a wrong quarantine.
 - **Resolution wiring (FL1).** The library-first queue, resumable worker, and
   `resolve` are wired end to end; adding a track enqueues async resolution.
 - **Metadata hydration (FL2).** Resolution hydrates ISRC, duration, album, and
