@@ -21,8 +21,10 @@ def _seed_track(db, *, locked):
 
 
 def _weak_resolver(_track):
-    # A deliberately weak candidate that maps to UNCERTAIN if the tier is written.
-    return [ResolvedCandidate("tidal", "999", {"match_score": 40})]
+    # Above the acceptance floor (50) but below CONFIRMED (0.80): maps to
+    # UNCERTAIN if the tier is (re)written, so the locked case proves preservation
+    # and the unlocked case proves the normal recompute.
+    return [ResolvedCandidate("tidal", "999", {"match_score": 55})]
 
 
 def test_resolve_does_not_overwrite_tier_on_locked_track(db):

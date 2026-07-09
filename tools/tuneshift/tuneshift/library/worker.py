@@ -36,6 +36,12 @@ logger = logging.getLogger(__name__)
 # with it (see Database.next_pending_resolution).
 _SQLITE_TS_FMT = "%Y-%m-%d %H:%M:%S"
 
+# BUG-3: a best-candidate match_score below this floor is not a confident match
+# (the resolver found only wrong candidates). Such tracks are quarantined for
+# review rather than hydrated with a misleading low tier. Locked tracks are
+# exempt. 50/100 maps to confidence_score 0.50 (mid-UNCERTAIN).
+RESOLVE_ACCEPT_FLOOR = 50.0
+
 
 class ResolutionRateLimited(Exception):
     """Raised by a resolver when an upstream platform rate-limits the request.
@@ -182,9 +188,33 @@ class ResolutionWorker:
             return False
 
         candidates = list(candidates)
+        best = _best_candidate(candidates)
+        platform = cand_platform(candidates)
+        # BUG-5: a user-approved lock owns the track's identity; it is exempt from
+        # both the tier recompute and the acceptance floor below.
+        locked = (
+            platform is not None
+            and self._db.get_effective_lock(track_id, platform) is not None
+        )
+        # BUG-3: if the strongest candidate scores below the acceptance floor, the
+        # resolver found nothing confident (only wrong candidates, e.g. other
+        # songs by the same artist, or a same-title different-artist hard-reject).
+        # Quarantine for review instead of hydrating a misleading low tier.
+        best_score = (best.metadata or {}).get("match_score")
+        if (
+            not locked
+            and isinstance(best_score, (int, float))
+            and best_score < RESOLVE_ACCEPT_FLOOR
+        ):
+            self._quarantine(
+                track_id,
+                f"no_confident_match: best score {best_score:.0f} "
+                f"< {RESOLVE_ACCEPT_FLOOR:.0f}",
+            )
+            return False
         # Replace any prior candidate set so a re-resolve never leaves stale rows
         # (or stale ranks) behind, then persist in discovery order.
-        self._db.clear_track_candidates(track_id, cand_platform(candidates))
+        self._db.clear_track_candidates(track_id, platform)
         for rank, cand in enumerate(candidates):
             self._db.upsert_track_candidate(
                 track_id, cand.platform, cand.platform_track_id, cand.metadata,
@@ -195,18 +225,8 @@ class ResolutionWorker:
         # the DB method, so a prior user edit is never clobbered and re-resolving
         # is idempotent. This is what makes "resolved" mean populated, not just
         # tagged (spec AC-D2: tier=CONFIRMED but isrc/duration/album all NULL).
-        # BUG-5: a user-approved lock owns the track's identity, so a re-resolve
-        # must never overwrite a locked track's confidence tier with a fresh
-        # (possibly weaker) score. The platform mapping is protected elsewhere;
-        # here we protect the derived tier.
-        platform = cand_platform(candidates)
-        locked = (
-            platform is not None
-            and self._db.get_effective_lock(track_id, platform) is not None
-        )
-        self._hydrate_track(
-            track_id, _best_candidate(candidates), preserve_tier=locked
-        )
+        # BUG-5: never overwrite a locked track's confidence tier on re-resolve.
+        self._hydrate_track(track_id, best, preserve_tier=locked)
         self._db.set_resolution_state(track_id, "resolved", last_error=None)
         # Clear any prior quarantine now that the track resolved.
         if track.quarantine_state:
