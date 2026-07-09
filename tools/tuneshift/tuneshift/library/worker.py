@@ -194,9 +194,19 @@ class ResolutionWorker:
         # candidate (discovery order != score order). Fill-NULL semantics live in
         # the DB method, so a prior user edit is never clobbered and re-resolving
         # is idempotent. This is what makes "resolved" mean populated, not just
-        # tagged (spec AC-D2 — the gap Alice found: tier=CONFIRMED but isrc/
-        # duration/album all NULL).
-        self._hydrate_track(track_id, _best_candidate(candidates))
+        # tagged (spec AC-D2: tier=CONFIRMED but isrc/duration/album all NULL).
+        # BUG-5: a user-approved lock owns the track's identity, so a re-resolve
+        # must never overwrite a locked track's confidence tier with a fresh
+        # (possibly weaker) score. The platform mapping is protected elsewhere;
+        # here we protect the derived tier.
+        platform = cand_platform(candidates)
+        locked = (
+            platform is not None
+            and self._db.get_effective_lock(track_id, platform) is not None
+        )
+        self._hydrate_track(
+            track_id, _best_candidate(candidates), preserve_tier=locked
+        )
         self._db.set_resolution_state(track_id, "resolved", last_error=None)
         # Clear any prior quarantine now that the track resolved.
         if track.quarantine_state:
@@ -217,21 +227,31 @@ class ResolutionWorker:
                 )
         return True
 
-    def _hydrate_track(self, track_id: int, candidate: ResolvedCandidate) -> None:
+    def _hydrate_track(
+        self,
+        track_id: int,
+        candidate: ResolvedCandidate,
+        *,
+        preserve_tier: bool = False,
+    ) -> None:
         """Promote the best candidate's core metadata onto the track.
 
         Delegates the fill-NULL / provenance bookkeeping to
         :meth:`Database.hydrate_identity_metadata`; here we just translate the
         candidate's captured metadata into that call and derive a confidence
-        tier from the resolver's match score.
+        tier from the resolver's match score. When ``preserve_tier`` is set (the
+        track carries a user-approved lock, BUG-5), the tier/score are left
+        untouched: passing ``None`` makes ``hydrate_identity_metadata`` skip the
+        confidence columns, so the locked track keeps the tier it already had.
         """
         meta = candidate.metadata or {}
-        match_score = meta.get("match_score")
         confidence_tier: str | None = None
         confidence_score: float | None = None
-        if isinstance(match_score, (int, float)):
-            confidence_score = max(0.0, min(1.0, match_score / 100.0))
-            confidence_tier = ConfidenceTier.from_score(confidence_score).value
+        if not preserve_tier:
+            match_score = meta.get("match_score")
+            if isinstance(match_score, (int, float)):
+                confidence_score = max(0.0, min(1.0, match_score / 100.0))
+                confidence_tier = ConfidenceTier.from_score(confidence_score).value
 
         self._db.hydrate_identity_metadata(
             track_id,
