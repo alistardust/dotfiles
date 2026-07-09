@@ -26,8 +26,16 @@ DEFAULT_NETWORK_TIMEOUT = 45.0
 _EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="ts-net")
 
 
-class PlatformTimeout(TimeoutError):
-    """A platform network call exceeded its wall-clock budget."""
+class PlatformTimeout(Exception):
+    """A platform network call exceeded its wall-clock budget.
+
+    Intentionally NOT a subclass of ``TimeoutError``/``OSError``: the reconcile
+    search strategies swallow ``(RuntimeError, OSError, ValueError)`` per strategy
+    and turn them into "no candidates", which would silently mask a stalled call
+    as a wrong quarantine (BUG-4). Being a plain ``Exception`` lets a timeout
+    propagate past those handlers to the resolver, which reclassifies it as a
+    transient rate-limit so the track is re-queued with backoff, never lost.
+    """
 
 
 def network_timeout() -> float:

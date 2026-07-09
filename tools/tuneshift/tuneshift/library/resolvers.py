@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 from tuneshift.library.worker import ResolutionRateLimited, ResolvedCandidate
 from tuneshift.matching.track import score_match_with_version
 from tuneshift.models import capture_candidate_metadata
+from tuneshift.platforms.timeout import PlatformTimeout
 from tuneshift.reconcile import build_alias_resolver, gather_candidates
 
 if TYPE_CHECKING:
@@ -62,6 +63,10 @@ class PlatformResolver:
             candidates, _strategies = gather_candidates(
                 track, self._client, self._alias_resolver,
             )
+        except PlatformTimeout as exc:
+            # A stalled platform call is transient, not a hard failure: re-queue
+            # with backoff so it never erodes the quarantine budget (BUG-4).
+            raise ResolutionRateLimited(str(exc)) from exc
         except Exception as exc:  # noqa: BLE001 - classify throttling vs hard error
             if _is_rate_limit(exc):
                 raise ResolutionRateLimited(str(exc)) from exc
