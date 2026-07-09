@@ -2912,10 +2912,18 @@ class Database:
         self.conn.commit()
 
     def link_platform_playlist(self, playlist_id: int, platform: str, platform_playlist_id: str) -> None:
-        """Link a canonical playlist to a platform playlist."""
+        """Link a canonical playlist to a platform playlist.
+
+        Uses ON CONFLICT DO UPDATE rather than INSERT OR REPLACE so re-linking an
+        already-synced playlist preserves ``last_synced_at`` (INSERT OR REPLACE
+        deletes the row and resets the timestamp to NULL, making status report
+        "never synced" for a genuinely-synced playlist -- BUG-6b).
+        """
         self.conn.execute(
-            """INSERT OR REPLACE INTO platform_playlists (playlist_id, platform, platform_playlist_id)
-               VALUES (?, ?, ?)""",
+            """INSERT INTO platform_playlists (playlist_id, platform, platform_playlist_id)
+               VALUES (?, ?, ?)
+               ON CONFLICT(playlist_id, platform) DO UPDATE SET
+               platform_playlist_id = excluded.platform_playlist_id""",
             (playlist_id, platform, platform_playlist_id),
         )
         self.conn.commit()

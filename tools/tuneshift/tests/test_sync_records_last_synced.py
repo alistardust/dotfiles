@@ -1,0 +1,70 @@
+"""BUG-6b: a successful sync --apply must record last_synced, incl. new playlists."""
+
+from argparse import Namespace
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from tuneshift.commands.sync_cmd import handle_sync
+from tuneshift.db import Database
+from tuneshift.models import PlaylistInfo, Track
+from tuneshift.reconcile import ReconcileResult
+
+
+@pytest.fixture
+def tmp_db(tmp_path) -> Path:
+    return tmp_path / "test.db"
+
+
+def _mock_client(remote_pl_id: str) -> MagicMock:
+    client = MagicMock()
+    client.platform_name = "tidal"
+    client.load_session.return_value = True
+    client.find_playlist_by_name.return_value = PlaylistInfo(
+        platform_id=remote_pl_id, name="New Playlist", num_tracks=0,
+    )
+    client.get_playlist_tracks.side_effect = TypeError("no live remote in test")
+    client.replace_playlist_tracks.return_value = None
+    return client
+
+
+def _args(**overrides):
+    base = dict(
+        playlist="New Playlist", platform="tidal", all=False,
+        reconcile=False, apply=True, interactive=False,
+    )
+    base.update(overrides)
+    return Namespace(**base)
+
+
+@patch("tuneshift.planapply.sync.reconcile_track")
+@patch("tuneshift.commands.ingest_cmd._load_client")
+def test_new_playlist_sync_records_last_synced(mock_load, mock_reconcile, tmp_db):
+    db = Database(tmp_db)
+    pid = db.create_playlist("New Playlist")  # NOT pre-linked
+    for i in range(2):
+        tid = db.insert_track(Track(title=f"Track {i}", artist=f"Artist {i}"))
+        db.add_track_to_playlist(pid, tid, position=i)
+
+    mock_load.return_value = _mock_client("tidal-pl-new")
+    mock_reconcile.return_value = ReconcileResult(
+        platform_track_id="tidal-track-1", score=95, confidence="high",
+    )
+
+    assert handle_sync(_args(), db) == 0
+    assert db.get_last_synced(pid, "tidal") is not None
+
+
+def test_relinking_preserves_last_synced(tmp_db):
+    # BUG-6b: re-linking an already-synced playlist must not reset its sync
+    # timestamp (INSERT OR REPLACE used to delete the row and null last_synced_at).
+    db = Database(tmp_db)
+    pid = db.create_playlist("P")
+    db.link_platform_playlist(pid, "tidal", "R1")
+    db.mark_playlist_synced(pid, "tidal")
+    stamped = db.get_last_synced(pid, "tidal")
+    assert stamped is not None
+
+    db.link_platform_playlist(pid, "tidal", "R1")  # re-link (same or new id)
+    assert db.get_last_synced(pid, "tidal") == stamped  # preserved

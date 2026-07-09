@@ -169,9 +169,16 @@ def make_sync_executor(
                 # and report it so apply journals it as a reversible local change
                 # instead of leaving an orphaned link if the push then fails.
                 prior_link = db.get_platform_playlist_id(local_playlist_id, platform)
+                # ON CONFLICT DO UPDATE (not INSERT OR REPLACE) so re-linking an
+                # already-synced playlist preserves last_synced_at instead of
+                # deleting the row and resetting it to NULL (BUG-6b: a re-link
+                # made status report "never synced" for a genuinely-synced
+                # playlist).
                 db.conn.execute(
-                    "INSERT OR REPLACE INTO platform_playlists "
-                    "(playlist_id, platform, platform_playlist_id) VALUES (?, ?, ?)",
+                    "INSERT INTO platform_playlists "
+                    "(playlist_id, platform, platform_playlist_id) VALUES (?, ?, ?) "
+                    "ON CONFLICT(playlist_id, platform) DO UPDATE SET "
+                    "platform_playlist_id = excluded.platform_playlist_id",
                     (local_playlist_id, platform, platform_playlist_id),
                 )
                 link_journal = {
