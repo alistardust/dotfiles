@@ -59,10 +59,14 @@ playlist into the canonical library (the only read-from-platform path).
 See [Resolution & enrichment](resolution-enrichment.md).
 
 ### `resolve`
-`resolve [playlist] [--track TITLE ARTIST] [--all] [--platform PLATFORM] [--upgrade] [--force] [--status] [-v]`
+`resolve [playlist] [--track TITLE ARTIST] [--all] [--platform PLATFORM] [--upgrade] [--force] [--status] [-v] [--throttle OPS_PER_SEC]`
 Resolve tracks to platform candidates and hydrate metadata (ISRC, duration, album).
 `--upgrade` re-resolves below-CONFIRMED tracks; `--force` re-resolves resolved ones;
-`--status` shows coverage/quarantine stats.
+`--status` shows coverage/quarantine stats; `--throttle N` caps resolve to N
+operations/second for local resource pacing (default 3.0). Only one `resolve`
+run may execute at a time: a concurrent run refuses (PID lock at
+`.tuneshift/resolve.lock`), which prevents the concurrent-writer corruption that
+SQLite cannot arbitrate.
 
 ### `enrich`
 `enrich [playlist] [--all] [--catalog] [--platform PLATFORM] [--classify] [--reclassify] [--model MODEL] [--max-retries N] [--refresh] [--dry-run]`

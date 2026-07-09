@@ -71,11 +71,18 @@ def run_resolve(args: Namespace, db: Database) -> None:
         raise SystemExit(1)
 
     from tuneshift.library.enrichment import make_enricher
+    from tuneshift.library.lock import ResolveLock, ResolveLockHeld
     from tuneshift.library.resolvers import PlatformResolver
     from tuneshift.library.worker import ResolutionWorker
     from tuneshift.platforms.rate_limiter import RateLimiter
 
     resolver = PlatformResolver(db, client)
+    # FEAT-1: --throttle caps resolve operations/second for local resource
+    # pacing (Ollama/SQLite/network), independent of upstream API limits.
+    throttle = getattr(args, "throttle", None)
+    if throttle is not None and throttle <= 0:
+        print("Error: --throttle must be a positive number", file=sys.stderr)
+        raise SystemExit(1)
     # Wire the enricher (FL1 left this None): resolved tracks get artist genres +
     # grounded classification + Atmos/catalog capture + energy/valence, out of
     # the interactive add path (AC-D7). Reuse the client already loaded for
@@ -84,13 +91,19 @@ def run_resolve(args: Namespace, db: Database) -> None:
         db,
         resolver,
         enricher=make_enricher(tidal_client=client if platform_name == "tidal" else None),
-        rate_limiter=RateLimiter(max_per_second=3.0),
+        rate_limiter=RateLimiter(max_per_second=throttle or 3.0),
     )
 
     # --force / --upgrade both mean "re-resolve tracks already resolved".
     force = bool(args.force or args.upgrade)
-    print(f"Resolving {len(tracks)} track(s) via {platform_name}...")
-    worker.resolve_tracks([t.id for t in tracks], force=force)
+    # BUG-2: serialize resolve runs so concurrent writers cannot corrupt the DB.
+    try:
+        with ResolveLock(db.path):
+            print(f"Resolving {len(tracks)} track(s) via {platform_name}...")
+            worker.resolve_tracks([t.id for t in tracks], force=force)
+    except ResolveLockHeld as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
 
     for track in tracks:
         _print_result(track, db)

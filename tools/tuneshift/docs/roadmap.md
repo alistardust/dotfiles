@@ -13,12 +13,11 @@ once any remaining usage is migrated to the typed `(criterion, strength, target)
 model. The typed model is already canonical; `prefs show`/`clear` still read the
 legacy keys for backward compatibility. See [preferences.md](preferences.md).
 
-### Client-side throttle for local operations
-Upstream API rate limits are respected, but there is no self-imposed pacing for
-CPU/memory-intensive local work (bulk `resolve --all`, batch re-resolves, bulk
-enrichment). These can saturate local resources (LLM inference, SQLite writes).
-Proposed: a configurable `--throttle` flag or config key capping operations per
-second, independent of upstream limits.
+### Client-side throttle for local operations (shipped)
+Shipped as `resolve --throttle OPS_PER_SEC`: caps resolve to N operations/second
+for CPU/memory-intensive local work (bulk `resolve --all`, batch re-resolves,
+bulk enrichment), independent of upstream API rate limits (default 3.0). A config
+key equivalent remains a possible future addition.
 
 ### Plan expiry / pruning
 Plan JSON files under `.tuneshift/plans/` are never auto-pruned; applied and

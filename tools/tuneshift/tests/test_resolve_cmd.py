@@ -10,11 +10,14 @@ deep hydrate/persist/quarantine behavior is proven end-to-end in
 from argparse import Namespace
 from unittest.mock import patch
 
+import os
+
 import pytest
 
 from tuneshift.commands.resolve import run_resolve
 from tuneshift.db import Database
 from tuneshift.models import Track, TrackResult
+from tuneshift.platforms.rate_limiter import RateLimiter
 
 
 class _FakeClient:
@@ -67,6 +70,7 @@ def _args(**overrides) -> Namespace:
         force=False,
         status=False,
         verbose=False,
+        throttle=None,
     )
     base.update(overrides)
     return Namespace(**base)
@@ -146,3 +150,66 @@ class TestResolveCommand:
             side_effect=AssertionError("client must not load for --status"),
         ):
             run_resolve(_args(playlist="Diamond Dogs", status=True), db)
+
+
+def test_run_resolve_refuses_when_lock_held(tmp_path):
+    db = Database(tmp_path / "test.db")
+    playlist_id = db.create_playlist("Diamond Dogs")
+    track = Track(title="Diamond Dogs", artist="David Bowie", album=None)
+    tid = db.add_track(track)
+    db.add_track_to_playlist(playlist_id, tid, position=0)
+
+    # A live resolve "holds" the lock: the parent PID is alive and distinct.
+    lock = tmp_path / ".tuneshift" / "resolve.lock"
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text(str(os.getppid()), encoding="utf-8")
+
+    with patch(
+        "tuneshift.commands.resolve._load_client", return_value=_FakeClient()
+    ):
+        with pytest.raises(SystemExit):
+            run_resolve(_args(playlist="Diamond Dogs"), db)
+
+    # The run refused, so the track was not resolved.
+    assert db.get_resolution_queue_state(tid) != "resolved"
+
+
+def test_resolve_throttle_sets_rate_limiter(tmp_path):
+    db = Database(tmp_path / "test.db")
+    playlist_id = db.create_playlist("Diamond Dogs")
+    track = Track(title="Diamond Dogs", artist="David Bowie", album=None)
+    tid = db.add_track(track)
+    db.add_track_to_playlist(playlist_id, tid, position=0)
+
+    seen = {}
+    real_rl = RateLimiter
+
+    def spy_rl(*args, **kwargs):
+        rl = real_rl(*args, **kwargs)
+        seen["rl"] = rl
+        return rl
+
+    # Disable enrichment so the test does not hit the local LLM (Ollama).
+    with patch(
+        "tuneshift.commands.resolve._load_client", return_value=_FakeClient()
+    ), patch(
+        "tuneshift.library.enrichment.make_enricher", return_value=None
+    ), patch("tuneshift.platforms.rate_limiter.RateLimiter", side_effect=spy_rl):
+        run_resolve(_args(playlist="Diamond Dogs", throttle=1.0), db)
+
+    # 1 op/sec -> 1.0s minimum interval (RateLimiter._min_interval == 1/mps).
+    assert seen["rl"]._min_interval == pytest.approx(1.0)
+
+
+def test_resolve_throttle_rejects_nonpositive(tmp_path):
+    db = Database(tmp_path / "test.db")
+    playlist_id = db.create_playlist("Diamond Dogs")
+    track = Track(title="Diamond Dogs", artist="David Bowie", album=None)
+    tid = db.add_track(track)
+    db.add_track_to_playlist(playlist_id, tid, position=0)
+
+    with patch(
+        "tuneshift.commands.resolve._load_client", return_value=_FakeClient()
+    ):
+        with pytest.raises(SystemExit):
+            run_resolve(_args(playlist="Diamond Dogs", throttle=0.0), db)

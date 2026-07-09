@@ -117,6 +117,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_resolve.add_argument("--force", action="store_true", help="Re-resolve tracks already resolved")
     p_resolve.add_argument("--status", action="store_true", help="Show resolution statistics")
     p_resolve.add_argument("--verbose", "-v", action="store_true", help="Show skipped tracks")
+    p_resolve.add_argument(
+        "--throttle",
+        type=float,
+        default=None,
+        metavar="OPS_PER_SEC",
+        help="Cap resolve to N operations/second (default: 3.0)",
+    )
 
     # import-text
     p_import_text = sub.add_parser("import-text", help="Import playlist from a text file")
