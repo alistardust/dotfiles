@@ -41,21 +41,45 @@ def handle_diff(args, db: Database) -> int:
             [t.id for t in tracks], platform_name
         )
 
+        # BUG-6a: presence is decided by whether a track's mapped platform id is
+        # actually on the LIVE platform playlist, not by the user_approved (lock)
+        # flag. Auto-matched tracks are user_approved=0 yet fully synced, so gating
+        # on the lock made a synced playlist look entirely unpushed.
+        platform_playlist_id = db.get_platform_playlist_id(playlist.id, platform_name)
+        live_ids: set[str] = set()
+        if platform_playlist_id:
+            try:
+                live_ids = {
+                    pt.platform_id
+                    for pt in client.get_playlist_tracks(platform_playlist_id)
+                }
+            except Exception as exc:  # noqa: BLE001 - report, fall back to "would push"
+                print(f"  (could not fetch live {platform_name} state: {exc})")
+
         to_add: list[str] = []
         unavailable: list[str] = []
         divergent: list[str] = []
+        in_sync = 0
 
         for track in tracks:
             mapping = cached_mappings.get(track.id)
-            if mapping and mapping.user_approved:
-                if mapping.status == "unavailable":
-                    unavailable.append(f"  ? {track.title} - {track.artist}")
-                elif mapping.is_divergent:
-                    divergent.append(f"  ~ {track.title} -> {mapping.divergence_note}")
-                else:
-                    to_add.append(f"  + {track.title} - {track.artist}")
+            if mapping and mapping.status == "unavailable":
+                unavailable.append(f"  ? {track.title} - {track.artist}")
+            elif mapping and mapping.is_divergent:
+                divergent.append(f"  ~ {track.title} -> {mapping.divergence_note}")
+            elif (
+                mapping
+                and mapping.platform_track_id
+                and mapping.platform_track_id in live_ids
+            ):
+                in_sync += 1
+            elif mapping and mapping.platform_track_id:
+                to_add.append(f"  + {track.title} - {track.artist}")
             else:
                 to_add.append(f"  * {track.title} - {track.artist} (needs reconciliation)")
+
+        if in_sync:
+            print(f"\n  In sync ({in_sync} already on {platform_name}).")
 
         if to_add:
             print(f"\n  Would push ({len(to_add)} tracks):")
