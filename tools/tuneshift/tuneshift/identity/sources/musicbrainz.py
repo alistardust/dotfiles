@@ -15,6 +15,7 @@ from tuneshift.identity.matching import (
     normalize_title_for_search,
 )
 from tuneshift.identity.models import Evidence, RecordingCandidate, SourceResult
+from tuneshift.platforms.timeout import PlatformTimeout, call_with_timeout
 
 logger = logging.getLogger(__name__)
 
@@ -35,16 +36,18 @@ class MusicBrainzSource:
     ) -> SourceResult | None:
         """Look up recordings by ISRC."""
         try:
-            response = musicbrainzngs.get_recordings_by_isrc(
-                isrc,
-                includes=[
-                    "artist-credits",
-                    "releases",
-                    "work-rels",
-                    "work-level-rels",
-                ],
+            response = call_with_timeout(
+                lambda: musicbrainzngs.get_recordings_by_isrc(
+                    isrc,
+                    includes=[
+                        "artist-credits",
+                        "releases",
+                        "work-rels",
+                        "work-level-rels",
+                    ],
+                )
             )
-        except (OSError, RuntimeError, MusicBrainzError):
+        except (OSError, RuntimeError, MusicBrainzError, PlatformTimeout):
             logger.debug("ISRC lookup failed for %s", isrc)
             return None
 
@@ -82,8 +85,10 @@ class MusicBrainzSource:
         query = f'artist:"{normalized_artist}" AND recording:"{normalized_title}"'
 
         try:
-            response = musicbrainzngs.search_recordings(query=query, limit=10)
-        except (OSError, RuntimeError, MusicBrainzError):
+            response = call_with_timeout(
+                lambda: musicbrainzngs.search_recordings(query=query, limit=10)
+            )
+        except (OSError, RuntimeError, MusicBrainzError, PlatformTimeout):
             logger.debug("MB search failed for %s, %s", artist, title)
             return SourceResult(recordings=[])
 
