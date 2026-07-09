@@ -29,6 +29,7 @@ from tuneshift.matching.penalties import (
     DEFAULT_WEIGHTS,
     Weights,
     album_signal,
+    artist_overlap_absent,
     artist_signal,
     duration_signal,
     isrc_signal,
@@ -210,6 +211,15 @@ def score_match_with_version(
     )
     penalty = -sum(s.points for s in vsignals)
     dur_pen = duration_penalty(result_duration, reference_duration, all_durations, weights)
+    # BUG-3: a same-title candidate by a clearly different artist (no alias, no
+    # containment, no fuzzy overlap) is a hard reject, not a low-confidence
+    # accept. Covers/tributes are handled by the version axis above; this only
+    # catches genuinely different songs that merely share a title.
+    if artist_overlap_absent(
+        normalize_artist(source_artist), normalize_artist(result_artist),
+        weights, resolver=alias_resolver,
+    ):
+        return 0
     return max(0, min(100, base - penalty - dur_pen))
 
 

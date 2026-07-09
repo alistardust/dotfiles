@@ -178,6 +178,45 @@ def artist_signal(
     return SignalPenalty("artist", points, _bonus_penalty(points, budget), budget)
 
 
+def artist_overlap_absent(
+    source_artist: str,
+    result_artist: str,
+    weights: Weights = DEFAULT_WEIGHTS,
+    *,
+    resolver: AliasResolver | None = None,
+) -> bool:
+    """True only when two NON-EMPTY artists share no plausible identity.
+
+    Hard-reject gate (BUG-3): a same-title candidate by a clearly different
+    artist must not win. Inputs are expected already normalized (same contract
+    as :func:`artist_signal`); this function only alias-canonicalizes, so it
+    never double-normalizes. Returns False (no reject) whenever:
+
+    * either side is empty (missing data is not a mismatch),
+    * alias-resolved forms are equal,
+    * one token set is a subset of the other (featured-artist containment,
+      e.g. "drake" within "drake feat future"), or
+    * fuzzy ratio clears ``artist_low_ratio``.
+
+    Covers/tributes that share a name are handled by the source-aware version
+    axis (a studio source rejects a tribute take), not here.
+    """
+    if not source_artist or not result_artist:
+        return False
+    resolver = resolver or default_resolver()
+    src = resolver.canonical(source_artist)
+    res = resolver.canonical(result_artist)
+    if src == res:
+        return False
+    src_tokens = set(src.split())
+    res_tokens = set(res.split())
+    if src_tokens and res_tokens and (
+        src_tokens <= res_tokens or res_tokens <= src_tokens
+    ):
+        return False  # directional containment (featured artist)
+    return ratio(src, res) <= weights.artist_low_ratio
+
+
 def album_signal(
     source_album: str | None,
     result_album: str | None,
