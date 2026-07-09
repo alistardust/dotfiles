@@ -1379,6 +1379,30 @@ class Database:
 
         return [self._row_to_track(row) for row in rows]
 
+    def find_orphaned_tracks(self) -> list[Track]:
+        """Tracks invisible to every review surface (BUG-3 / FEAT-3).
+
+        Orphaned == no confidence_tier, no quarantine_state, no resolution_queue
+        entry, AND no platform_tracks row at all. "No platform mapping" here means
+        the strict case (zero rows): a track reconciled at least once (any
+        platform_tracks row, even unavailable/substitute) is NOT orphaned; its
+        availability is a separate triage/quarantine concern. This strict
+        definition matches the real orphans (tracks added but never resolved),
+        which are invisible to both ``triage`` (quarantine-only) and a user who
+        never runs ``resolve --all``.
+        """
+        rows = self.conn.execute(
+            """
+            SELECT t.* FROM tracks t
+            WHERE t.confidence_tier IS NULL
+              AND t.quarantine_state IS NULL
+              AND NOT EXISTS (SELECT 1 FROM resolution_queue rq WHERE rq.track_id = t.id)
+              AND NOT EXISTS (SELECT 1 FROM platform_tracks pt WHERE pt.track_id = t.id)
+            ORDER BY t.id
+            """
+        ).fetchall()
+        return [self._row_to_track(row) for row in rows]
+
     def find_tracks_by_playlist(self, playlist_id: int) -> list[Track]:
         """Find all tracks in a playlist."""
         return self.get_playlist_tracks(playlist_id)

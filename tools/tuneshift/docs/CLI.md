@@ -236,9 +236,13 @@ links for a playlist.
 Export a playlist to a file or stdout.
 
 ### `doctor`
-`doctor [playlist] [--all] [--apply] [--only ITEM_ID] [--override ITEM_ID=TIDAL_ID] [--no-sync] [--dry-run] [--max-retries N] [-y] [--quiet]`
+`doctor [playlist] [--all] [--apply] [--only ITEM_ID] [--override ITEM_ID=TIDAL_ID] [--no-sync] [--dry-run] [--max-retries N] [-y] [--quiet] [--orphans] [--enqueue-orphans]`
 Scan playlists for mapping issues and apply fixes (plan/apply model). `--apply`
 applies the previously written plan; `--override` remaps a specific item.
+`--orphans` lists orphaned tracks (no platform mapping, no resolution-queue
+entry, and not quarantined) that are invisible to `triage` and never resolve on
+their own; `--enqueue-orphans` queues them so a later `resolve` picks them up.
+Orphan detection is read-only and needs no platform login.
 
 > `doctor` vs `plan heal`: `doctor` scans broadly for broken or missing platform
 > mappings and proposes remaps; `plan heal` specifically fixes **dead locks**

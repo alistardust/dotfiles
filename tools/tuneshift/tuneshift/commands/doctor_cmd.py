@@ -35,9 +35,38 @@ _ISSUE_LABELS = {
 
 
 def handle_doctor(args, db: Database) -> int:
+    if getattr(args, "orphans", False) or getattr(args, "enqueue_orphans", False):
+        return _handle_orphans(args, db)
     if getattr(args, "apply", False):
         return _handle_apply(args, db)
     return _handle_scan(args, db)
+
+
+def _handle_orphans(args, db: Database) -> int:
+    """List orphaned tracks (no mapping, no queue, no quarantine); optionally enqueue.
+
+    Read-only by default (needs no platform login). With --enqueue-orphans, each
+    orphan is added to the resolution queue so a later `resolve` picks it up.
+    """
+    from tuneshift.doctor.scanner import detect_orphaned
+
+    orphans = detect_orphaned(db)
+    if not orphans:
+        print("No orphaned tracks. Every track is resolved, queued, or quarantined.")
+        return 0
+
+    print(f"Orphaned tracks (unmapped, unqueued, not quarantined): {len(orphans)}")
+    for track in orphans:
+        print(f"  [{track.id}] {track.title} - {track.artist}")
+
+    if getattr(args, "enqueue_orphans", False):
+        for track in orphans:
+            db.enqueue_resolution(track.id)
+        print(f"\nEnqueued {len(orphans)} track(s) for resolution. "
+              f"Run: tuneshift resolve --all")
+    else:
+        print("\nRe-run with --enqueue-orphans to queue these for resolution.")
+    return 0
 
 
 # --------------------------------------------------------------------------- #

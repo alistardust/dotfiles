@@ -28,6 +28,16 @@ from tuneshift.enrichment.retry import retry_api_call as _retry_api_call
 
 PLATFORM = "tidal"
 
+
+def detect_orphaned(db: Database) -> list:
+    """Tracks invisible to every review surface (BUG-3 / FEAT-3).
+
+    Thin, DB-only wrapper over :meth:`Database.find_orphaned_tracks`: a track
+    with no tier, no quarantine, no queue entry, and no platform mapping never
+    resolves and never surfaces for review. Read-only; requires no platform login.
+    """
+    return db.find_orphaned_tracks()
+
 # Duration delta (seconds) above which a mapped track is flagged as a possible
 # wrong version. 15s tolerates remaster/master differences without noise.
 DURATION_TOLERANCE_S = 15

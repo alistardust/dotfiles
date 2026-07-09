@@ -156,6 +156,10 @@ def build_parser() -> argparse.ArgumentParser:
                           help="Playlist name (omit with --all to scan every playlist)")
     p_doctor.add_argument("--all", action="store_true",
                           help="Scan every playlist in the database")
+    p_doctor.add_argument("--orphans", action="store_true",
+                          help="List orphaned tracks (no mapping, no queue, not quarantined)")
+    p_doctor.add_argument("--enqueue-orphans", action="store_true",
+                          help="Enqueue orphaned tracks for resolution")
     p_doctor.add_argument("--apply", action="store_true",
                           help="Apply the previously written plan instead of scanning")
     p_doctor.add_argument("--only", type=int, action="append", metavar="ITEM_ID",
