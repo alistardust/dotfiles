@@ -59,7 +59,16 @@ def _remove_and_sync(db: Database, playlist, track, position: int) -> bool:
     """
     from tuneshift.commands.ingest_cmd import _load_client
 
-    db.remove_track_from_playlist(playlist.id, track.id)
+    # BUG-7: `position` is the 1-based ordinal in the ordered track list, not the
+    # stored playlist_tracks.position value. Map it to the real stored position so
+    # we delete ONLY the chosen row: the same track_id may appear at several
+    # positions, and a track_id-wide delete would silently wipe every copy.
+    ordered = db.conn.execute(
+        "SELECT position FROM playlist_tracks WHERE playlist_id = ? ORDER BY position",
+        (playlist.id,),
+    ).fetchall()
+    stored_position = ordered[position - 1]["position"]
+    db.remove_playlist_track_by_position(playlist.id, stored_position)
     print(f"Removed \"{track.title} - {track.artist}\" (position {position}) from \"{playlist.name}\"")
 
     # Auto-reorder if enabled
@@ -96,7 +105,10 @@ def _remove_and_sync(db: Database, playlist, track, position: int) -> bool:
                 if target_lower in pt.title.lower()
             ]
             if matches:
-                client.remove_tracks_by_positions(platform_playlist_id, matches)
+                # BUG-7: remove only ONE platform occurrence to mirror the single
+                # local removal. Both copies share the same platform id, so which
+                # one is removed does not matter; removing all would wipe the track.
+                client.remove_tracks_by_positions(platform_playlist_id, matches[:1])
                 print(f"  {platform_name}: removed")
             else:
                 print(f"  {platform_name}: track not found on platform")

@@ -1717,17 +1717,41 @@ class Database:
         return [self._row_to_track(row) for row in rows]
 
     def remove_playlist_track_by_position(self, playlist_id: int, position: int) -> None:
-        """Remove a track at a position and reindex later rows."""
-        self.conn.execute(
-            "DELETE FROM playlist_tracks WHERE playlist_id = ? AND position = ?",
-            (playlist_id, position),
-        )
-        self.conn.execute(
-            """UPDATE playlist_tracks SET position = position - 1
-               WHERE playlist_id = ? AND position > ?""",
-            (playlist_id, position),
-        )
-        self.conn.commit()
+        """Remove the track at a specific position and reindex later rows.
+
+        Position-scoped (BUG-7): only the row at ``position`` is removed, so a
+        track that legitimately appears at multiple positions keeps its other
+        copies. Pins for the track are cleared only when no copy of it remains in
+        the playlist (a track pinned while still present elsewhere keeps its pin).
+        """
+        with self.conn:
+            row = self.conn.execute(
+                "SELECT track_id FROM playlist_tracks "
+                "WHERE playlist_id = ? AND position = ?",
+                (playlist_id, position),
+            ).fetchone()
+            if row is None:
+                return
+            track_id = row["track_id"]
+            self.conn.execute(
+                "DELETE FROM playlist_tracks WHERE playlist_id = ? AND position = ?",
+                (playlist_id, position),
+            )
+            self.conn.execute(
+                """UPDATE playlist_tracks SET position = position - 1
+                   WHERE playlist_id = ? AND position > ?""",
+                (playlist_id, position),
+            )
+            still_present = self.conn.execute(
+                "SELECT 1 FROM playlist_tracks "
+                "WHERE playlist_id = ? AND track_id = ? LIMIT 1",
+                (playlist_id, track_id),
+            ).fetchone()
+            if still_present is None:
+                self.conn.execute(
+                    "DELETE FROM playlist_pins WHERE playlist_id = ? AND track_id = ?",
+                    (playlist_id, track_id),
+                )
 
     def remove_track_from_playlist(self, playlist_id: int, track_id: int) -> None:
         """Remove track from playlist with cascade cleanup of pins and positions."""
