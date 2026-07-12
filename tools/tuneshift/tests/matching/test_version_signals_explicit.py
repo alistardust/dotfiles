@@ -25,8 +25,14 @@ def test_clean_candidate_scores_below_explicit_by_default():
 def test_prefer_clean_keeps_clean_a_match():
     explicit = _legacy(True, prefer=frozenset({"clean"}))
     clean = _legacy(False, prefer=frozenset({"clean"}))
-    # With clean preferred, the clean candidate is no longer down-ranked.
-    assert clean >= explicit
+    # With clean preferred, the clean candidate wins OUTRIGHT (not a tie): the
+    # explicit take is down-ranked as the non-preferred lyric variant.
+    assert clean > explicit
+
+
+def test_prefer_explicit_default_is_symmetric_win():
+    # Default (no prefer clean): explicit wins outright over clean.
+    assert _legacy(False) < _legacy(True)
 
 
 def _cand(explicit):

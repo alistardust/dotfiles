@@ -176,17 +176,25 @@ def compare_version(
         return VersionVerdict.REJECT
     if source.is_clean and candidate.is_explicit and verdict is VersionVerdict.MATCH:
         verdict = VersionVerdict.SUBSTITUTE
-    # A clean/censored edit is a modified master. Unless the source is itself
-    # clean (or a clean edit is explicitly preferred), it must not outrank the
-    # unmodified master: down-rank it to a substitute so the explicit/original
-    # wins by default, while staying findable when it is the only option.
+    # Canonical source with no lyric signal (the common case): rank the two lyric
+    # variants by preference so the PREFERRED one wins OUTRIGHT rather than tying.
+    # The non-preferred variant is a modified/non-preferred master and drops to a
+    # substitute (down-ranked but still findable when it is the only option).
+    # Default prefers explicit (clean is in the default avoid set), so a clean
+    # edit is down-ranked; a "prefer clean" instead down-ranks the explicit take,
+    # so the clean release wins outright. When neither candidate carries a lyric
+    # signal (unknown structured flag and no title marker -- the whole gold
+    # corpus) nothing fires and scoring is byte-identical to before.
     if (
-        candidate.is_clean
+        verdict is VersionVerdict.MATCH
         and not source.is_clean
-        and "clean" not in prefer
-        and verdict is VersionVerdict.MATCH
+        and not source.is_explicit
     ):
-        verdict = VersionVerdict.SUBSTITUTE
+        prefers_clean = "clean" in prefer
+        if candidate.is_clean and not prefers_clean:
+            verdict = VersionVerdict.SUBSTITUTE
+        elif candidate.is_explicit and prefers_clean:
+            verdict = VersionVerdict.SUBSTITUTE
 
     # --- Remaster is cosmetic (same recording) ---
     if verdict is VersionVerdict.MATCH and candidate.is_remaster and not source.is_remaster:
