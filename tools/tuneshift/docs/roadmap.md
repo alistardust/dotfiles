@@ -77,6 +77,11 @@ is in [matching-known-limits.md](matching-known-limits.md).
 
 For reviewers working from older notes, the following are **done**, not pending:
 
+- **Explicit-by-default lyric preference.** The `content` axis reads the platform's
+  structured `explicit` boolean (captured on Tidal candidates and persisted on
+  `track_candidates`) and prefers the explicit release over the clean one by
+  default, even when neither title carries a marker; `content prefer clean` flips
+  it at any scope. See [preferences.md](preferences.md#explicit-vs-clean-lyrics-content-axis).
 - **Concurrent-DB safety.** `resolve` takes a PID single-flight lock
   (`.tuneshift/resolve.lock`) so concurrent resolve runs cannot corrupt the
   shared SQLite DB, and `import-json` restores a playlist from an

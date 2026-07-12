@@ -100,6 +100,37 @@ The write path de-dupes by `(criterion, canonical target)`, and
 `resolve_scoped_specs()` collapses only identical `(axis, target)` rows, so
 distinct targets on one axis coexist.
 
+## Explicit vs clean lyrics (content axis)
+
+The `content` axis carries the `explicit` and `clean` tokens (the "lyric" axis).
+**Explicit is preferred by default:** when both an explicit and a clean release
+of the same recording exist, TuneShift selects the explicit one. This is driven
+by the source-aware version verdict, which down-ranks a clean candidate to a
+substitute unless clean is explicitly preferred.
+
+The signal is read from the platform's **structured explicit flag** (Tidal
+exposes a per-track `explicit` boolean), not just from a `(Clean)`/`(Explicit)`
+marker in the title. So the preference works even when neither title carries a
+marker. When the platform does not report the flag (unknown), TuneShift falls
+back to title-marker detection, byte-identically to prior behaviour.
+
+Flip it to prefer clean at any scope:
+
+```bash
+tuneshift prefs set content prefer clean                     # global
+tuneshift prefs set --playlist "Kids Road Trip" content prefer clean
+tuneshift prefs set --track 2610 content prefer clean        # one track
+```
+
+`content avoid explicit` (hard) is also available where a clean release must be
+forced. Precedence is the usual global < playlist < track cascade.
+
+**Backfill note:** the structured flag is captured on a track's candidates the
+next time it is resolved. Tracks resolved before this feature keep their prior
+(title-marker) lyric detection until re-resolved with `resolve --force` (per
+track) or `resolve --all --force` (whole library). Re-resolving writes the
+shared DB, so run it from the session that owns DB writes.
+
 ## Commands
 
 ```bash
