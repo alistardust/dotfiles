@@ -1387,6 +1387,7 @@ def _quick_top_score(
             reference_duration=track.duration_seconds,
             prefer=prefer,
             avoid=avoid,
+            cand_explicit=getattr(c, "explicit", None),
             alias_resolver=resolver,
         )
         s = min(100, s + duration_proximity_bonus(c.duration_seconds, track.duration_seconds))
