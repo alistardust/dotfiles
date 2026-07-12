@@ -76,15 +76,25 @@ class VersionProfile:
 
 
 def infer_version(
-    title: str | None, album: str | None = None, version: str | None = None
+    title: str | None,
+    album: str | None = None,
+    version: str | None = None,
+    *,
+    explicit: bool | None = None,
 ) -> VersionProfile:
     """Infer a :class:`VersionProfile` from a track's title, album and version.
 
     ``version`` is the platform's STRUCTURED version field (e.g. Tidal's
     ``version`` / ``tidal_version``: "Live", "Radio Edit", "Continuous Mix",
     "Mixed"). Because it is a controlled vocabulary it is trusted for markers
-    that would be ambiguous in free text — notably a bare "Mixed"/"Continuous"
+    that would be ambiguous in free text - notably a bare "Mixed"/"Continuous"
     that denotes a continuous DJ mix (M1) but is an ordinary word in a title.
+
+    ``explicit`` is the platform's STRUCTURED explicit boolean. When provided
+    (not ``None``) it is authoritative over free-text markers: ``True`` sets
+    ``is_explicit``, ``False`` sets ``is_clean``. When ``None`` the lyric axis
+    falls back to title/album/version text regex, so callers that do not supply
+    the flag score byte-identically to before.
     """
     combined = f"{title or ''} {album or ''}"
     version_text = version or ""
@@ -102,11 +112,17 @@ def infer_version(
         and _norm._CONTINUOUS_MIX_VERSION_RE.search(version_text)
     ):
         recording = RecordingClass.CONTINUOUS_MIX
+    is_explicit = bool(_EXPLICIT_RE.search(full))
+    is_clean = bool(_CLEAN_RE.search(full))
+    if explicit is not None:
+        # Structured platform flag wins over free-text markers.
+        is_explicit = explicit
+        is_clean = not explicit
     return VersionProfile(
         recording=recording,
         is_remaster=bool(_norm._REMASTER_RE.search(full)),
-        is_explicit=bool(_EXPLICIT_RE.search(full)),
-        is_clean=bool(_CLEAN_RE.search(full)),
+        is_explicit=is_explicit,
+        is_clean=is_clean,
     )
 
 
