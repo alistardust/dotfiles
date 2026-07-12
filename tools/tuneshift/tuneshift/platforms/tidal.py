@@ -440,6 +440,7 @@ class TidalClient:
         media_tags = getattr(track, "media_metadata_tags", None)
         audio_quality = getattr(track, "audio_quality", None)
         version = getattr(track, "version", None)
+        explicit_flag = getattr(track, "explicit", None)
         return TrackResult(
             platform_id=str(track.id),
             title=track.name or "",
@@ -451,6 +452,7 @@ class TidalClient:
             tier_restricted=tier_restricted,
             audio_modes=list(audio_modes) if audio_modes else None,
             audio_quality=str(audio_quality) if audio_quality else None,
+            explicit=explicit_flag if isinstance(explicit_flag, bool) else None,
             tidal_version=str(version) if version else None,
             media_metadata_tags=list(media_tags) if media_tags else None,
             album_artist=str(album_artist) if album_artist else None,
