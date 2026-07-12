@@ -99,6 +99,7 @@ class TrackResult:
     tier_restricted: bool = False
     audio_modes: list[str] | None = None
     audio_quality: str | None = None
+    explicit: bool | None = None
     tidal_version: str | None = None
     media_metadata_tags: list[str] | None = None
     album_artist: str | None = None
@@ -125,6 +126,7 @@ _CANDIDATE_METADATA_FIELDS = (
     "tier_restricted",
     "audio_modes",
     "audio_quality",
+    "explicit",
     "tidal_version",
     "media_metadata_tags",
     "album_artist",
