@@ -1198,6 +1198,7 @@ def reconcile_track(
             all_durations=all_durations,
             prefer=prefer_classes,
             avoid=avoid_classes,
+            cand_explicit=getattr(r, "explicit", None),
             alias_resolver=resolver,
         )
         return min(100, s + duration_proximity_bonus(r.duration_seconds, track.duration_seconds))

@@ -84,6 +84,7 @@ class PlatformResolver:
                 result_duration=candidate.duration_seconds,
                 reference_duration=track.duration_seconds,
                 all_durations=all_durations,
+                cand_explicit=getattr(candidate, "explicit", None),
                 alias_resolver=self._alias_resolver,
             )
 
