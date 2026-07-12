@@ -62,7 +62,11 @@ See [Resolution & enrichment](resolution-enrichment.md).
 `resolve [playlist] [--track TITLE ARTIST] [--all] [--platform PLATFORM] [--upgrade] [--force] [--status] [-v] [--throttle OPS_PER_SEC]`
 Resolve tracks to platform candidates and hydrate metadata (ISRC, duration, album).
 `--upgrade` re-resolves below-CONFIRMED tracks; `--force` re-resolves resolved ones;
-`--status` shows coverage/quarantine stats; `--throttle N` caps resolve to N
+`--status` (no playlist) shows a library coverage report: playable % over total,
+quarantined and unresolved counts (unresolved split into in-a-playlist vs
+orphaned), a tier breakdown, a quarantine-reason histogram, and per-playlist
+coverage lowest-first (`--status -v` also lists quarantined tracks). `--status
+<playlist>` shows that playlist's resolved count. `--throttle N` caps resolve to N
 operations/second for local resource pacing (default 3.0). Only one `resolve`
 run may execute at a time: a concurrent run refuses (PID lock at
 `.tuneshift/resolve.lock`), which prevents the concurrent-writer corruption that

@@ -24,10 +24,14 @@ Plan JSON files under `.tuneshift/plans/` are never auto-pruned; applied and
 rejected plans accumulate until deleted by hand. Proposed: auto-archive or delete
 plans older than N days, or a `plan prune` verb. See [plan-apply.md](plan-apply.md).
 
-### Richer coverage reporting
-`resolve --status` reports overall coverage and resolved/pending/quarantined counts.
-A richer report would help triage: per-playlist coverage breakdown and a histogram
-of quarantine reasons. See [resolution-enrichment.md](resolution-enrichment.md).
+### Richer coverage reporting (shipped)
+`resolve --status` (no playlist) now reports a full library breakdown: playable
+coverage over the **total** track count (so unresolved tracks are never hidden),
+quarantined (unavailable) and unresolved counts (split into in-a-playlist vs
+orphaned/no-playlist), a resolved-tier breakdown, a quarantine-reason histogram
+(bucketed by reason prefix), and per-playlist coverage sorted lowest-first (each
+row distinguishes "done: N unavailable" from "N unresolved"). `--verbose` also
+lists the individual quarantined tracks.
 
 ### Enrichment backfill scheduling
 The enrichment worker is resumable, but scheduling is manual: there is no cron-able

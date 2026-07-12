@@ -2549,6 +2549,105 @@ class Database:
             "field_fill_rates": fill,
         }
 
+    def resolution_status_summary(self) -> dict[str, Any]:
+        """Partition the library for the ``resolve --status`` headline.
+
+        Categories are mutually exclusive and sum to ``total`` (quarantine wins
+        over a stale tier): ``playable`` (a usable, available mapping),
+        ``quarantined`` (unavailable on platform), and ``unresolved`` (no tier
+        yet), the last split into tracks that are in a playlist (actionable) vs
+        orphaned/no-playlist (library cleanup). Also returns the resolved-tier
+        breakdown and a quarantine-reason histogram bucketed by reason prefix.
+        """
+        total = self.conn.execute("SELECT COUNT(*) AS c FROM tracks").fetchone()["c"]
+        quarantined = self.conn.execute(
+            "SELECT COUNT(*) AS c FROM tracks WHERE quarantine_state IS NOT NULL"
+        ).fetchone()["c"]
+        playable = self.conn.execute(
+            "SELECT COUNT(*) AS c FROM tracks "
+            "WHERE confidence_tier IS NOT NULL AND quarantine_state IS NULL"
+        ).fetchone()["c"]
+        unresolved_in_playlist = self.conn.execute(
+            "SELECT COUNT(*) AS c FROM tracks t "
+            "WHERE t.confidence_tier IS NULL AND t.quarantine_state IS NULL "
+            "AND EXISTS (SELECT 1 FROM playlist_tracks pt WHERE pt.track_id = t.id)"
+        ).fetchone()["c"]
+        unresolved_orphaned = self.conn.execute(
+            "SELECT COUNT(*) AS c FROM tracks t "
+            "WHERE t.confidence_tier IS NULL AND t.quarantine_state IS NULL "
+            "AND NOT EXISTS (SELECT 1 FROM playlist_tracks pt WHERE pt.track_id = t.id)"
+        ).fetchone()["c"]
+
+        tier_rows = self.conn.execute(
+            "SELECT confidence_tier AS tier, COUNT(*) AS c FROM tracks "
+            "WHERE confidence_tier IS NOT NULL AND quarantine_state IS NULL "
+            "GROUP BY confidence_tier"
+        ).fetchall()
+        tiers = {row["tier"]: row["c"] for row in tier_rows}
+
+        reason_rows = self.conn.execute(
+            """SELECT CASE
+                        WHEN instr(quarantine_reason, ':') > 0
+                          THEN substr(quarantine_reason, 1, instr(quarantine_reason, ':') - 1)
+                        ELSE COALESCE(quarantine_reason, 'unknown')
+                      END AS bucket,
+                      COUNT(*) AS c
+               FROM tracks WHERE quarantine_state IS NOT NULL
+               GROUP BY bucket ORDER BY c DESC, bucket"""
+        ).fetchall()
+        quarantine_reasons = [(row["bucket"], row["c"]) for row in reason_rows]
+
+        return {
+            "total": total,
+            "playable": playable,
+            "quarantined": quarantined,
+            "unresolved_in_playlist": unresolved_in_playlist,
+            "unresolved_orphaned": unresolved_orphaned,
+            "playable_pct": (playable / total) if total else 0.0,
+            "tiers": tiers,
+            "quarantine_reasons": quarantine_reasons,
+        }
+
+    def per_playlist_coverage(self) -> list[dict[str, Any]]:
+        """Per-playlist resolution coverage, lowest playable-fraction first.
+
+        Each row partitions the playlist's distinct tracks into ``playable`` /
+        ``quarantined`` / ``unresolved`` (same rule as the headline). ``pct`` is
+        ``playable / total``. Playlists whose only gap is quarantined-unavailable
+        tracks (``unresolved == 0`` and ``quarantined > 0``) are "done as they can
+        be"; a nonzero ``unresolved`` is the call to run ``resolve``.
+        """
+        rows = self.conn.execute(
+            """SELECT p.name AS name,
+                      COUNT(DISTINCT pt.track_id) AS total,
+                      COUNT(DISTINCT CASE
+                          WHEN t.confidence_tier IS NOT NULL AND t.quarantine_state IS NULL
+                          THEN t.id END) AS playable,
+                      COUNT(DISTINCT CASE
+                          WHEN t.quarantine_state IS NOT NULL
+                          THEN t.id END) AS quarantined,
+                      COUNT(DISTINCT CASE
+                          WHEN t.confidence_tier IS NULL AND t.quarantine_state IS NULL
+                          THEN t.id END) AS unresolved
+               FROM playlists p
+               JOIN playlist_tracks pt ON pt.playlist_id = p.id
+               JOIN tracks t ON t.id = pt.track_id
+               GROUP BY p.id, p.name"""
+        ).fetchall()
+        result = [
+            {
+                "name": row["name"],
+                "total": row["total"],
+                "playable": row["playable"],
+                "quarantined": row["quarantined"],
+                "unresolved": row["unresolved"],
+                "pct": (row["playable"] / row["total"]) if row["total"] else 0.0,
+            }
+            for row in rows
+        ]
+        result.sort(key=lambda r: (r["pct"], r["name"]))
+        return result
+
     def get_quarantined_tracks(self) -> list[dict[str, Any]]:
         """List quarantined tracks with machine-readable reasons (AC-D6)."""
         rows = self.conn.execute(

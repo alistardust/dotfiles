@@ -191,4 +191,61 @@ def _show_status(args: Namespace, db: Database) -> None:
         print(f"    Resolved: {resolved}/{len(tracks)} ({percent}%)")
         print(f"    Platforms: {platform_names}")
     else:
-        print(f"  Unresolved tracks: {len(db.find_unresolved())}")
+        _print_library_status(db, verbose=bool(getattr(args, "verbose", False)))
+
+
+def _print_library_status(db: Database, *, verbose: bool) -> None:
+    """Print the whole-library resolution status (richer coverage report)."""
+    s = db.resolution_status_summary()
+    total = s["total"]
+    unresolved = s["unresolved_in_playlist"] + s["unresolved_orphaned"]
+
+    print("Resolution status")
+    print(
+        f"  Coverage:  {s['playable_pct'] * 100:.1f}% playable  "
+        f"({s['playable']} / {total} total)"
+    )
+    print(f"             {s['quarantined']} quarantined (unavailable on platform)")
+    print(
+        f"             {unresolved} unresolved  "
+        f"({s['unresolved_in_playlist']} in playlists, "
+        f"{s['unresolved_orphaned']} orphaned/no-playlist)"
+    )
+
+    tiers = s["tiers"]
+    if tiers:
+        order = ["VERIFIED", "CONFIRMED", "PROBABLE", "UNCERTAIN"]
+        parts = [f"{tiers[t]} {t}" for t in order if tiers.get(t)]
+        print(f"\n  Tiers:     {' - '.join(parts)}")
+
+    if s["quarantine_reasons"]:
+        print("\n  Quarantine reasons:")
+        for bucket, count in s["quarantine_reasons"]:
+            print(f"    {count:>4}  {bucket}")
+
+    rows = db.per_playlist_coverage()
+    needs_attention = [r for r in rows if r["pct"] < 1.0]
+    fully = len(rows) - len(needs_attention)
+    if needs_attention:
+        print("\n  Per-playlist coverage (lowest first):")
+        for r in needs_attention:
+            pct = int(r["pct"] * 100)
+            note = _coverage_note(r)
+            print(f"    {pct:>3}%  {r['name'][:32]:<32} ({r['playable']}/{r['total']}){note}")
+    if fully:
+        print(f"\n  {fully} playlist(s) fully playable.")
+
+    if verbose and s["quarantined"]:
+        print("\n  Quarantined tracks:")
+        for q in db.get_quarantined_tracks():
+            print(f"    [{q['track_id']}] {q['title']} - {q['artist']}  ({q['reason']})")
+
+
+def _coverage_note(row: dict) -> str:
+    """Annotate a per-playlist row: distinguish 'unavailable' from 'run resolve'."""
+    if row["unresolved"]:
+        extra = f" - {row['quarantined']} unavailable" if row["quarantined"] else ""
+        return f"  [{row['unresolved']} unresolved{extra}]"
+    if row["quarantined"]:
+        return f"  [done: {row['quarantined']} unavailable]"
+    return ""
