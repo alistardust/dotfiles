@@ -364,6 +364,8 @@ def source_aware_version_signals(
     *,
     source_version: str | None = None,
     cand_version: str | None = None,
+    source_explicit: bool | None = None,
+    cand_explicit: bool | None = None,
     prefer: frozenset[str] = frozenset(),
     avoid: frozenset[str] = frozenset(),
     owned: frozenset[str] = frozenset(),
@@ -381,6 +383,12 @@ def source_aware_version_signals(
     fields (Tidal ``tidal_version``); they let a controlled-vocabulary marker
     (e.g. a continuous-mix "Mixed") classify the recording even when the free
     title does not carry it (M1).
+
+    ``source_explicit`` / ``cand_explicit`` are the platforms' STRUCTURED explicit
+    booleans. When provided they drive the lyric (explicit/clean) axis
+    authoritatively, so a structurally-clean candidate is down-ranked toward the
+    explicit release by default even without a title marker. ``None`` preserves
+    the prior title-regex behaviour (byte parity).
     """
     from tuneshift.matching.version import (
         VersionVerdict,
@@ -389,8 +397,8 @@ def source_aware_version_signals(
     )
 
     vw = weights.version
-    src = infer_version(source_title, source_album, source_version)
-    cand = infer_version(cand_title, cand_album, cand_version)
+    src = infer_version(source_title, source_album, source_version, explicit=source_explicit)
+    cand = infer_version(cand_title, cand_album, cand_version, explicit=cand_explicit)
     verdict = compare_version(src, cand, prefer=prefer, avoid=avoid)
 
     signals: list[SignalPenalty] = []

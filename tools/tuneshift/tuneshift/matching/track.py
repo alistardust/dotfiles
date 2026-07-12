@@ -162,6 +162,8 @@ def score_match_with_version(
     *,
     prefer: frozenset[str] = frozenset(),
     avoid: frozenset[str] = frozenset(),
+    source_explicit: bool | None = None,
+    cand_explicit: bool | None = None,
     alias_resolver: "AliasResolver | None" = None,
 ) -> int:
     """Score a search result with source-aware version + duration penalties.
@@ -207,6 +209,7 @@ def score_match_with_version(
         base = max(base, base_only - _SUBTITLE_PENALTY)
     vsignals = source_aware_version_signals(
         source_title, source_album or "", result_title, result_album,
+        source_explicit=source_explicit, cand_explicit=cand_explicit,
         prefer=prefer, avoid=avoid, weights=weights,
     )
     penalty = -sum(s.points for s in vsignals)
