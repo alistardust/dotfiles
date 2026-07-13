@@ -176,3 +176,58 @@ def test_handle_map_requires_track_selector(db_with_playlist_and_track):
     result = handle_map(args, db)
 
     assert result == 1
+
+
+def test_map_clears_quarantine_and_sets_verified_tier(db_with_playlist_and_track):
+    """FEAT-5: a user-approved map self-heals a quarantined/tier-less track."""
+    db, _playlist_id, track_id = db_with_playlist_and_track
+    # Simulate the resolver having quarantined this track.
+    db.enqueue_resolution(track_id)
+    db.set_resolution_state(track_id, "quarantined", last_error="no_confident_match")
+    db.set_track_fields(
+        track_id,
+        {"quarantine_state": "unresolved", "quarantine_reason": "no_confident_match"},
+        source="test",
+    )
+
+    args = argparse.Namespace(
+        playlist="Trans Wrath", title="Louder",
+        tidal="48931", ytmusic=None, verify=False,
+    )
+    assert handle_map(args, db) == 0
+
+    # Quarantine cleared on both sources of truth.
+    assert db.get_track(track_id).quarantine_state is None
+    assert db.get_resolution_queue_state(track_id) == "resolved"
+    # A user-approved exact map is authoritative identity -> VERIFIED.
+    tier, score, _ = db.get_resolution_state(track_id)
+    assert tier == "VERIFIED"
+    assert score == 1.0
+
+
+def test_map_verify_hydrates_identity_fields(db_with_playlist_and_track):
+    """FEAT-5: --verify map also fills NULL identity fields from the result."""
+    db, playlist_id, _track_id = db_with_playlist_and_track
+    # A track with NULL album/isrc/duration so the fill-NULL hydration is visible.
+    bare_id = db.add_track(Track(title="Fighter", artist="Christina Aguilera"))
+    db.add_track_to_playlist(playlist_id, bare_id, position=1)
+
+    client = MagicMock()
+    client.load_session.return_value = True
+    client.get_track.return_value = TrackResult(
+        platform_id="48931", title="Fighter", artist="Christina Aguilera",
+        album="Stripped", duration_seconds=246, isrc="USRC10300123",
+    )
+    args = argparse.Namespace(
+        playlist="Trans Wrath", title="Fighter",
+        tidal="48931", ytmusic=None, verify=True,
+    )
+    with patch("tuneshift.commands.map_cmd._load_client", return_value=client):
+        assert handle_map(args, db) == 0
+
+    refreshed = db.get_track(bare_id)
+    assert refreshed.album == "Stripped"
+    assert refreshed.isrc == "USRC10300123"
+    assert refreshed.duration_seconds == 246
+    tier, _score, _ = db.get_resolution_state(bare_id)
+    assert tier == "VERIFIED"

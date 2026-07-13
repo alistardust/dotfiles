@@ -48,6 +48,7 @@ def handle_map(args, db: Database) -> int:
     platform_title = None
     platform_artist = None
     platform_album = None
+    verified_result = None
 
     if args.verify:
         client = _load_client(platform)
@@ -60,6 +61,7 @@ def handle_map(args, db: Database) -> int:
             print(f"Track ID {platform_id} not found on {platform}", file=sys.stderr)
             return 1
 
+        verified_result = result
         platform_title = result.title
         platform_artist = result.artist
         platform_album = result.album
@@ -81,6 +83,22 @@ def handle_map(args, db: Database) -> int:
         match_score=100,
     )
     print(f'Mapped "{track.title}" -> {platform}:{platform_id}')
+
+    # FEAT-5: a user-approved exact map is authoritative identity. Clear any
+    # prior quarantine (on both the track and the resolution queue) and mark the
+    # track resolved+VERIFIED so it stops showing as quarantined/unresolved in
+    # `resolve --status` and coverage. Hydrate identity fields from the verified
+    # result when available (fill-NULL; never clobbers a prior value).
+    db.approve_resolution(track.id)
+    db.hydrate_identity_metadata(
+        track.id,
+        isrc=verified_result.isrc if verified_result else None,
+        duration_seconds=verified_result.duration_seconds if verified_result else None,
+        album=verified_result.album if verified_result else None,
+        confidence_tier="VERIFIED",
+        confidence_score=1.0,
+        source="map",
+    )
 
     # AC10: a new Tidal mapping auto-captures Atmos/catalog metadata + derives
     # the atmos-available tag. Reuse the --verify client if present; otherwise

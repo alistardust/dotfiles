@@ -80,7 +80,11 @@ Fetch platform/audio metadata and/or run LLM classification. See the
 ### `map` / `unmap`
 `map [playlist] [title] [--track-id ID] [--tidal ID] [--ytmusic ID] [--verify] [--dry-run]`
 Manually map a canonical track to a platform ID (auto-captures Tidal catalog
-metadata). `unmap <playlist> <title> [--tidal] [--ytmusic]` removes a mapping.
+metadata). A user-approved map is authoritative identity, so it also clears any
+prior quarantine and marks the track resolved + `VERIFIED` (with `--verify` it
+fills NULL album/ISRC/duration from the platform result), so a hand-mapped track
+no longer lingers as quarantined/unresolved in `resolve --status`. `unmap
+<playlist> <title> [--tidal] [--ytmusic]` removes a mapping.
 
 ### `alias`
 `alias {list,show,add,remove}`: manage artist-alias equivalence classes
