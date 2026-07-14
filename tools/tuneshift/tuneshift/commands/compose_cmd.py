@@ -252,8 +252,14 @@ def handle_review(args, db: Database) -> int:
 
     tracks = [track_to_metadata(track) for track in db.get_playlist_tracks(playlist.id)]
     artist_lookup = _build_artist_lookup(db, playlist.id)
+    year_lookup = db.get_release_years_for_playlist(playlist.id)
 
-    findings = review_playlist(tracks, concept=concept, artist_lookup=artist_lookup)
+    findings = review_playlist(
+        tracks,
+        concept=concept,
+        artist_lookup=artist_lookup,
+        year_lookup=year_lookup,
+    )
 
     print(f'Review: "{playlist.name}" ({len(tracks)} tracks)')
     print(f'Concept: {concept.theme}')

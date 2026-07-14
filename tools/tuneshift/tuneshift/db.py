@@ -1716,6 +1716,30 @@ class Database:
         ).fetchall()
         return [self._row_to_track(row) for row in rows]
 
+    def get_release_years_for_playlist(
+        self, playlist_id: int
+    ) -> dict[int, int | None]:
+        """Map each track in a playlist to a best-known release year.
+
+        Reads ``track_platform_metadata.release_year`` (populated per platform).
+        When a track has release years from multiple platforms, the earliest
+        non-null year is used (the original release, not a later reissue).
+        Every track in the playlist is present in the result; a track with no
+        recorded year maps to ``None`` so callers can report it as unverifiable.
+        """
+        rows = self.conn.execute(
+            """SELECT pt.track_id AS track_id,
+                      MIN(tpm.release_year) AS year
+               FROM playlist_tracks pt
+               LEFT JOIN track_platform_metadata tpm
+                    ON tpm.track_id = pt.track_id
+                    AND tpm.release_year IS NOT NULL
+               WHERE pt.playlist_id = ?
+               GROUP BY pt.track_id""",
+            (playlist_id,),
+        ).fetchall()
+        return {row["track_id"]: row["year"] for row in rows}
+
     def remove_playlist_track_by_position(self, playlist_id: int, position: int) -> None:
         """Remove the track at a specific position and reindex later rows.
 
