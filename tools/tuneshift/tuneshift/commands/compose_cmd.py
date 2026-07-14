@@ -238,6 +238,7 @@ def handle_concept(args, db: Database) -> int:
 
 def handle_review(args, db: Database) -> int:
     """Review a playlist for concept compliance (works with or without narrative)."""
+    from tuneshift.composer.concept_llm import make_concept_judge
     from tuneshift.composer.reviewer import review_playlist
 
     playlist = db.find_playlist_by_name(args.playlist)
@@ -253,12 +254,14 @@ def handle_review(args, db: Database) -> int:
     tracks = [track_to_metadata(track) for track in db.get_playlist_tracks(playlist.id)]
     artist_lookup = _build_artist_lookup(db, playlist.id)
     year_lookup = db.get_release_years_for_playlist(playlist.id)
+    llm_judge = make_concept_judge()
 
     findings = review_playlist(
         tracks,
         concept=concept,
         artist_lookup=artist_lookup,
         year_lookup=year_lookup,
+        llm_judge=llm_judge,
     )
 
     print(f'Review: "{playlist.name}" ({len(tracks)} tracks)')

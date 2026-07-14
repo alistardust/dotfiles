@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 
+from tuneshift.composer.concept_llm import ConceptJudge, TrackCtx
 from tuneshift.composer.models import (
     EnhancedSection,
     PlaylistConcept,
@@ -301,6 +302,54 @@ def _enforce_thematic_unavailable(
     )]
 
 
+def _enforce_thematic_llm(
+    rule: str,
+    tracks: list[TrackMetadata],
+    llm_judge: ConceptJudge,
+) -> list[ReviewFinding]:
+    """Enforce a thematic rule via one batched LLM verdict per rule.
+
+    ``violates`` -> a hard finding (severity 1.0); ``unsure`` -> unknown
+    (0.3); ``complies`` -> no finding. The judge itself degrades to "unsure"
+    on any backend/parse failure, so a flaky model never blocks a review.
+    """
+    contexts = [
+        TrackCtx(
+            track_id=track.track_id,
+            title=track.title,
+            artist=track.artist,
+            themes=list(track.themes),
+            lyrical_subject=track.lyrical_subject,
+        )
+        for track in tracks
+    ]
+    verdicts = llm_judge(rule, contexts)
+    findings: list[ReviewFinding] = []
+    for track in tracks:
+        verdict = verdicts.get(track.track_id, "unsure")
+        if verdict == "violates":
+            findings.append(ReviewFinding(
+                category="concept_violation",
+                description=(
+                    f'HARD: "{track.title}" by {track.artist} - '
+                    f'Rule: "{rule}" - FAILS (LLM judged the track violates it)'
+                ),
+                severity=1.0,
+                section_name=None,
+            ))
+        elif verdict != "complies":
+            findings.append(ReviewFinding(
+                category="concept_violation",
+                description=(
+                    f'UNKNOWN: "{track.title}" by {track.artist} - '
+                    f'Rule: "{rule}" - LLM was unsure, cannot verify'
+                ),
+                severity=0.3,
+                section_name=None,
+            ))
+    return findings
+
+
 def _review_soft_rules(
     tracks: list[TrackMetadata],
     concept: PlaylistConcept,
@@ -341,13 +390,14 @@ def _review_concept_compliance(
     artist_lookup: dict[str, Artist],
     *,
     year_lookup: dict[int, int | None] | None = None,
+    llm_judge: ConceptJudge | None = None,
 ) -> list[ReviewFinding]:
     """Check tracks against concept hard_rules and soft_rules.
 
     Each hard rule is routed by :func:`classify_rule` to the right enforcer:
     ``artist must be <tag>`` uses the artist-identity check; a year/era rule is
-    enforced deterministically against ``year_lookup``; anything else is a
-    thematic rule (LLM-judged in Chunk 2, reported as needing an LLM here).
+    enforced deterministically against ``year_lookup``; a thematic rule is judged
+    by ``llm_judge`` when supplied, and otherwise reported once as needing an LLM.
     """
     years = year_lookup or {}
     findings: list[ReviewFinding] = []
@@ -357,6 +407,8 @@ def _review_concept_compliance(
             findings.extend(_enforce_artist_tag(rule, tracks, artist_lookup))
         elif kind is RuleKind.ERA:
             findings.extend(_enforce_era(rule, tracks, years))
+        elif llm_judge is not None:
+            findings.extend(_enforce_thematic_llm(rule, tracks, llm_judge))
         else:
             findings.extend(_enforce_thematic_unavailable(rule, tracks))
     findings.extend(_review_soft_rules(tracks, concept))
@@ -426,6 +478,7 @@ def review_composition(
     artist_lookup: dict[str, Artist] | None = None,
     *,
     year_lookup: dict[int, int | None] | None = None,
+    llm_judge: ConceptJudge | None = None,
 ) -> list[ReviewFinding]:
     """Review section integrity, transition quality, and concept compliance."""
     findings = _review_section_integrity(ordered_tracks, assignments, sections)
@@ -436,11 +489,13 @@ def review_composition(
 
     if concept and concept.has_hard_rules:
         findings.extend(_review_concept_compliance(
-            ordered_tracks, concept, artist_lookup or {}, year_lookup=year_lookup
+            ordered_tracks, concept, artist_lookup or {},
+            year_lookup=year_lookup, llm_judge=llm_judge,
         ))
     elif concept and concept.soft_rules:
         findings.extend(_review_concept_compliance(
-            ordered_tracks, concept, artist_lookup or {}, year_lookup=year_lookup
+            ordered_tracks, concept, artist_lookup or {},
+            year_lookup=year_lookup, llm_judge=llm_judge,
         ))
 
     return findings
@@ -452,6 +507,7 @@ def review_playlist(
     artist_lookup: dict[str, Artist] | None = None,
     *,
     year_lookup: dict[int, int | None] | None = None,
+    llm_judge: ConceptJudge | None = None,
 ) -> list[ReviewFinding]:
     """Review a playlist for concept compliance and vibe outliers.
 
@@ -462,7 +518,8 @@ def review_playlist(
     findings: list[ReviewFinding] = []
     if concept:
         findings.extend(_review_concept_compliance(
-            tracks, concept, artist_lookup or {}, year_lookup=year_lookup
+            tracks, concept, artist_lookup or {},
+            year_lookup=year_lookup, llm_judge=llm_judge,
         ))
     findings.extend(_review_vibe_outliers(tracks))
     return findings
