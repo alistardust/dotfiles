@@ -74,6 +74,37 @@ def test_acceptance_scoped_to_its_rule_only():
     assert "violates it" in descs  # thematic finding still present
 
 
+def test_accept_all_excludes_already_accepted_and_handles_quoted_rules(tmp_path: Path):
+    """--accept-track without --rule: only new findings collected; robust parse."""
+    from types import SimpleNamespace
+
+    from tuneshift.commands.compose_cmd import handle_review
+    from tuneshift.db import Database
+    from tuneshift.models import Track
+
+    db = Database(tmp_path / "t.db")
+    pid = db.create_playlist("P")
+    tid = db.add_track(Track(title="Old", artist="A", album="Album"))
+    db.add_track_to_playlist(pid, tid, 0)
+    db.upsert_track_platform_metadata(tid, "tidal", "1", release_year=1975)
+    # A rule containing embedded quotes must round-trip through the accept parse.
+    quoted_rule = 'released 1993-2003 for the "core" era'
+    db.set_preferences(pid, {
+        "concept": {"theme": "t", "hard_rules": [quoted_rule], "soft_rules": []}
+    })
+
+    base = dict(playlist="P", fix=False, list_accepted=False, rule=None)
+    # Accept all current findings for the track (no --rule).
+    rc = handle_review(SimpleNamespace(accept_track=tid, **base), db)
+    assert rc == 0
+    # The full quoted rule was captured, not truncated at the first inner quote.
+    assert (tid, quoted_rule) in set(db.list_concept_acceptances(pid))
+    # Re-running accept-all now finds nothing new (already accepted, suppressed).
+    rc = handle_review(SimpleNamespace(accept_track=tid, **base), db)
+    assert rc == 0
+    assert len(db.get_concept_acceptances(pid)) == 1
+
+
 def test_review_cmd_accept_persists_across_calls(tmp_path: Path):
     """End-to-end through handle_review + the DB acceptance store."""
     from types import SimpleNamespace

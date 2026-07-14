@@ -268,12 +268,13 @@ def _accept_concept_findings(db, playlist, concept, track_id: int,
     findings = review_playlist(
         tracks, concept=concept, artist_lookup=artist_lookup,
         year_lookup=year_lookup, llm_judge=make_concept_judge(),
+        accepted=db.get_concept_acceptances(playlist.id),
     )
     needle = f'"{target.title}" by {target.artist} '
     accepted_rules: set[str] = set()
     for finding in findings:
         if needle in finding.description:
-            match = _re.search(r'Rule: "([^"]+)"', finding.description)
+            match = _re.search(r'Rule: "(.+?)" - ', finding.description)
             if match:
                 accepted_rules.add(match.group(1))
 
