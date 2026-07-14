@@ -191,15 +191,29 @@ class ResolutionWorker:
         best = _best_candidate(candidates)
         platform = cand_platform(candidates)
         # BUG-5: a user-approved lock owns the track's identity; it is exempt from
-        # both the tier recompute and the acceptance floor below.
+        # the tier recompute and the acceptance floor below.
         locked = (
             platform is not None
             and self._db.get_effective_lock(track_id, platform) is not None
         )
+        # Persist the discovered candidate set BEFORE any floor decision (BUG-8):
+        # a below-floor quarantine used to discard what the search found, leaving
+        # zero rows in track_candidates so triage/explain could not show why the
+        # track scored low or whether the result was a transient bad match.
+        # Persisting first makes the quarantine diagnosable and a re-resolve still
+        # replaces the set cleanly. Replace any prior set so re-resolve never
+        # leaves stale rows/ranks behind, then persist in discovery order.
+        self._db.clear_track_candidates(track_id, platform)
+        for rank, cand in enumerate(candidates):
+            self._db.upsert_track_candidate(
+                track_id, cand.platform, cand.platform_track_id, cand.metadata,
+                discovery_rank=rank,
+            )
         # BUG-3: if the strongest candidate scores below the acceptance floor, the
         # resolver found nothing confident (only wrong candidates, e.g. other
         # songs by the same artist, or a same-title different-artist hard-reject).
-        # Quarantine for review instead of hydrating a misleading low tier.
+        # Quarantine for review instead of hydrating a misleading low tier. The
+        # persisted candidates above remain so the quarantine can be inspected.
         best_score = (best.metadata or {}).get("match_score")
         if (
             not locked
@@ -212,14 +226,6 @@ class ResolutionWorker:
                 f"< {RESOLVE_ACCEPT_FLOOR:.0f}",
             )
             return False
-        # Replace any prior candidate set so a re-resolve never leaves stale rows
-        # (or stale ranks) behind, then persist in discovery order.
-        self._db.clear_track_candidates(track_id, platform)
-        for rank, cand in enumerate(candidates):
-            self._db.upsert_track_candidate(
-                track_id, cand.platform, cand.platform_track_id, cand.metadata,
-                discovery_rank=rank,
-            )
         # Hydrate the track's core identity metadata from the BEST-scoring
         # candidate (discovery order != score order). Fill-NULL semantics live in
         # the DB method, so a prior user edit is never clobbered and re-resolving

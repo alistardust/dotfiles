@@ -38,3 +38,21 @@ def test_at_or_above_floor_resolves(db):
 
     assert db.get_resolution_queue_state(tid) == "resolved"
     assert db.get_resolution_state(tid)[0] == "CONFIRMED"
+
+
+def test_below_floor_quarantine_still_persists_candidates(db):
+    """BUG-8: a no_confident_match quarantine keeps the discovered candidates so
+    triage/explain can show what was found (previously it discarded them)."""
+    tid = _track(db)
+
+    def resolver(_t):
+        return [
+            ResolvedCandidate("tidal", "wrong1", {"match_score": 15}),
+            ResolvedCandidate("tidal", "wrong2", {"match_score": 10}),
+        ]
+
+    ResolutionWorker(db, resolver).resolve_tracks([tid], force=True)
+
+    assert db.get_resolution_queue_state(tid) == "quarantined"
+    persisted = {c["platform_track_id"] for c in db.get_track_candidates(tid, platform="tidal")}
+    assert persisted == {"wrong1", "wrong2"}  # not empty -> diagnosable
