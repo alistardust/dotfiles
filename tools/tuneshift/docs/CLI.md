@@ -220,8 +220,12 @@ prints the accepted pairs. Acceptances persist in the database
 The LLM backend is the same one the classifier uses (`TUNESHIFT_LLM_BACKEND` /
 `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / Ollama). The per-call track batch is
 `TUNESHIFT_CONCEPT_BATCH` (default 8); the per-call timeout is
-`TUNESHIFT_LLM_TIMEOUT` (default 30s). Only `review` enforces era/thematic rules;
-`batch`, `audit`, and `compose` remain artist-tag-only.
+`TUNESHIFT_LLM_TIMEOUT` (default 30s). `batch --review-findings`,
+`batch --rebuild`, `audit --concept-only`, and `compose` apply the same rule
+routing: era violations (deterministic) become proposed removals in a plan you
+review before applying, thematic (LLM) verdicts surface as reviewable proposed
+removals via the plan/apply layer, and accepted pairs are suppressed so an
+accepted track is never proposed for removal.
 
 ### `analyze`
 `analyze <playlist>`: analyze playlist metadata.
