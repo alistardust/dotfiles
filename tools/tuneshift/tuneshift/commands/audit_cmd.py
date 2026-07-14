@@ -26,6 +26,11 @@ def handle_audit(args, db: Database) -> int:
 
     total_findings = 0
 
+    concept_judge = None
+    if run_all or getattr(args, "concept_only", False):
+        from tuneshift.composer.concept_llm import make_concept_judge
+        concept_judge = make_concept_judge()
+
     for playlist in playlists:
         findings: list[str] = []
 
@@ -33,7 +38,7 @@ def handle_audit(args, db: Database) -> int:
             findings.extend(_audit_mappings(db, playlist))
 
         if run_all or getattr(args, "concept_only", False):
-            findings.extend(_audit_concept(db, playlist))
+            findings.extend(_audit_concept(db, playlist, llm_judge=concept_judge))
 
         if run_all or getattr(args, "vibes_only", False):
             findings.extend(_audit_vibes(db, playlist))
@@ -57,8 +62,8 @@ def handle_audit(args, db: Database) -> int:
             print("\nGenerating fix plan...")
             # Delegate to batch --review-findings for the specified playlist
             if args.playlist:
-                from tuneshift.commands.batch_cmd import plan_review_fixes, BatchPlan, render_plan
-                ops = plan_review_fixes(db, playlists[0].id)
+                from tuneshift.commands.batch_cmd import BatchPlan, plan_review_fixes, render_plan
+                ops = plan_review_fixes(db, playlists[0].id, llm_judge=concept_judge)
                 if ops:
                     plan = BatchPlan(
                         playlist_name=playlists[0].name,
@@ -123,9 +128,14 @@ def _audit_mappings(db: Database, playlist) -> list[str]:
     return findings
 
 
-def _audit_concept(db: Database, playlist) -> list[str]:
-    """Check concept rule compliance. Reports unverifiable tracks separately."""
-    from tuneshift.commands.compose_cmd import _get_concept, _build_artist_lookup
+def _audit_concept(db: Database, playlist, llm_judge=None) -> list[str]:
+    """Check concept rule compliance. Reports unverifiable tracks separately.
+
+    Enforces the same rule routing as ``review``: artist-tag and era rules
+    deterministically, thematic rules via ``llm_judge`` when supplied, and
+    suppresses accepted (track, rule) pairs.
+    """
+    from tuneshift.commands.compose_cmd import _build_artist_lookup, _get_concept
     from tuneshift.composer.reviewer import review_playlist
     from tuneshift.sequencer.metadata import track_to_metadata
 
@@ -137,7 +147,12 @@ def _audit_concept(db: Database, playlist) -> list[str]:
     tracks = [track_to_metadata(t) for t in tracks_raw]
     artist_lookup = _build_artist_lookup(db, playlist.id)
 
-    review_findings = review_playlist(tracks, concept=concept, artist_lookup=artist_lookup)
+    review_findings = review_playlist(
+        tracks, concept=concept, artist_lookup=artist_lookup,
+        year_lookup=db.get_release_years_for_playlist(playlist.id),
+        llm_judge=llm_judge,
+        accepted=db.get_concept_acceptances(playlist.id),
+    )
 
     findings: list[str] = []
     unverifiable = 0

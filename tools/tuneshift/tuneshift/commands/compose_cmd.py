@@ -152,8 +152,12 @@ def handle_compose(args, db: Database) -> int:
     tracks = [track_to_metadata(track) for track in db.get_playlist_tracks(playlist.id)]
     pins = db.get_pins(playlist.id)
     artist_lookup = _build_artist_lookup(db, playlist.id)
+    from tuneshift.composer.concept_llm import make_concept_judge
     result = compose_playlist(
-        tracks, narrative, concept=concept, pins=pins, artist_lookup=artist_lookup
+        tracks, narrative, concept=concept, pins=pins, artist_lookup=artist_lookup,
+        year_lookup=db.get_release_years_for_playlist(playlist.id),
+        llm_judge=make_concept_judge(),
+        accepted=db.get_concept_acceptances(playlist.id),
     )
 
     if getattr(args, "fill_gaps", False):

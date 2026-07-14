@@ -226,10 +226,16 @@ def plan_rm_artist(
 
 
 def plan_review_fixes(
-    db: Database, playlist_id: int
+    db: Database, playlist_id: int, llm_judge=None
 ) -> list[PlanOperation]:
-    """Plan fixes based on review findings (hard violations = rm, soft = warn)."""
-    from tuneshift.commands.compose_cmd import _get_concept, _build_artist_lookup
+    """Plan fixes based on review findings (hard violations = rm, soft = warn).
+
+    Uses the same rule routing as ``review``: artist-tag and era rules
+    deterministically, thematic rules via ``llm_judge`` when supplied. Accepted
+    (track, rule) pairs are suppressed, so an accepted track is never proposed
+    for removal.
+    """
+    from tuneshift.commands.compose_cmd import _build_artist_lookup, _get_concept
     from tuneshift.composer.reviewer import review_playlist
     from tuneshift.sequencer.metadata import track_to_metadata
 
@@ -241,7 +247,12 @@ def plan_review_fixes(
     tracks = [track_to_metadata(t) for t in tracks_raw]
     artist_lookup = _build_artist_lookup(db, playlist_id)
 
-    findings = review_playlist(tracks, concept=concept, artist_lookup=artist_lookup)
+    findings = review_playlist(
+        tracks, concept=concept, artist_lookup=artist_lookup,
+        year_lookup=db.get_release_years_for_playlist(playlist_id),
+        llm_judge=llm_judge,
+        accepted=db.get_concept_acceptances(playlist_id),
+    )
 
     ops: list[PlanOperation] = []
     seen_track_ids: set[int] = set()
@@ -1009,7 +1020,8 @@ def handle_batch(args, db: Database) -> int:
         ops.extend(plan_rm_artist(db, playlist.id, args.rm_artist))
 
     if getattr(args, "review_findings", False):
-        ops.extend(plan_review_fixes(db, playlist.id))
+        from tuneshift.composer.concept_llm import make_concept_judge
+        ops.extend(plan_review_fixes(db, playlist.id, llm_judge=make_concept_judge()))
 
     # Split operation
     split_name = getattr(args, "split", None)
@@ -1024,7 +1036,9 @@ def handle_batch(args, db: Database) -> int:
     if getattr(args, "rebuild", False):
         count = getattr(args, "count", 50)
         fresh = getattr(args, "fresh", False)
-        ops.extend(plan_rebuild(db, playlist.id, count, fresh=fresh))
+        from tuneshift.composer.concept_llm import make_concept_judge
+        rebuild_judge = None if fresh else make_concept_judge()
+        ops.extend(plan_rebuild(db, playlist.id, count, fresh=fresh, llm_judge=rebuild_judge))
 
     # Retroactive narrative structuring
     if getattr(args, "structure", False):
@@ -1146,15 +1160,19 @@ def handle_merge(args, db: Database) -> int:
 
 
 def plan_rebuild(
-    db: Database, playlist_id: int, count: int, fresh: bool = False
+    db: Database, playlist_id: int, count: int, fresh: bool = False, llm_judge=None
 ) -> list[PlanOperation]:
     """Plan a concept-driven rebuild: review + fill from library.
 
     1. Evaluate existing tracks against concept
     2. Keep passes, remove failures
     3. Fill to target count from library (Tier 1)
+
+    Concept evaluation uses the same rule routing as ``review`` (artist-tag +
+    era deterministically, thematic via ``llm_judge`` when supplied) and
+    suppresses accepted (track, rule) pairs so an accepted track is kept.
     """
-    from tuneshift.commands.compose_cmd import _get_concept, _build_artist_lookup
+    from tuneshift.commands.compose_cmd import _build_artist_lookup, _get_concept
     from tuneshift.composer.reviewer import review_playlist
     from tuneshift.sequencer.metadata import track_to_metadata
 
@@ -1176,7 +1194,12 @@ def plan_rebuild(
         keep_ids: set[int] = set()
     else:
         # Review and keep/remove based on concept
-        findings = review_playlist(tracks, concept=concept, artist_lookup=artist_lookup) if concept else []
+        findings = review_playlist(
+            tracks, concept=concept, artist_lookup=artist_lookup,
+            year_lookup=db.get_release_years_for_playlist(playlist_id),
+            llm_judge=llm_judge,
+            accepted=db.get_concept_acceptances(playlist_id),
+        ) if concept else []
         violation_ids: set[int] = set()
 
         for finding in findings:
