@@ -1,0 +1,136 @@
+"""Injectable, degradable LLM judge for thematic concept rules.
+
+A thematic rule (e.g. "not about wanting a man") cannot be enforced by matching
+artist tags or release years; it needs a model that can read a track's themes
+and lyrical subject and decide whether the track complies. This module wraps the
+same LLM backends the sequencer classifier uses, exposes a small batched judge,
+and degrades cleanly to ``None`` when no backend is reachable so ``review`` can
+fall back to an honest "LLM unavailable" message instead of guessing.
+"""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Callable
+from dataclasses import dataclass, field
+
+from tuneshift.sequencer.classifier import (
+    _DEFAULT_MODELS,
+    _TimeoutBackend,
+    _resolve_llm_timeout,
+    detect_backend,
+)
+from tuneshift.sequencer.classifier import (
+    LLMBackend as LLMBackend,
+)
+
+_VALID_VERDICTS = frozenset({"complies", "violates", "unsure"})
+
+ConceptJudge = Callable[[str, list["TrackCtx"]], dict[int, str]]
+
+
+@dataclass
+class TrackCtx:
+    """Minimal per-track context handed to the concept judge."""
+
+    track_id: int
+    title: str
+    artist: str
+    themes: list[str] = field(default_factory=list)
+    lyrical_subject: str | None = None
+
+
+def _build_prompt(rule: str, tracks: list[TrackCtx]) -> str:
+    lines = []
+    for track in tracks:
+        themes = ", ".join(track.themes) if track.themes else "unknown"
+        subject = track.lyrical_subject or "unknown"
+        lines.append(
+            f'- id {track.track_id}: "{track.title}" by {track.artist} '
+            f'(themes: {themes}; lyrical subject: {subject})'
+        )
+    track_block = "\n".join(lines)
+    return (
+        "You are auditing a music playlist against a thematic rule.\n"
+        f'RULE: "{rule}"\n\n'
+        "For each track below, decide whether it COMPLIES with the rule, "
+        "VIOLATES it, or you are UNSURE. Judge only the rule; do not consider "
+        "audio quality or popularity.\n\n"
+        f"TRACKS:\n{track_block}\n\n"
+        'Return ONLY a JSON object mapping each track id (as a string) to one of '
+        '"complies", "violates", or "unsure". Example: '
+        '{"12": "complies", "13": "violates"}. No other text.'
+    )
+
+
+def _extract_json_object(text: str) -> dict:
+    """Pull the first ``{...}`` JSON object out of a model response.
+
+    Models often wrap JSON in prose or code fences; this finds the outermost
+    brace pair and parses it. Any failure raises, and the caller degrades every
+    verdict to "unsure".
+    """
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or end < start:
+        raise ValueError("no JSON object found in model response")
+    return json.loads(text[start : end + 1])
+
+
+def build_concept_judge(backend: LLMBackend, model: str) -> ConceptJudge:
+    """Build a judge callable over an explicit backend (used in tests too).
+
+    The returned ``judge(rule, tracks)`` sends one batched prompt and returns a
+    ``{track_id: verdict}`` map. Parsing is defensive: any missing, unknown, or
+    malformed verdict becomes "unsure", and any backend/parse exception degrades
+    every track to "unsure" so a flaky model never blocks a review.
+    """
+
+    def judge(rule: str, tracks: list[TrackCtx]) -> dict[int, str]:
+        verdicts: dict[int, str] = {track.track_id: "unsure" for track in tracks}
+        if not tracks:
+            return verdicts
+        try:
+            raw = backend.complete(_build_prompt(rule, tracks), model)
+            parsed = _extract_json_object(raw)
+        except Exception:  # noqa: BLE001 - best-effort; degrade to unsure
+            return verdicts
+        for track in tracks:
+            value = parsed.get(str(track.track_id))
+            if value is None:
+                value = parsed.get(track.track_id)
+            if isinstance(value, str) and value.strip().lower() in _VALID_VERDICTS:
+                verdicts[track.track_id] = value.strip().lower()
+        return verdicts
+
+    return judge
+
+
+def _select_backend() -> tuple[LLMBackend, str] | None:
+    """Select and wrap an LLM backend for concept judging, or None.
+
+    Reuses the classifier's :func:`detect_backend` (env-driven priority) and its
+    hard per-call timeout wrapper so a stalled model cannot hang ``review``.
+    Returns ``(backend, model)`` or ``None`` when no backend is reachable.
+    """
+    import os
+
+    name, backend = detect_backend()
+    if backend is None or name is None:
+        return None
+    model = (
+        os.environ.get("TUNESHIFT_CLASSIFIER_MODEL")
+        or getattr(backend, "selected_model", None)
+        or _DEFAULT_MODELS.get(name, "gpt-4o-mini")
+    )
+    wrapped = _TimeoutBackend(backend, _resolve_llm_timeout())
+    return wrapped, model
+
+
+def make_concept_judge() -> ConceptJudge | None:
+    """Return a ready concept judge, or ``None`` if no LLM backend is reachable."""
+    selected = _select_backend()
+    if selected is None:
+        return None
+    backend, model = selected
+    return build_concept_judge(backend, model)
