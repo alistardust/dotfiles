@@ -11,6 +11,7 @@ from tuneshift.composer.models import (
     SectionAssignments,
     TransitionType,
 )
+from tuneshift.composer.rules import RuleKind, classify_rule, parse_era
 from tuneshift.models import Artist
 from tuneshift.sequencer.metadata import TrackMetadata
 
@@ -198,68 +199,127 @@ def _check_rule_against_artist(rule: str, artist: Artist) -> bool | None:
     return None  # rule pattern not recognized
 
 
-def _review_concept_compliance(
+def _enforce_artist_tag(
+    rule: str,
     tracks: list[TrackMetadata],
-    concept: PlaylistConcept,
     artist_lookup: dict[str, Artist],
 ) -> list[ReviewFinding]:
-    """Check tracks against concept hard_rules and soft_rules."""
+    """Enforce an ``artist must be <tag>`` rule per track (existing behaviour)."""
     findings: list[ReviewFinding] = []
-
     for track in tracks:
         artist_key = track.artist.casefold() if track.artist else ""
         artist = artist_lookup.get(artist_key)
+        if artist is None:
+            findings.append(ReviewFinding(
+                category="concept_violation",
+                description=(
+                    f'HARD: "{track.title}" by {track.artist} - '
+                    f'Rule: "{rule}" - artist not in library, cannot verify'
+                ),
+                severity=0.5,
+                section_name=None,
+            ))
+            continue
+        result = _check_rule_against_artist(rule, artist)
+        if result is False:
+            findings.append(ReviewFinding(
+                category="concept_violation",
+                description=(
+                    f'HARD: "{track.title}" by {track.artist} - '
+                    f'Rule: "{rule}" - FAILS '
+                    f'(tags: {artist.tags}, confidence: {artist.identity_confidence})'
+                ),
+                severity=1.0,
+                section_name=None,
+            ))
+        elif result is None:
+            findings.append(ReviewFinding(
+                category="concept_violation",
+                description=(
+                    f'UNKNOWN: "{track.title}" by {track.artist} - '
+                    f'Rule: "{rule}" - artist not enriched, cannot verify'
+                ),
+                severity=0.3,
+                section_name=None,
+            ))
+    return findings
 
-        for rule in concept.hard_rules:
-            if artist is None:
-                findings.append(ReviewFinding(
-                    category="concept_violation",
-                    description=(
-                        f'HARD: "{track.title}" by {track.artist} - '
-                        f'Rule: "{rule}" - artist not in library, cannot verify'
-                    ),
-                    severity=0.5,
-                    section_name=None,
-                ))
-                continue
 
-            result = _check_rule_against_artist(rule, artist)
-            if result is False:
-                findings.append(ReviewFinding(
-                    category="concept_violation",
-                    description=(
-                        f'HARD: "{track.title}" by {track.artist} - '
-                        f'Rule: "{rule}" - FAILS '
-                        f'(tags: {artist.tags}, confidence: {artist.identity_confidence})'
-                    ),
-                    severity=1.0,
-                    section_name=None,
-                ))
-            elif result is None:
-                findings.append(ReviewFinding(
-                    category="concept_violation",
-                    description=(
-                        f'UNKNOWN: "{track.title}" by {track.artist} - '
-                        f'Rule: "{rule}" - artist not enriched, cannot verify'
-                    ),
-                    severity=0.3,
-                    section_name=None,
-                ))
+def _enforce_era(
+    rule: str,
+    tracks: list[TrackMetadata],
+    year_lookup: dict[int, int | None],
+) -> list[ReviewFinding]:
+    """Enforce an era/year rule deterministically against each track's release year."""
+    era_range = parse_era(rule)
+    if era_range is None:
+        return []
+    lo, hi = era_range
+    findings: list[ReviewFinding] = []
+    for track in tracks:
+        year = year_lookup.get(track.track_id)
+        if year is None:
+            findings.append(ReviewFinding(
+                category="concept_violation",
+                description=(
+                    f'UNKNOWN: "{track.title}" by {track.artist} - '
+                    f'Rule: "{rule}" - release year unavailable, cannot verify'
+                ),
+                severity=0.3,
+                section_name=None,
+            ))
+        elif not (lo <= year <= hi):
+            findings.append(ReviewFinding(
+                category="concept_violation",
+                description=(
+                    f'HARD: "{track.title}" by {track.artist} - '
+                    f'Rule: "{rule}" - FAILS (released {year}, outside {lo}-{hi})'
+                ),
+                severity=1.0,
+                section_name=None,
+            ))
+    return findings
 
-        for rule in concept.soft_rules:
-            # Soft rules checked against track vibes/themes
-            rule_words = set(re.findall(r"[a-z]+", rule.casefold()))
-            track_words = set()
+
+def _enforce_thematic_unavailable(
+    rule: str,
+    tracks: list[TrackMetadata],
+) -> list[ReviewFinding]:
+    """Placeholder for a thematic rule with no LLM judge (replaced in Chunk 2).
+
+    Emitted ONCE per rule (not per track), so it never claims "artist not in
+    library" for a rule that has nothing to do with artist identity.
+    """
+    return [ReviewFinding(
+        category="concept_violation",
+        description=(
+            f'UNKNOWN: Rule "{rule}" is a thematic rule - requires an LLM backend '
+            f'to evaluate; none supplied.'
+        ),
+        severity=0.3,
+        section_name=None,
+    )]
+
+
+def _review_soft_rules(
+    tracks: list[TrackMetadata],
+    concept: PlaylistConcept,
+) -> list[ReviewFinding]:
+    """Soft-rule mood-contradiction check against track vibes/themes."""
+    findings: list[ReviewFinding] = []
+    contradictions = {
+        ("celebration", "joy", "pride", "happy", "upbeat"):
+            {"sad", "depressing", "heartbreak", "grief", "mourning"},
+    }
+    for rule in concept.soft_rules:
+        rule_words = set(re.findall(r"[a-z]+", rule.casefold()))
+        for track in tracks:
+            track_words: set[str] = set()
             for group in (track.vibes, track.themes):
                 for item in group:
                     track_words.update(re.findall(r"[a-z]+", item.casefold()))
             if track.lyrical_subject:
                 track_words.update(re.findall(r"[a-z]+", track.lyrical_subject.casefold()))
-
-            # Check for contradiction: sad/dark in a happy/celebration playlist
-            contradictions = {
-                ("celebration", "joy", "pride", "happy", "upbeat"): {"sad", "depressing", "heartbreak", "grief", "mourning"},
-            }
             for positive_set, negative_set in contradictions.items():
                 if rule_words & set(positive_set) and track_words & negative_set:
                     findings.append(ReviewFinding(
@@ -272,7 +332,34 @@ def _review_concept_compliance(
                         severity=0.5,
                         section_name=None,
                     ))
+    return findings
 
+
+def _review_concept_compliance(
+    tracks: list[TrackMetadata],
+    concept: PlaylistConcept,
+    artist_lookup: dict[str, Artist],
+    *,
+    year_lookup: dict[int, int | None] | None = None,
+) -> list[ReviewFinding]:
+    """Check tracks against concept hard_rules and soft_rules.
+
+    Each hard rule is routed by :func:`classify_rule` to the right enforcer:
+    ``artist must be <tag>`` uses the artist-identity check; a year/era rule is
+    enforced deterministically against ``year_lookup``; anything else is a
+    thematic rule (LLM-judged in Chunk 2, reported as needing an LLM here).
+    """
+    years = year_lookup or {}
+    findings: list[ReviewFinding] = []
+    for rule in concept.hard_rules:
+        kind = classify_rule(rule)
+        if kind is RuleKind.ARTIST_TAG:
+            findings.extend(_enforce_artist_tag(rule, tracks, artist_lookup))
+        elif kind is RuleKind.ERA:
+            findings.extend(_enforce_era(rule, tracks, years))
+        else:
+            findings.extend(_enforce_thematic_unavailable(rule, tracks))
+    findings.extend(_review_soft_rules(tracks, concept))
     return findings
 
 
@@ -337,6 +424,8 @@ def review_composition(
     sections: list[EnhancedSection],
     concept: PlaylistConcept | None = None,
     artist_lookup: dict[str, Artist] | None = None,
+    *,
+    year_lookup: dict[int, int | None] | None = None,
 ) -> list[ReviewFinding]:
     """Review section integrity, transition quality, and concept compliance."""
     findings = _review_section_integrity(ordered_tracks, assignments, sections)
@@ -347,11 +436,11 @@ def review_composition(
 
     if concept and concept.has_hard_rules:
         findings.extend(_review_concept_compliance(
-            ordered_tracks, concept, artist_lookup or {}
+            ordered_tracks, concept, artist_lookup or {}, year_lookup=year_lookup
         ))
     elif concept and concept.soft_rules:
         findings.extend(_review_concept_compliance(
-            ordered_tracks, concept, artist_lookup or {}
+            ordered_tracks, concept, artist_lookup or {}, year_lookup=year_lookup
         ))
 
     return findings
@@ -361,6 +450,8 @@ def review_playlist(
     tracks: list[TrackMetadata],
     concept: PlaylistConcept | None = None,
     artist_lookup: dict[str, Artist] | None = None,
+    *,
+    year_lookup: dict[int, int | None] | None = None,
 ) -> list[ReviewFinding]:
     """Review a playlist for concept compliance and vibe outliers.
 
@@ -371,7 +462,7 @@ def review_playlist(
     findings: list[ReviewFinding] = []
     if concept:
         findings.extend(_review_concept_compliance(
-            tracks, concept, artist_lookup or {}
+            tracks, concept, artist_lookup or {}, year_lookup=year_lookup
         ))
     findings.extend(_review_vibe_outliers(tracks))
     return findings
