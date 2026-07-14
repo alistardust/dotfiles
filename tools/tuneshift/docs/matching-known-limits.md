@@ -124,6 +124,18 @@ a descriptive subtitle. A studio source therefore **rejects** a tempo-altered
 candidate (it is a different recording), and the marker is handled on the version
 axis rather than being collapsed into the base title.
 
+**Related: named/qualified reworks.** A named producer edit or mix ("Howie Tee
+New Edit"), a "Re-Edit", "Rework", "Bootleg", "Mashup", or a "New/Special/Vocal
+Mix" is a distinct reworking of the recording, so it classifies as
+`RecordingClass.REMIX` and is down-ranked against a studio/album source (the
+album original wins by default). This is deliberately narrow and unambiguous: a
+**radio/single/album edit or version** is packaging (the *same* recording,
+shortened) and stays on the edit axis, and album-edition names ("Deluxe
+Edition") are unaffected ("edit" only appears inside "edition", which has no
+trailing word boundary). Other named reworks can be added to the remix markers
+as they are encountered; the whitelist bias is to under-match rather than risk a
+false remix verdict on a legitimate title.
+
 ## 7. Regional core-text retitles
 
 **Limit.** When a region ships the *same recording* under a title whose **core

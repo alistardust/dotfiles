@@ -293,7 +293,14 @@ _LIVE_RE = re.compile(
 _REMIX_RE = re.compile(
     r"\b(remix|remixed|performance mix|extended mix|"
     r"extended version|dub mix|club mix|12[\"'] mix|"
-    r"12 inch|maxi)\b",
+    r"12 inch|maxi|"
+    # Named/qualified reworks: a distinct reworking (often by a named producer),
+    # NOT the album master. Deliberately narrow and unambiguous so it never
+    # catches packaging edits (radio/single/album edit or version, handled by
+    # _RADIO_EDIT_RE) or album-edition names ("Deluxe Edition": "edit" only
+    # appears inside "edition", which has no trailing word boundary).
+    r"re-?edit|rework|new edit|new mix|special mix|vocal mix|"
+    r"bootleg|mash-?up)\b",
     re.IGNORECASE,
 )
 _REMASTER_RE = re.compile(
