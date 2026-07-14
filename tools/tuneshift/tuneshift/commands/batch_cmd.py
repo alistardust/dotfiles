@@ -1019,9 +1019,18 @@ def handle_batch(args, db: Database) -> int:
     if getattr(args, "rm_artist", None):
         ops.extend(plan_rm_artist(db, playlist.id, args.rm_artist))
 
-    if getattr(args, "review_findings", False):
+    # Build the concept judge at most once per command; both review-findings and
+    # a non-fresh rebuild reuse it (rebuild --fresh clears without judging).
+    concept_judge = None
+    needs_judge = getattr(args, "review_findings", False) or (
+        getattr(args, "rebuild", False) and not getattr(args, "fresh", False)
+    )
+    if needs_judge:
         from tuneshift.composer.concept_llm import make_concept_judge
-        ops.extend(plan_review_fixes(db, playlist.id, llm_judge=make_concept_judge()))
+        concept_judge = make_concept_judge()
+
+    if getattr(args, "review_findings", False):
+        ops.extend(plan_review_fixes(db, playlist.id, llm_judge=concept_judge))
 
     # Split operation
     split_name = getattr(args, "split", None)
@@ -1036,9 +1045,10 @@ def handle_batch(args, db: Database) -> int:
     if getattr(args, "rebuild", False):
         count = getattr(args, "count", 50)
         fresh = getattr(args, "fresh", False)
-        from tuneshift.composer.concept_llm import make_concept_judge
-        rebuild_judge = None if fresh else make_concept_judge()
-        ops.extend(plan_rebuild(db, playlist.id, count, fresh=fresh, llm_judge=rebuild_judge))
+        ops.extend(plan_rebuild(
+            db, playlist.id, count, fresh=fresh,
+            llm_judge=None if fresh else concept_judge,
+        ))
 
     # Retroactive narrative structuring
     if getattr(args, "structure", False):
