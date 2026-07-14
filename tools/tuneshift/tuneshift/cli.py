@@ -408,6 +408,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_review = sub.add_parser("review", help="Review playlist for concept compliance")
     p_review.add_argument("playlist", help="Playlist name")
     p_review.add_argument("--fix", action="store_true", help="Remove tracks that violate hard rules")
+    p_review.add_argument(
+        "--accept-track", type=int, metavar="TRACK_ID",
+        help="Accept (suppress) concept findings for this track id across runs",
+    )
+    p_review.add_argument(
+        "--rule", metavar="RULE",
+        help="With --accept-track: accept only this specific rule (default: all "
+             "current findings for the track)",
+    )
+    p_review.add_argument(
+        "--list-accepted", action="store_true",
+        help="List accepted (track, rule) pairs for the playlist and exit",
+    )
 
     # config
     p_config = sub.add_parser("config", help="Configure TuneShift settings")

@@ -12,7 +12,12 @@ from tuneshift.composer.models import (
     SectionAssignments,
     TransitionType,
 )
-from tuneshift.composer.rules import RuleKind, classify_rule, parse_era
+from tuneshift.composer.rules import (
+    RuleKind,
+    classify_rule,
+    normalize_rule_key,
+    parse_era,
+)
 from tuneshift.models import Artist
 from tuneshift.sequencer.metadata import TrackMetadata
 
@@ -204,10 +209,13 @@ def _enforce_artist_tag(
     rule: str,
     tracks: list[TrackMetadata],
     artist_lookup: dict[str, Artist],
+    accepted_ids: frozenset[int] = frozenset(),
 ) -> list[ReviewFinding]:
     """Enforce an ``artist must be <tag>`` rule per track (existing behaviour)."""
     findings: list[ReviewFinding] = []
     for track in tracks:
+        if track.track_id in accepted_ids:
+            continue
         artist_key = track.artist.casefold() if track.artist else ""
         artist = artist_lookup.get(artist_key)
         if artist is None:
@@ -250,6 +258,7 @@ def _enforce_era(
     rule: str,
     tracks: list[TrackMetadata],
     year_lookup: dict[int, int | None],
+    accepted_ids: frozenset[int] = frozenset(),
 ) -> list[ReviewFinding]:
     """Enforce an era/year rule deterministically against each track's release year."""
     era_range = parse_era(rule)
@@ -258,6 +267,8 @@ def _enforce_era(
     lo, hi = era_range
     findings: list[ReviewFinding] = []
     for track in tracks:
+        if track.track_id in accepted_ids:
+            continue
         year = year_lookup.get(track.track_id)
         if year is None:
             findings.append(ReviewFinding(
@@ -306,13 +317,18 @@ def _enforce_thematic_llm(
     rule: str,
     tracks: list[TrackMetadata],
     llm_judge: ConceptJudge,
+    accepted_ids: frozenset[int] = frozenset(),
 ) -> list[ReviewFinding]:
     """Enforce a thematic rule via one batched LLM verdict per rule.
 
     ``violates`` -> a hard finding (severity 1.0); ``unsure`` -> unknown
     (0.3); ``complies`` -> no finding. The judge itself degrades to "unsure"
     on any backend/parse failure, so a flaky model never blocks a review.
+    Tracks already accepted for this rule are excluded from the judged batch.
     """
+    judged = [t for t in tracks if t.track_id not in accepted_ids]
+    if not judged:
+        return []
     contexts = [
         TrackCtx(
             track_id=track.track_id,
@@ -321,11 +337,11 @@ def _enforce_thematic_llm(
             themes=list(track.themes),
             lyrical_subject=track.lyrical_subject,
         )
-        for track in tracks
+        for track in judged
     ]
     verdicts = llm_judge(rule, contexts)
     findings: list[ReviewFinding] = []
-    for track in tracks:
+    for track in judged:
         verdict = verdicts.get(track.track_id, "unsure")
         if verdict == "violates":
             findings.append(ReviewFinding(
@@ -391,6 +407,7 @@ def _review_concept_compliance(
     *,
     year_lookup: dict[int, int | None] | None = None,
     llm_judge: ConceptJudge | None = None,
+    accepted: set[tuple[int, str]] | None = None,
 ) -> list[ReviewFinding]:
     """Check tracks against concept hard_rules and soft_rules.
 
@@ -398,17 +415,30 @@ def _review_concept_compliance(
     ``artist must be <tag>`` uses the artist-identity check; a year/era rule is
     enforced deterministically against ``year_lookup``; a thematic rule is judged
     by ``llm_judge`` when supplied, and otherwise reported once as needing an LLM.
+
+    A ``(track_id, rule_key)`` pair present in ``accepted`` is suppressed for that
+    rule, so a user-accepted finding stays quiet across runs even if a thematic
+    LLM verdict later flips.
     """
     years = year_lookup or {}
+    accepted_pairs = accepted or set()
     findings: list[ReviewFinding] = []
     for rule in concept.hard_rules:
+        rule_key = normalize_rule_key(rule)
+        accepted_ids = frozenset(
+            tid for (tid, rk) in accepted_pairs if rk == rule_key
+        )
         kind = classify_rule(rule)
         if kind is RuleKind.ARTIST_TAG:
-            findings.extend(_enforce_artist_tag(rule, tracks, artist_lookup))
+            findings.extend(
+                _enforce_artist_tag(rule, tracks, artist_lookup, accepted_ids)
+            )
         elif kind is RuleKind.ERA:
-            findings.extend(_enforce_era(rule, tracks, years))
+            findings.extend(_enforce_era(rule, tracks, years, accepted_ids))
         elif llm_judge is not None:
-            findings.extend(_enforce_thematic_llm(rule, tracks, llm_judge))
+            findings.extend(
+                _enforce_thematic_llm(rule, tracks, llm_judge, accepted_ids)
+            )
         else:
             findings.extend(_enforce_thematic_unavailable(rule, tracks))
     findings.extend(_review_soft_rules(tracks, concept))
@@ -479,6 +509,7 @@ def review_composition(
     *,
     year_lookup: dict[int, int | None] | None = None,
     llm_judge: ConceptJudge | None = None,
+    accepted: set[tuple[int, str]] | None = None,
 ) -> list[ReviewFinding]:
     """Review section integrity, transition quality, and concept compliance."""
     findings = _review_section_integrity(ordered_tracks, assignments, sections)
@@ -490,12 +521,12 @@ def review_composition(
     if concept and concept.has_hard_rules:
         findings.extend(_review_concept_compliance(
             ordered_tracks, concept, artist_lookup or {},
-            year_lookup=year_lookup, llm_judge=llm_judge,
+            year_lookup=year_lookup, llm_judge=llm_judge, accepted=accepted,
         ))
     elif concept and concept.soft_rules:
         findings.extend(_review_concept_compliance(
             ordered_tracks, concept, artist_lookup or {},
-            year_lookup=year_lookup, llm_judge=llm_judge,
+            year_lookup=year_lookup, llm_judge=llm_judge, accepted=accepted,
         ))
 
     return findings
@@ -508,6 +539,7 @@ def review_playlist(
     *,
     year_lookup: dict[int, int | None] | None = None,
     llm_judge: ConceptJudge | None = None,
+    accepted: set[tuple[int, str]] | None = None,
 ) -> list[ReviewFinding]:
     """Review a playlist for concept compliance and vibe outliers.
 
@@ -519,7 +551,7 @@ def review_playlist(
     if concept:
         findings.extend(_review_concept_compliance(
             tracks, concept, artist_lookup or {},
-            year_lookup=year_lookup, llm_judge=llm_judge,
+            year_lookup=year_lookup, llm_judge=llm_judge, accepted=accepted,
         ))
     findings.extend(_review_vibe_outliers(tracks))
     return findings
