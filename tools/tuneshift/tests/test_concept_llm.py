@@ -62,6 +62,30 @@ def test_judge_raising_backend_degrades_all_to_unsure():
     assert out == {1: "unsure", 2: "unsure"}
 
 
+def test_judge_chunks_large_batches():
+    backend = _FakeBackend('{"1": "complies"}')  # payload ignored per-call count
+    judge = build_concept_judge(backend=backend, model="m", batch_size=2)
+    tracks = [TrackCtx(i, f"T{i}", "A") for i in range(1, 6)]  # 5 tracks
+    out = judge("rule", tracks)
+    assert set(out) == {1, 2, 3, 4, 5}  # every track present
+    assert backend.calls == 3  # ceil(5/2) chunked calls, not one giant call
+
+
+def test_judge_chunk_failure_isolated_to_its_chunk():
+    class _FlakyByPrompt:
+        def complete(self, prompt, model, max_tokens=4096):
+            # Fail only when track id 3 is in the prompt; others parse fine.
+            if "id 3:" in prompt:
+                raise RuntimeError("chunk boom")
+            return '{"1": "violates", "2": "violates", "3": "violates", "4": "violates"}'
+
+    judge = build_concept_judge(backend=_FlakyByPrompt(), model="m", batch_size=2)
+    tracks = [TrackCtx(i, f"T{i}", "A") for i in range(1, 5)]  # 4 tracks -> 2 chunks
+    out = judge("rule", tracks)
+    assert out[1] == "violates" and out[2] == "violates"  # first chunk ok
+    assert out[3] == "unsure" and out[4] == "unsure"  # failed chunk degraded
+
+
 def test_make_concept_judge_returns_none_when_no_backend(monkeypatch):
     from tuneshift.composer import concept_llm
     monkeypatch.setattr(concept_llm, "_select_backend", lambda: None)

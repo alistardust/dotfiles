@@ -25,6 +25,7 @@ from tuneshift.sequencer.classifier import (
 )
 
 _VALID_VERDICTS = frozenset({"complies", "violates", "unsure"})
+_DEFAULT_JUDGE_BATCH = 8
 
 ConceptJudge = Callable[[str, list["TrackCtx"]], dict[int, str]]
 
@@ -77,19 +78,41 @@ def _extract_json_object(text: str) -> dict:
     return json.loads(text[start : end + 1])
 
 
-def build_concept_judge(backend: LLMBackend, model: str) -> ConceptJudge:
+def _resolve_batch_size() -> int:
+    """Per-call track batch for the judge (env-overridable).
+
+    A single prompt covering every track can exceed the backend's wall-clock
+    timeout on a local model (a 29-track batch reliably overran 30s in testing,
+    degrading every verdict to "unsure"). Chunking keeps each call inside the
+    budget while still batching for efficiency.
+    """
+    import os
+
+    raw = os.environ.get("TUNESHIFT_CONCEPT_BATCH")
+    if not raw:
+        return _DEFAULT_JUDGE_BATCH
+    try:
+        value = int(raw)
+    except ValueError:
+        return _DEFAULT_JUDGE_BATCH
+    return value if value > 0 else _DEFAULT_JUDGE_BATCH
+
+
+def build_concept_judge(
+    backend: LLMBackend, model: str, batch_size: int | None = None
+) -> ConceptJudge:
     """Build a judge callable over an explicit backend (used in tests too).
 
-    The returned ``judge(rule, tracks)`` sends one batched prompt and returns a
-    ``{track_id: verdict}`` map. Parsing is defensive: any missing, unknown, or
-    malformed verdict becomes "unsure", and any backend/parse exception degrades
-    every track to "unsure" so a flaky model never blocks a review.
+    The returned ``judge(rule, tracks)`` sends the tracks in timeout-safe chunks
+    and returns a ``{track_id: verdict}`` map. Parsing is defensive: any missing,
+    unknown, or malformed verdict becomes "unsure", and any backend/parse
+    exception degrades that chunk to "unsure" (other chunks are unaffected), so a
+    flaky or slow model never blocks a review or sinks the whole batch.
     """
+    chunk = batch_size if batch_size and batch_size > 0 else _resolve_batch_size()
 
-    def judge(rule: str, tracks: list[TrackCtx]) -> dict[int, str]:
+    def _judge_chunk(rule: str, tracks: list[TrackCtx]) -> dict[int, str]:
         verdicts: dict[int, str] = {track.track_id: "unsure" for track in tracks}
-        if not tracks:
-            return verdicts
         try:
             raw = backend.complete(_build_prompt(rule, tracks), model)
             parsed = _extract_json_object(raw)
@@ -101,6 +124,12 @@ def build_concept_judge(backend: LLMBackend, model: str) -> ConceptJudge:
                 value = parsed.get(track.track_id)
             if isinstance(value, str) and value.strip().lower() in _VALID_VERDICTS:
                 verdicts[track.track_id] = value.strip().lower()
+        return verdicts
+
+    def judge(rule: str, tracks: list[TrackCtx]) -> dict[int, str]:
+        verdicts: dict[int, str] = {}
+        for start in range(0, len(tracks), chunk):
+            verdicts.update(_judge_chunk(rule, tracks[start : start + chunk]))
         return verdicts
 
     return judge
