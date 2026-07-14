@@ -193,8 +193,35 @@ Curate a playlist (trim to size, analyze, or fill gaps).
 Narrative-driven composition (gap report, reorder, candidate fill).
 
 ### `review`
-`review <playlist> [--fix]`: review a playlist against its concept rules;
-`--fix` removes hard-rule violators.
+`review <playlist> [--fix] [--accept-track ID [--rule "RULE"]] [--list-accepted]`
+
+Review a playlist against its concept rules. Each hard rule is routed to the
+right enforcer:
+
+- **Artist-tag** (`artist must be <tag>`): checked against the artist's library
+  identity/tags.
+- **Era/year** (e.g. `released 1993-2003`, `90s`): enforced deterministically
+  against each track's known release year. Out-of-range tracks are flagged;
+  tracks with no recorded year are reported as unverifiable (never guessed).
+- **Thematic** (free-form prose, e.g. `not about wanting a man`): judged by an
+  LLM in timeout-safe batches. Verdicts map to VIOLATION (`violates`),
+  UNVERIFIED (`unsure`), or pass (`complies`). If no LLM backend is reachable,
+  the rule is reported once as needing an LLM rather than silently passing.
+
+Findings are advisory. `--fix` removes hard-rule (artist-tag/era) violators.
+
+**Accepting findings (mitigating LLM non-determinism):** a thematic verdict can
+vary between runs, so an accepted `(track, rule)` pair is suppressed across
+future reviews. `--accept-track ID` accepts every rule currently flagged for
+that track; add `--rule "RULE"` to accept only one rule. `--list-accepted`
+prints the accepted pairs. Acceptances persist in the database
+(`concept_rule_acceptances`).
+
+The LLM backend is the same one the classifier uses (`TUNESHIFT_LLM_BACKEND` /
+`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / Ollama). The per-call track batch is
+`TUNESHIFT_CONCEPT_BATCH` (default 8); the per-call timeout is
+`TUNESHIFT_LLM_TIMEOUT` (default 30s). Only `review` enforces era/thematic rules;
+`batch`, `audit`, and `compose` remain artist-tag-only.
 
 ### `analyze`
 `analyze <playlist>`: analyze playlist metadata.
