@@ -69,3 +69,12 @@ def classify_rule(rule: str) -> RuleKind:
     if parse_era(stripped) is not None:
         return RuleKind.ERA
     return RuleKind.THEMATIC
+
+
+def normalize_rule_key(rule: str) -> str:
+    """Stable key for a rule used to persist and match acceptances.
+
+    Case-insensitive and whitespace-insensitive so trivial re-typings of the
+    same rule still match a previously accepted (track, rule) pair.
+    """
+    return " ".join((rule or "").split()).casefold()

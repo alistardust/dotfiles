@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from tuneshift.matching import ReviewItem
     from tuneshift.planapply.models import JournalEntry
 
-_SCHEMA_VERSION = 20
+_SCHEMA_VERSION = 21
 
 # Columns editable via update_track. Constrains f-string interpolation in the
 # UPDATE statement to a fixed, safe set (no SQL identifier injection).
@@ -178,6 +178,16 @@ CREATE TABLE IF NOT EXISTS playlist_pins (
 CREATE TABLE IF NOT EXISTS schema_meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS concept_rule_acceptances (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    playlist_id INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+    track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+    rule_key TEXT NOT NULL,
+    rule_text TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(playlist_id, track_id, rule_key)
 );
 
 CREATE TABLE IF NOT EXISTS artists (
@@ -1078,6 +1088,25 @@ class Database:
                             )
                     self.conn.execute("ALTER TABLE tracks DROP COLUMN preferences")
 
+            if current_version < 21:
+                # Concept-rule acceptances: persist (playlist, track, rule) pairs
+                # a user has explicitly accepted so a review finding for that pair
+                # is suppressed across runs, even when a thematic LLM verdict is
+                # non-deterministic. rule_key is a normalized form of the rule.
+                self.conn.execute("""
+                    CREATE TABLE IF NOT EXISTS concept_rule_acceptances (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        playlist_id INTEGER NOT NULL
+                            REFERENCES playlists(id) ON DELETE CASCADE,
+                        track_id INTEGER NOT NULL
+                            REFERENCES tracks(id) ON DELETE CASCADE,
+                        rule_key TEXT NOT NULL,
+                        rule_text TEXT NOT NULL,
+                        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                        UNIQUE(playlist_id, track_id, rule_key)
+                    )
+                """)
+
             self.conn.execute(
                 "UPDATE schema_meta SET value = ? WHERE key = 'version'",
                 (str(_SCHEMA_VERSION),),
@@ -1739,6 +1768,58 @@ class Database:
             (playlist_id,),
         ).fetchall()
         return {row["track_id"]: row["year"] for row in rows}
+
+    def add_concept_acceptance(
+        self, playlist_id: int, track_id: int, rule: str
+    ) -> None:
+        """Record that a review finding for (track, rule) is accepted.
+
+        Idempotent: re-accepting the same pair is a no-op. The normalized
+        ``rule_key`` is what future reviews match against; the raw rule text is
+        stored alongside for display.
+        """
+        from tuneshift.composer.rules import normalize_rule_key
+
+        self.conn.execute(
+            """INSERT OR IGNORE INTO concept_rule_acceptances
+                   (playlist_id, track_id, rule_key, rule_text)
+               VALUES (?, ?, ?, ?)""",
+            (playlist_id, track_id, normalize_rule_key(rule), rule),
+        )
+        self.conn.commit()
+
+    def get_concept_acceptances(self, playlist_id: int) -> set[tuple[int, str]]:
+        """Return accepted ``(track_id, rule_key)`` pairs for a playlist."""
+        rows = self.conn.execute(
+            "SELECT track_id, rule_key FROM concept_rule_acceptances "
+            "WHERE playlist_id = ?",
+            (playlist_id,),
+        ).fetchall()
+        return {(row["track_id"], row["rule_key"]) for row in rows}
+
+    def list_concept_acceptances(
+        self, playlist_id: int
+    ) -> list[tuple[int, str]]:
+        """Return accepted ``(track_id, rule_text)`` pairs for display."""
+        rows = self.conn.execute(
+            "SELECT track_id, rule_text FROM concept_rule_acceptances "
+            "WHERE playlist_id = ? ORDER BY track_id, rule_text",
+            (playlist_id,),
+        ).fetchall()
+        return [(row["track_id"], row["rule_text"]) for row in rows]
+
+    def clear_concept_acceptance(
+        self, playlist_id: int, track_id: int, rule: str
+    ) -> None:
+        """Remove a previously recorded acceptance for (track, rule)."""
+        from tuneshift.composer.rules import normalize_rule_key
+
+        self.conn.execute(
+            "DELETE FROM concept_rule_acceptances "
+            "WHERE playlist_id = ? AND track_id = ? AND rule_key = ?",
+            (playlist_id, track_id, normalize_rule_key(rule)),
+        )
+        self.conn.commit()
 
     def remove_playlist_track_by_position(self, playlist_id: int, position: int) -> None:
         """Remove the track at a specific position and reindex later rows.
