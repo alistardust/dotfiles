@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from tuneshift.matching import ReviewItem
     from tuneshift.planapply.models import JournalEntry
 
-_SCHEMA_VERSION = 21
+_SCHEMA_VERSION = 22
 
 # Columns editable via update_track. Constrains f-string interpolation in the
 # UPDATE statement to a fixed, safe set (no SQL identifier injection).
@@ -1106,6 +1106,84 @@ class Database:
                         UNIQUE(playlist_id, track_id, rule_key)
                     )
                 """)
+
+            if current_version < 22:
+                # BUG-9: idx_artists_norm was meant to be UNIQUE, but the earlier
+                # migration used "CREATE UNIQUE INDEX IF NOT EXISTS" while a plain
+                # (non-unique) index of that name already existed, so the statement
+                # silently no-opped and never upgraded the index. Without a real
+                # UNIQUE constraint, _get_or_create_artist's INSERT OR IGNORE had
+                # nothing to violate, so repeated calls inserted duplicate artist
+                # rows. Coalesce each duplicate norm_name group into its lowest-id
+                # keeper, repoint FK references to the keeper, then DROP the stale
+                # index and recreate it as genuinely UNIQUE.
+                #
+                # General lesson: CREATE UNIQUE INDEX IF NOT EXISTS cannot tighten
+                # an existing non-unique index; a migration must DROP it first.
+                artist_cols = {
+                    r[1]
+                    for r in self.conn.execute(
+                        "PRAGMA table_info(artists)"
+                    ).fetchall()
+                }
+                merge_cols = [
+                    c for c in (
+                        "sort_name", "bio", "identity", "tags",
+                        "identity_confidence", "genres", "origin",
+                        "active_start", "active_end", "mb_artist_id",
+                        "tidal_artist_id", "qobuz_artist_id",
+                        "spotify_artist_uri", "lastfm_url", "wikipedia_url",
+                        "enrichment_sources", "verified", "enriched_at",
+                        "verified_at",
+                    )
+                    if c in artist_cols
+                ]
+                dupe_groups = self.conn.execute(
+                    "SELECT norm_name, MIN(id) AS keeper FROM artists "
+                    "GROUP BY norm_name HAVING COUNT(*) > 1"
+                ).fetchall()
+                for group in dupe_groups:
+                    norm = group["norm_name"]
+                    keeper = group["keeper"]
+                    dupes = [
+                        r["id"]
+                        for r in self.conn.execute(
+                            "SELECT id FROM artists WHERE norm_name = ? "
+                            "AND id != ? ORDER BY id",
+                            (norm, keeper),
+                        ).fetchall()
+                    ]
+                    # Fill any NULL keeper column from the earliest dupe that has
+                    # a value (keeper is the richest in practice, so this is
+                    # belt-and-suspenders, but keeps the merge correct generally).
+                    for col in merge_cols:
+                        self.conn.execute(
+                            f"UPDATE artists SET {col} = ("  # noqa: S608 - col is from a fixed allowlist
+                            f"    SELECT d.{col} FROM artists d "
+                            f"    WHERE d.norm_name = ? AND d.id != ? "
+                            f"      AND d.{col} IS NOT NULL ORDER BY d.id LIMIT 1"
+                            f") WHERE id = ? AND {col} IS NULL",
+                            (norm, keeper, keeper),
+                        )
+                    placeholders = ",".join("?" * len(dupes))
+                    self.conn.execute(
+                        f"UPDATE tracks SET artist_id = ? "  # noqa: S608 - placeholders are bound params
+                        f"WHERE artist_id IN ({placeholders})",
+                        (keeper, *dupes),
+                    )
+                    self.conn.execute(
+                        f"UPDATE albums SET artist_id = ? "  # noqa: S608 - placeholders are bound params
+                        f"WHERE artist_id IN ({placeholders})",
+                        (keeper, *dupes),
+                    )
+                    self.conn.execute(
+                        f"DELETE FROM artists WHERE id IN ({placeholders})",  # noqa: S608 - placeholders are bound params
+                        tuple(dupes),
+                    )
+                self.conn.execute("DROP INDEX IF EXISTS idx_artists_norm")
+                self.conn.execute(
+                    "CREATE UNIQUE INDEX idx_artists_norm ON artists(norm_name)"
+                )
 
             self.conn.execute(
                 "UPDATE schema_meta SET value = ? WHERE key = 'version'",
