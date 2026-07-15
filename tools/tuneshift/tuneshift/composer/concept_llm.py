@@ -139,6 +139,12 @@ def _coerce_verdict(value: object) -> tuple[str, float]:
             confidence = float(value.get("confidence", 1.0))
         except (TypeError, ValueError):
             confidence = 1.0
+        # An out-of-range confidence means the model ignored the 0.0-1.0 scale
+        # (e.g. returned 1.5, or a percentage like 55). We cannot trust it, so
+        # treat it as a low signal -> a positive threshold downgrades the verdict
+        # to "unsure" rather than letting a garbage score become a violation.
+        if not (0.0 <= confidence <= 1.0):
+            confidence = 0.0
         return verdict, confidence
     return "unsure", 1.0
 

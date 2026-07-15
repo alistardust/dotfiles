@@ -130,3 +130,16 @@ def test_min_confidence_zero_disables_downgrade():
     backend = _FakeBackend('{"1": {"verdict": "violates", "confidence": 0.01}}')
     judge = build_concept_judge(backend=backend, model="m", min_confidence=0.0)
     assert judge("rule", [TrackCtx(1, "A", "X")]) == {1: "violates"}
+
+
+def test_out_of_range_confidence_treated_as_untrusted():
+    # 1.5 (wrong scale) and 55 (percentage) and -0.5 are all untrustworthy;
+    # at the default-ish threshold they must not become violations.
+    backend = _FakeBackend(
+        '{"1": {"verdict": "violates", "confidence": 1.5}, '
+        '"2": {"verdict": "violates", "confidence": 55}, '
+        '"3": {"verdict": "violates", "confidence": -0.5}}'
+    )
+    judge = build_concept_judge(backend=backend, model="m", min_confidence=0.6)
+    out = judge("rule", [TrackCtx(1, "A", "X"), TrackCtx(2, "B", "Y"), TrackCtx(3, "C", "Z")])
+    assert out == {1: "unsure", 2: "unsure", 3: "unsure"}
