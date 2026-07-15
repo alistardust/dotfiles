@@ -344,6 +344,20 @@ def handle_review(args, db: Database) -> int:
     print(f'Concept: {concept.theme}')
     print(f'Hard rules: {concept.hard_rules}')
     print(f'Soft rules: {concept.soft_rules}')
+
+    from tuneshift.composer.rules import RuleKind, classify_rule
+    has_thematic = any(
+        classify_rule(rule) is RuleKind.THEMATIC for rule in concept.hard_rules
+    )
+    if has_thematic:
+        label = getattr(llm_judge, "model_label", None)
+        if label:
+            print(
+                f'Thematic rules judged by: {label} '
+                f'(verdict quality is model-dependent)'
+            )
+        else:
+            print('Thematic rules: no LLM backend reachable (reported as unverified)')
     print()
 
     if not findings:

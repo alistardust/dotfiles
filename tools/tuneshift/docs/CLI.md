@@ -218,14 +218,24 @@ prints the accepted pairs. Acceptances persist in the database
 (`concept_rule_acceptances`).
 
 The LLM backend is the same one the classifier uses (`TUNESHIFT_LLM_BACKEND` /
-`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / Ollama). The per-call track batch is
-`TUNESHIFT_CONCEPT_BATCH` (default 8); the per-call timeout is
-`TUNESHIFT_LLM_TIMEOUT` (default 30s). `batch --review-findings`,
-`batch --rebuild`, `audit --concept-only`, and `compose` apply the same rule
-routing: era violations (deterministic) become proposed removals in a plan you
-review before applying, thematic (LLM) verdicts surface as reviewable proposed
-removals via the plan/apply layer, and accepted pairs are suppressed so an
-accepted track is never proposed for removal.
+`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / Ollama). `review` prints which model
+judged the thematic rules; verdict quality is model-dependent, so a heavier
+model gives better thematic verdicts. Relevant env vars:
+
+- `TUNESHIFT_CONCEPT_MODEL`: model used for thematic concept judging only
+  (overrides the classifier model, so you can point concept checks at a heavier
+  model without changing enrichment).
+- `TUNESHIFT_CONCEPT_MIN_CONFIDENCE` (default 0.6): a complies/violates verdict
+  whose model-reported confidence is below this is downgraded to "unsure", so a
+  weak model's low-confidence guesses never become violations. Set 0 to disable.
+- `TUNESHIFT_CONCEPT_BATCH` (default 8): per-call track batch for the judge.
+- `TUNESHIFT_LLM_TIMEOUT` (default 30s): per-call wall-clock budget.
+
+`batch --review-findings`, `batch --rebuild`, `audit --concept-only`, and
+`compose` apply the same rule routing: era violations (deterministic) become
+proposed removals in a plan you review before applying, thematic (LLM) verdicts
+surface as reviewable proposed removals via the plan/apply layer, and accepted
+pairs are suppressed so an accepted track is never proposed for removal.
 
 ### `analyze`
 `analyze <playlist>`: analyze playlist metadata.

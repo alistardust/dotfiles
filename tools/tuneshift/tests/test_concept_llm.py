@@ -95,7 +95,38 @@ def test_make_concept_judge_returns_none_when_no_backend(monkeypatch):
 def test_make_concept_judge_returns_callable_when_backend_present(monkeypatch):
     from tuneshift.composer import concept_llm
     backend = _FakeBackend('{"1": "complies"}')
-    monkeypatch.setattr(concept_llm, "_select_backend", lambda: (backend, "m"))
+    monkeypatch.setattr(concept_llm, "_select_backend", lambda: (backend, "m", "fake"))
     judge = concept_llm.make_concept_judge()
     assert judge is not None
     assert judge("rule", [TrackCtx(1, "A", "X")]) == {1: "complies"}
+    assert judge.model_label == "fake (m)"
+
+
+def test_low_confidence_verdict_downgraded_to_unsure():
+    backend = _FakeBackend(
+        '{"1": {"verdict": "violates", "confidence": 0.3}, '
+        '"2": {"verdict": "violates", "confidence": 0.95}}'
+    )
+    judge = build_concept_judge(backend=backend, model="m", min_confidence=0.6)
+    out = judge("rule", [TrackCtx(1, "A", "X"), TrackCtx(2, "B", "Y")])
+    assert out == {1: "unsure", 2: "violates"}  # low-confidence violation suppressed
+
+
+def test_confidence_object_form_parsed():
+    backend = _FakeBackend('{"1": {"verdict": "complies", "confidence": 0.9}}')
+    judge = build_concept_judge(backend=backend, model="m", min_confidence=0.6)
+    assert judge("rule", [TrackCtx(1, "A", "X")]) == {1: "complies"}
+
+
+def test_bare_string_verdict_still_supported_as_full_confidence():
+    # A model that ignores the confidence request returns bare strings; those
+    # carry no confidence signal and must not be downgraded.
+    backend = _FakeBackend('{"1": "violates"}')
+    judge = build_concept_judge(backend=backend, model="m", min_confidence=0.9)
+    assert judge("rule", [TrackCtx(1, "A", "X")]) == {1: "violates"}
+
+
+def test_min_confidence_zero_disables_downgrade():
+    backend = _FakeBackend('{"1": {"verdict": "violates", "confidence": 0.01}}')
+    judge = build_concept_judge(backend=backend, model="m", min_confidence=0.0)
+    assert judge("rule", [TrackCtx(1, "A", "X")]) == {1: "violates"}
