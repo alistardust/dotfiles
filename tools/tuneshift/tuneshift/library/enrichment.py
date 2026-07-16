@@ -208,13 +208,14 @@ def capture_tidal_catalog(
 ) -> list[str]:
     """Best-effort Atmos/catalog capture right after a Tidal mapping is written.
 
-    The single post-mapping hook shared by every path that creates or updates a
-    Tidal platform mapping (``map`` / ``doctor --apply`` / ``ingest`` / ``enrich``
-    / the resolve worker), so the ``atmos-available`` tag is derived
-    automatically (AC4/AC10/AC11) instead of only via the manual
-    ``enrich --catalog`` flag. Deliberately ONE function so the paths can't drift
-    apart (FL4 lesson). No-ops for non-Tidal platforms or when no client/id is
-    available; never raises. Returns the derived tags (empty on no-op/failure).
+    The shared post-mapping hook used by the paths that create or update a Tidal
+    platform mapping (``map`` / ``ingest`` / ``enrich`` / the resolve worker), so
+    the ``atmos-available`` tag is derived automatically (AC4/AC10/AC11) instead
+    of only via the manual ``enrich --catalog`` flag. ``doctor --apply`` performs
+    the equivalent capture through its own retry-wrapped ``_reenrich_track`` (it
+    needs doctor's RetryStats and an unconditional refetch after a remap), so it
+    does not call this hook. No-ops for non-Tidal platforms or when no client/id
+    is available; never raises. Returns the derived tags (empty on no-op/failure).
     """
     if platform != "tidal" or client is None or not platform_track_id:
         return []

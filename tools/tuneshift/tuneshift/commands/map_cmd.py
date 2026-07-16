@@ -104,6 +104,8 @@ def handle_map(args, db: Database) -> int:
     # the atmos-available tag. Reuse the --verify client if present; otherwise
     # load one best-effort (a fresh manual map should still capture). No login
     # or a non-Tidal platform simply skips -- the mapping itself is unaffected.
+    # refresh=True because this mapping may replace a prior one, so any cached
+    # metadata belongs to the old id and must be refetched, not reused.
     if platform == "tidal":
         from tuneshift.library.enrichment import capture_tidal_catalog
 
@@ -111,7 +113,8 @@ def handle_map(args, db: Database) -> int:
             catalog_client = client if args.verify else _load_client(platform)
             if catalog_client is not None and catalog_client.load_session():
                 tags = capture_tidal_catalog(
-                    db, track.id, platform, platform_id, client=catalog_client
+                    db, track.id, platform, platform_id, client=catalog_client,
+                    refresh=True,
                 )
                 if "atmos-available" in tags:
                     print("  Captured catalog metadata (Atmos available)")

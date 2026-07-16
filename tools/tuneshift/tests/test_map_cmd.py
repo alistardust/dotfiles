@@ -231,3 +231,30 @@ def test_map_verify_hydrates_identity_fields(db_with_playlist_and_track):
     assert refreshed.duration_seconds == 246
     tier, _score, _ = db.get_resolution_state(bare_id)
     assert tier == "VERIFIED"
+
+
+def test_map_refetches_catalog_with_refresh(db_with_playlist_and_track, monkeypatch):
+    """A map writes a (possibly changed) Tidal mapping, so catalog capture must
+    refetch (refresh=True) instead of reusing metadata cached for a prior id."""
+    db, playlist_id, track_id = db_with_playlist_and_track
+    seen = {}
+
+    def fake_capture(db_, tid, platform, pid, *, client=None, refresh=False):
+        seen["refresh"] = refresh
+        return []
+
+    monkeypatch.setattr(
+        "tuneshift.library.enrichment.capture_tidal_catalog", fake_capture
+    )
+    mock_client = MagicMock()
+    mock_client.load_session.return_value = True
+
+    args = argparse.Namespace(
+        playlist="Trans Wrath", title="Louder", tidal="48931",
+        ytmusic=None, verify=False,
+    )
+    with patch("tuneshift.commands.map_cmd._load_client", return_value=mock_client):
+        rc = handle_map(args, db)
+
+    assert rc == 0
+    assert seen.get("refresh") is True
