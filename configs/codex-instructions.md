@@ -97,7 +97,7 @@ Input validation: validate at every external boundary (API, CLI, queue). Whiteli
 - DB queries never live in business logic — use a repository pattern.
 - Import direction flows **inward only**: presentation → service → domain → infrastructure. Inner layers must not import outer layers.
 - **Fail-secure defaults:** new features, endpoints, and flags default to off/denied, not on/public. Access must be explicitly granted.
-- **YAGNI:** don't build abstractions for requirements you don't have yet. Add generality when the second real case arrives.
+- **No speculative scope-cutting.** Do not drop features, data, or capability because they "might not be needed" (do not invoke YAGNI). Deliver the complete, correct solution; cut scope only for concrete cost or correctness reasons. Prefer the simplest implementation that delivers the full scope (see KISS).
 - **KISS:** the simple solution that works today beats the elegant abstraction. Flat > nested; function > class-with-one-method; stdlib > framework where both work.
 - **DRY:** every piece of *knowledge* has one authoritative representation. Do not mistake accidental visual similarity for duplication of knowledge.
 - **Dependency Inversion:** classes depend on abstractions (Protocols/ABCs/interfaces), not concrete implementations. Inject dependencies; do not construct them internally.

@@ -115,8 +115,10 @@ reject everything else. Never trust client-supplied role or permission data.
   must not import outer layers.
 - **Fail-secure defaults:** new features, endpoints, and flags default to off/denied, not on/public.
   Access must be explicitly granted.
-- **YAGNI:** don't build abstractions for requirements you don't have yet. Add generality when the
-  second real case arrives.
+- **No speculative scope-cutting.** Do not drop features, data, or capability because
+  they "might not be needed" (do not invoke YAGNI). Deliver the complete, correct
+  solution; cut scope only for concrete cost or correctness reasons. Prefer the
+  simplest implementation that delivers the full scope (see KISS).
 - **KISS:** the simple solution that works today beats the elegant abstraction. Flat over nested;
   function over class-with-one-method; stdlib over framework where both work.
 - **DRY:** every piece of *knowledge* has one authoritative representation. Do not mistake accidental
@@ -189,7 +191,9 @@ do not block the current task on it.
   reviewer that uses it is not done. When executing work, keep going until the
   user-facing feature produces correct output on real data. Do not stop at
   intermediate layers. Do not present plumbing as an accomplishment. Do not ask
-  for permission between layers when the direction is clear. Do not create
+  for permission between layers when the direction is clear for reversible, local
+  work. Mutating, irreversible, shared-infrastructure, or production actions always
+  stop for explicit confirmation, regardless of momentum. Do not create
   artificial checkpoints, MVPs, or half-measures. The question is always: "Does
   the feature work for the user right now?" If no, keep building.
 - **Never guess.** Only provide answers that can be verified. Be ready to cite where
@@ -213,7 +217,7 @@ do not block the current task on it.
 ## Superpowers Skills
 
 You have Superpowers skills installed. Before any task, check if a relevant skill applies.
-If there is even a 1% chance a skill might be relevant, invoke it.
+Invoke a skill when the task matches its purpose; if nothing matches, do not force one.
 
 Available skills: brainstorming, test-driven-development, systematic-debugging, writing-plans,
 executing-plans, subagent-driven-development, dispatching-parallel-agents, requesting-code-review,
