@@ -179,7 +179,7 @@ do not block the current task on it.
 ## Quality Rules
 
 - **Safety and security come first, above all else, including task completion.** An
-  answer that introduces a vulnerability, exposes PHI, PII, or other sensitive
+  answer that introduces a vulnerability, exposes secrets, PII, or other sensitive
   data, or causes an unrecoverable
   change is worse than no answer at all. Then accuracy, completeness, correctness.
   Speed is last.
@@ -238,7 +238,7 @@ Priority order:
 #   ## Identity and Preferences
 #   ## Model Preference        (pin your default model; settings.json is authoritative)
 #   ## Context
-#   ## Safety and Security     (work / PHI-specific rules)
+#   ## Safety and Security     (work-specific rules)
 #   ## Commit and Branch Rules
 #   ## Output Directories
 #
