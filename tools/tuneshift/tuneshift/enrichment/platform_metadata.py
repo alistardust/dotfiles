@@ -259,6 +259,7 @@ def fetch_track_report(client, platform_track_id: str) -> dict:
     album_name = None
     album_id = None
     album_stale = False
+    album_type = None
     if album:
         album_name = album.name
         album_id = str(album.id) if getattr(album, "id", None) is not None else None
@@ -267,6 +268,8 @@ def fetch_track_report(client, platform_track_id: str) -> dict:
             if full_album.release_date:
                 release_date = str(full_album.release_date.date())
                 release_year = full_album.release_date.year
+            raw_type = getattr(full_album, "type", None)
+            album_type = str(raw_type).lower() if raw_type else None
         except _STALE_ALBUM_ERRORS:
             album_stale = True
         except _BEST_EFFORT_ERRORS:
@@ -289,7 +292,7 @@ def fetch_track_report(client, platform_track_id: str) -> dict:
         "genres": genres,
         "audio_qualities": audio_qualities,
         "album_name": album_name,
-        "album_type": None,  # Would need separate album endpoint
+        "album_type": album_type,
         "explicit": getattr(track, "explicit", None),
         "duration_ms": duration_s * 1000 if duration_s else None,
         "popularity": getattr(track, "popularity", None),

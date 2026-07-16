@@ -174,3 +174,63 @@ def test_asset_not_available_album_flagged_stale():
     assert report["album_stale"] is True
     assert report["available"] is True
     assert report["metadata"]["album_name"] == "Delisted Album"
+
+
+def _track_with_album(album_type_value):
+    import datetime
+
+    track = MagicMock()
+    track.audio_quality = "LOSSLESS"
+    track.audio_modes = []
+    track.artist = None
+    track.duration = 200
+    track.name = "Song"
+    track.available = True
+    track.explicit = False
+    album = MagicMock()
+    album.name = "Some Release"
+    album.id = 5
+    track.album = album
+
+    full_album = MagicMock()
+    full_album.release_date = datetime.datetime(1998, 5, 1)
+    full_album.type = album_type_value
+
+    session = MagicMock()
+    session.track.return_value = track
+    session.album.return_value = full_album
+    client = MagicMock()
+    client._session = session
+    return client
+
+
+def test_fetch_track_report_captures_album_type_lowercased():
+    report = platform_metadata.fetch_track_report(_track_with_album("EP"), "5")
+    assert report["metadata"]["album_type"] == "ep"
+
+
+def test_album_type_regular_album_not_tagged():
+    from tuneshift.db import Database as _DB
+
+    import tempfile
+    from pathlib import Path as _P
+    db = _DB(_P(tempfile.mkdtemp()) / "t.db")
+    tid = db.add_track(Track(title="S", artist="A", album="Some Release"))
+    # A plain album: derive_tags must NOT emit an album-type tag for "album".
+    db.upsert_track_platform_metadata(tid, "tidal", "5", album_type="album",
+                                      release_year=1998)
+    tags = platform_metadata.derive_tags(db, tid)
+    assert "album" not in tags
+    assert "1990s" in tags  # decade still derived
+
+
+def test_album_type_ep_is_tagged():
+    from tuneshift.db import Database as _DB
+
+    import tempfile
+    from pathlib import Path as _P
+    db = _DB(_P(tempfile.mkdtemp()) / "t.db")
+    tid = db.add_track(Track(title="S", artist="A", album="Some EP"))
+    db.upsert_track_platform_metadata(tid, "tidal", "5", album_type="ep")
+    tags = platform_metadata.derive_tags(db, tid)
+    assert "ep" in tags
