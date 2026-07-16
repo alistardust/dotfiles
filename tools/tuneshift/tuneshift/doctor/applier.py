@@ -263,9 +263,15 @@ def apply_plan(db: Database, plan: DoctorPlan, items: list[PlanItem], *,
     # --- Best-effort re-enrichment of remapped tracks ---
     stats = RetryStats()
     for item in items:
-        if item.status == "applied" and item.issue in (
-                "unavailable", "version_mismatch", "unmapped"):
+        if item.status != "applied":
+            continue
+        if item.issue in ("unavailable", "version_mismatch", "unmapped"):
             _reenrich_track(db, client, item, stats)
+        elif item.issue == "stale_album":
+            # stale_album already recovered release metadata directly (no remap,
+            # no refetch), so just (re)derive tags -- otherwise the newly
+            # recovered release_year never yields its decade tag.
+            platform_metadata.derive_tags(db, item.track_id)
 
     # --- Best-effort Tidal sync of affected playlists ---
     if do_sync and result.affected_playlists:

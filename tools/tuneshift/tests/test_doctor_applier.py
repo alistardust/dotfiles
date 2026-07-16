@@ -182,6 +182,25 @@ def test_stale_album_recovers_release_year(db):
     assert meta["release_year"] == 1999
 
 
+def test_stale_album_derives_decade_tag(db):
+    # A stale_album fix recovers release_year; the decade tag must be (re)derived
+    # from it, otherwise a doctor-recovered track keeps missing its "1990s" tag.
+    tid = _mapped_track(db, "Song", "Artist", "Greatest Hits", "T1")
+    item = PlanItem(
+        id=1, track_id=tid, playlist="P", title="Song", artist="Artist",
+        issue="stale_album", current_platform_id="T1", resolution="auto",
+    )
+    plan = DoctorPlan(scope="P", items=[item])
+    client = FakeClient(albums=[
+        AlbumResult(platform_id="AL1", title="Greatest Hits",
+                    artist="Artist", release_year=1999),
+    ])
+
+    apply_plan(db, plan, [item], client=client, do_sync=False)
+
+    assert "1990s" in db.get_track_tags(tid)
+
+
 def test_stale_album_fails_when_unrecoverable(db):
     tid = _mapped_track(db, "Song", "Artist", "Lost Album", "T1")
     item = PlanItem(
