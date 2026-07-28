@@ -100,14 +100,61 @@ all assumptions explicitly. Flag unvalidatable assumptions as risks.
 
 ### Multi-Model Review
 
-Default (Medium intensity): 1 primary + 1 challenger (different provider or weight).
+Two seats, and the distinction governs everything below.
 
-High intensity: 3-4 models cross-ecosystem, then:
-1. Synthesize (merge, resolve conflicts by evidence weight, not majority vote)
-2. Re-evaluate the synthesis with different models
-3. Final merge and present
+- **Reporter.** Any model, any tier, any ecosystem. Read-only. Produces findings,
+  suggestions, and proposed severities. Never final, never blocking. Cheap models
+  are legitimate reporters even on security-critical code: reading code and saying
+  "this looks wrong" is useful at any tier.
+- **Adjudicator.** Heavy reasoning models only. Decides which findings are real,
+  sets final severity, and decides what blocks. Must verify against the cited
+  source rather than trusting the reporter's description.
 
-Fallback: if secondary models unavailable, proceed with primary only + flag the gap.
+Judgment attaches to the seat, not the topic. A fast model may report on
+cryptography; it may not rule on it.
+
+Reporter diversity raises recall, because different lineages have different blind
+spots. Adjudication raises precision. Both are needed; neither substitutes for the
+other.
+
+#### Proportional rigor
+
+Scale scrutiny to stakes. The classifier that assigns criticality is
+**deterministic**, never a model: otherwise a single model decides how hard to
+look, which is the most consequential judgment in the pipeline.
+
+Criticality is the **maximum** of three independent signals. Any one of them
+escalates; none de-escalates below the others:
+
+1. Proposed severity from any reporter
+2. Path sensitivity (auth, crypto, secrets, IAM, production IaC, migrations,
+   CI/CD workflow definitions; extend per repo)
+3. Corroboration by a deterministic tool (a SAST hit on the same file and line)
+
+| Criticality | Reporters | Adjudicators | Weight | Disputes |
+|-------------|-----------|--------------|--------|----------|
+| routine | 1 pass | none; findings labeled unadjudicated | fast | annotate inline |
+| standard | spread across ecosystems | 2, different ecosystems | mid or better | annotate |
+| elevated | spread, security passes doubled | 2, different ecosystems | frontier | prominent disputed section |
+| critical | doubled across ecosystems | 3, three ecosystems | frontier, high effort | block and escalate to the user |
+
+Run-level multiplier: auditing production infrastructure, or a repo handling
+sensitive data, bumps every finding up one rung. A personal repo does not.
+
+#### Resolving disagreement without a single arbiter
+
+A panel that disagrees needs a terminator, and the terminator must not be a model.
+Never let a synthesis model quietly pick a winner: that is a single model making
+the final call while wearing the costume of a merge step.
+
+1. **Deterministic merge.** Conservative escalation: if any adjudicator confirms a
+   severity, it holds. Rejection requires unanimity. Arithmetic decides.
+2. **Ground truth.** Deterministic tool output is evidence that no model overrules.
+3. **The user.** Genuine splits surface as disputed, with each position recorded,
+   escalated per the ladder rather than silently resolved.
+
+Fallback: if secondary models are unavailable, proceed with what is available and
+flag the reduced coverage explicitly in the output.
 
 ## Fast-Path (skip defaults when ALL true)
 
@@ -351,13 +398,20 @@ If invoked BY a sub-skill, do NOT re-invoke the caller. Route and stop.
 
 ### Model selection (cheapest correct)
 
-| Task type | Suggested tier |
-|-----------|---------------|
-| Routing, search, checklists, mechanical fixes | fast |
-| Security, architecture, judgment, plan writing | reasoning |
-| Strategy, ambiguity, creativity | frontier |
+Select by seat, not by topic. See "Multi-Model Review" above for canonical policy.
 
-Cross-ecosystem dispatch: substantial tier only, at blocking gates.
+| Seat | Weight | Notes |
+|------|--------|-------|
+| Reporter | Cheapest that can read the material | Any ecosystem; diversity is the point |
+| Adjudicator | Frontier | Verifies against source; sets final severity |
+| Deterministic step (merge, scoring, classification) | No model | Rules and arithmetic only |
+
+Ecosystems available for reporter spread: Anthropic, OpenAI, Google, and Microsoft
+(MAI). Sibling models within a single ecosystem do not count as cross-ecosystem
+coverage; they share training lineage and therefore blind spots.
+
+Refer to model families, never version numbers. The latest release of each family
+is always implied.
 
 ## Feedback Loop
 
