@@ -41,80 +41,105 @@ Gate behavior scales with complexity:
 
 ## Model Dispatch Table
 
-Each reviewer runs as a subagent. These tier assignments are **suggestions** based
-on typical capability requirements. Override when context warrants it (e.g., a
-particularly complex code-audit may benefit from a reasoning-tier model).
+Each reviewer runs as a subagent in the **reporter** seat: read-only, proposing
+findings and severities, never ruling. Final severity and blocking decisions
+belong to the adjudicator seat (see `skill-conductor` "Multi-Model Review" for
+canonical policy).
 
-Do NOT hardcode model version strings; use capability tiers:
+Because reporters cannot rule, reporter selection is a cost decision rather than a
+safety one. Assign the cheapest model that can read the material competently. A
+fast model reporting on security code is legitimate and useful; it simply does not
+get the final word.
 
-| Tier | Capability | Typical use |
-|------|-----------|-------------|
-| **fast** | Pattern matching, checklists, mechanical edits | Code audit, a11y checks, formatting fixes |
-| **reasoning** | Architecture analysis, security reasoning, design judgment | CSO, eng review, design review, complex fixes |
-| **frontier** | Strategy, ambiguity resolution, creative decisions | CEO review, novel architecture |
+Do NOT hardcode model version strings. Refer to model families, and let the
+cheapest-correct rule pick within them.
 
-| Reviewer | Suggested tier | Cross-ecosystem | Rationale |
-|----------|---------------|-----------------|-----------|
-| `cso` | reasoning | Yes (substantial only) | Attack path reasoning |
-| `plan-eng-review` | reasoning | Yes (substantial only) | Architecture analysis |
-| `plan-ceo-review` | frontier | Yes (substantial only) | Strategy/ambiguity |
-| `code-audit` | fast | Yes (substantial only) | Pattern matching |
-| `a11y-review` | fast | Yes (substantial only) | Checklist evaluation |
-| `plan-design-review` | reasoning | Yes (substantial only) | Design judgment |
-| Fix agent (mechanical) | fast | No | Simple edits |
-| Fix agent (judgment) | reasoning | No | Restructuring |
+| Reviewer | Reporter cost | Ecosystem spread | Rationale |
+|----------|---------------|------------------|-----------|
+| `cso` | mid or better | Yes, doubled (security-critical) | Attack path reasoning |
+| `plan-eng-review` | mid or better | Yes | Architecture analysis |
+| `plan-ceo-review` | mid or better | Yes | Strategy and ambiguity |
+| `code-audit` | orchestrator; see its own dispatch rules | Yes, doubled (security-critical) | Multi-phase audit with its own reporter panel and adjudication |
+| `a11y-review` | fast | Yes | Checklist evaluation |
+| `plan-design-review` | mid or better | Yes | Design judgment |
+| Fix agent (mechanical) | fast | No | Deterministic edits |
+| Fix agent (judgment) | frontier | No | Restructuring changes behavior |
 
-The agent runtime resolves tier names to actual model IDs. Upgrade or downgrade
-a reviewer's tier based on the specific content being reviewed.
+`code-audit` is not a single-pass reviewer. It orchestrates SAST tools, parallel
+AI reporter passes, and its own adjudication panel. Dispatch it as a skill and let
+it apply its internal rigor ladder; do not assign it a single model.
 
 ### Cross-ecosystem dispatch
 
-When `complexity_tier` is `substantial`, dispatch BOTH the default model AND the
-cross-ecosystem alt for each reviewer, in parallel. Merge findings by fingerprint
-(deduplicate identical issues). Findings from either ecosystem count equally.
+Ecosystems available: Anthropic, OpenAI, Google, and Microsoft (MAI). Sibling
+models within one ecosystem do not count as cross-ecosystem coverage; they share
+training lineage and therefore blind spots.
+
+Default to **spread**, not doubling. Distribute reviewer passes across available
+ecosystems round-robin: same subagent count, same cost, multiple lineages. Doubling
+(running the same reviewer in two ecosystems in parallel) is reserved for
+security-critical reviewers and for `substantial` complexity.
+
+| Complexity | Strategy |
+|------------|----------|
+| trivial | Gate is a no-op |
+| moderate | Spread across ecosystems |
+| substantial | Spread, plus doubled dispatch for security-critical reviewers |
+
+Merge findings by fingerprint (deduplicate identical issues). Deduplication is
+non-destructive: cluster and cross-link rather than deleting, so a bad merge cannot
+hide a finding. Findings from any ecosystem count equally.
 
 **Partial failure:** A reviewer is satisfied if ANY leg returns parseable output.
-If the Anthropic leg succeeds but the OpenAI leg fails (or vice versa), merge
-findings from the successful leg and treat the reviewer as complete. Only trigger
-adapter failure handling when ALL legs for a required reviewer fail.
+If one ecosystem's leg succeeds and another's fails, merge findings from the
+successful leg and treat the reviewer as complete. Only trigger adapter failure
+handling when ALL legs for a required reviewer fail.
 
-Benefits: different model families have different blind spots. An Anthropic model
-may catch structural issues an OpenAI model misses, and vice versa. Two cheap
-parallel passes often outperform one expensive sequential pass.
-
-When `complexity_tier` is `moderate`, use default model only (single ecosystem).
+Benefits: different ecosystems have different blind spots. One may catch structural
+issues another misses, in either direction. Several cheap parallel passes often
+outperform one expensive sequential pass.
 
 ### Consensus synthesis
 
 When cross-ecosystem dispatch is active OR two or more reviewers produce findings
-on the same tier, run a synthesis pass before classification. This transforms raw
-multi-reviewer output into collective intelligence:
+on the same tier, run a synthesis pass before adjudication. This organizes raw
+multi-reviewer output; it does not rule on it.
+
+**Seat:** reporter. Synthesis may cluster, annotate, and propose. It must not set
+final severity or decide what blocks. Those belong to adjudication.
 
 **When to run:** After deduplication, if findings originated from 2+ distinct
 reviewer/model combinations.
 
 **Synthesis agent:**
-- Suggested tier: fast (the synthesis is structural, not creative)
+- Cost: fast (the work is structural, not evaluative)
 - Input: all raw findings (post-dedup) plus reviewer source metadata
 - Prompt pattern:
   ```
   You are a review synthesis agent. Given findings from multiple reviewers/models,
-  produce a unified findings list. For each finding or group:
-  1. If 2+ reviewers flag the same area: mark confidence=high, keep highest severity
-  2. If reviewers contradict on the same unit: mark class=judgment, note both positions
-  3. If N findings across reviewers are symptoms of one root cause: consolidate into
-     one finding at the highest severity, reference the others as supporting evidence
+  produce an organized findings list. You are NOT deciding what is real or what
+  blocks; a later adjudication step does that. Preserve information rather than
+  resolving it.
+  1. If 2+ reviewers flag the same area: group them, record every proposed
+     severity, and carry the highest forward as the group's proposed severity
+  2. If reviewers contradict on the same unit: record BOTH positions verbatim and
+     mark consensus=disputed. Do not pick a winner.
+  3. If N findings across reviewers are symptoms of one root cause: cluster and
+     cross-link them. Never delete a member finding; the cluster references all.
   4. If a finding is unique to one reviewer: keep as-is (single-source)
-  Emit findings in the standard YAML schema with an added `consensus` field:
+  Emit findings in the standard YAML schema using `proposed_severity`, with an
+  added `consensus` field:
     consensus: "unanimous" | "majority" | "single-source" | "disputed"
   ```
-- Output: replaces the raw merged findings for downstream classification
+- Output: an organized findings list, passed to adjudication
 
-**Consensus field effects:**
-- `unanimous`: finding severity cannot be downgraded by classification
+**Consensus field effects** (inputs to adjudication, not verdicts):
+- `unanimous`: corroboration across lineages; strong evidence the finding is real
 - `majority`: standard processing
-- `single-source`: standard processing
-- `disputed`: automatically classified as `judgment` (escalates to user)
+- `single-source`: standard processing; may still be correct, since a unique
+  finding often means only one lineage had the relevant blind spot covered
+- `disputed`: routed to adjudication with both positions; escalates to the user
+  when the finding is critical
 
 **Post-synthesis validation:** After synthesis completes, verify output integrity:
 - **Severity retention check:** Compare total severity score (CRITICAL=4, HIGH=3,
@@ -122,11 +147,11 @@ reviewer/model combinations.
   <70% of input severity score, reject synthesis and use raw deduplicated findings
   instead. Log: "Synthesis rejected: severity retention [X]% below 70% threshold."
 - **Finding count check:** If synthesis reduces finding count by >50% (beyond what
-  root-cause consolidation explains), flag for review: "Synthesis consolidated [N]
-  findings to [M]. Verify no findings were dropped."
-- **Skip for aligned findings:** If cross-ecosystem dispatch produced findings and
-  both legs agree (same fingerprints, same severities), skip synthesis entirely.
-  Synthesis adds value for contradictions and root-cause analysis, not for agreement.
+  root-cause clustering explains), flag for review: "Synthesis clustered [N]
+  findings into [M] groups. Verify no findings were dropped."
+- **Skip for aligned findings:** If every dispatched leg agrees (same fingerprints,
+  same proposed severities), skip synthesis entirely. Synthesis adds value for
+  contradictions and root-cause clustering, not for agreement.
 
 **Skip condition:** If all findings come from a single reviewer instance (single
 ecosystem, only one reviewer produced output), skip synthesis (no value added).
@@ -211,9 +236,12 @@ gate_triggered(gate_config):
       active_reviewers = [r for r in tier.reviewers if r not in skipped_optional]
 
       if cross_eco:
-        raw_results = run_parallel(active_reviewers, default_models + alt_models)
+        # Doubled dispatch: security-critical reviewers run in two ecosystems.
+        # All other reviewers spread round-robin across available ecosystems.
+        raw_results = run_parallel(active_reviewers, spread_plus_double_security)
       else:
-        raw_results = run_parallel(active_reviewers, default_models)
+        # Spread: one pass per reviewer, distributed across ecosystems.
+        raw_results = run_parallel(active_reviewers, spread_across_ecosystems)
 
       # --- Early termination: CRITICAL finding shortcut ---
       # After this tier's parallel batch returns, check for CRITICAL before
@@ -255,13 +283,27 @@ gate_triggered(gate_config):
       # --- Consensus synthesis (cross-ecosystem or 2+ reviewers with findings) ---
       if cross_eco or count_reviewers_with_findings(reviewer_results) >= 2:
         findings = consensus_synthesis(findings, reviewer_results)
-      # consensus_synthesis dispatches a fast-tier model with ALL raw findings
-      # as input. It produces a unified list that:
-      #   - identifies agreement (same area flagged by multiple reviewers = higher confidence)
-      #   - resolves contradictions (conflicting advice on same unit)
-      #   - surfaces emergent patterns (N symptoms of one root cause = escalate)
-      #   - adjusts severity based on cross-reviewer agreement strength
-      # Output replaces the raw merged findings for classification.
+      # consensus_synthesis is a REPORTER-seat step, not an adjudication step.
+      # It may cluster and annotate; it must NOT set final severity or decide
+      # what blocks. A synthesis model that picks winners is a single model
+      # making the final call while wearing the costume of a merge step.
+      # It produces an annotated list that:
+      #   - identifies agreement (same area flagged by multiple reviewers)
+      #   - records contradictions verbatim, both positions preserved, unresolved
+      #   - surfaces emergent patterns (N symptoms of one root cause)
+      #   - notes cross-reviewer agreement strength as evidence, not as a verdict
+      # Deduplication is non-destructive: cluster and cross-link, never delete.
+
+      # --- Adjudication (frontier seat; sets final severity) ---
+      # Criticality per finding is computed deterministically as the maximum of
+      # proposed severity, path sensitivity, and deterministic tool corroboration.
+      # Panel size and model weight follow that criticality; see skill-conductor
+      # "Proportional rigor". Adjudicators verify against cited source rather
+      # than trusting reporter descriptions. Panel disagreement resolves by
+      # conservative escalation (any confirm holds; rejection requires
+      # unanimity), never by a single arbitrating model. Unresolved splits on
+      # critical findings escalate to the user.
+      findings = adjudicate(findings, criticality=classify_criticality(findings))
 
       # Classify each blocking finding (gate-internal, see Finding classification rules)
       findings = classify_findings(findings, gate_config)
