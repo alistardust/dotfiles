@@ -42,52 +42,37 @@ should inform whether the rigor ladder needs retuning.
 
 ## 2. Expand the sensitive-path list
 
-**Status:** open
-**Context:** seeded during the adjudication rebuild; deliberately left minimal.
+**Status:** done in `94d49ce`.
 
-The deterministic criticality classifier in `skills/code-audit/SKILL.md` uses a
-sensitive-path pattern list as one of its three escalation signals. The current
-list covers auth, crypto, secrets, IAM, prod IaC, migrations, and CI/CD.
+Widened the path list, added deterministic content patterns so a dangerous file
+with an innocuous name still escalates, and added per-repo overrides via
+`.code-audit.yml`. `skill-conductor` now points at `code-audit` as canonical
+instead of keeping a second narrower copy.
 
-The list is the main lever controlling how much of a repo gets frontier
-attention, so both failure directions are real: too narrow and genuinely risky
-code is adjudicated at the routine rung, too broad and every run costs frontier
-prices. Expand deliberately rather than defensively.
-
-Worth considering:
-
-- [ ] Deserialization and parsing entry points (`pickle`, `yaml`, XML, protobuf)
-- [ ] Network and request boundaries where external input first lands
-- [ ] Subprocess and shell invocation sites
-- [ ] File upload and path-construction code
-- [ ] Anything handling PHI or PII in work repos
-- [ ] Per-repo overrides, so a personal project and a production service can use
-      different lists
-
-Keep the list in sync between `skills/code-audit/SKILL.md` and
-`skills/skill-conductor/SKILL.md`, or make one canonical and have the other point
-at it.
+Still open as a tuning question rather than a task: the real cost and hit rate
+are unknown until item 1 runs. Revisit the thresholds with real numbers.
 
 ---
 
 ## 3. Audit the remaining skills for single-model steps
 
-**Status:** open
-**Context:** the seats model was applied to `skill-conductor*` and `code-audit`
-only. Other skills were not reviewed.
+**Status:** done in `be9c553`.
 
-The defect fixed in `code-audit` was structural rather than local: a pipeline
-that looked multi-agent while a single model quietly set the outcome. Other
-skills plausibly share the shape.
+Two reporters from different ecosystems audited every skill that dispatches
+subagents or renders a verdict. Findings were adjudicated against source.
 
-- [ ] Enumerate every skill that dispatches subagents or renders a verdict
-- [ ] For each, identify who sets final severity or decides what blocks
-- [ ] Flag any step where one model both proposes and rules
-- [ ] Flag any synthesis or merge step that silently picks a winner, which is a
-      single arbiter wearing the costume of a merge step
-- [ ] Confirm no skill claims a capability the runtime does not have. The false
-      "the agent runtime resolves tier names to actual model IDs" claim in
-      `skill-conductor-review-gate` is the pattern to look for.
+Fixed: `security-review` (set final severity with no tier requirement),
+`a11y-review-deep` (synthesis phase picked winners without re-reading evidence),
+`secret-patterns` (instructed the model to compute Shannon entropy inline, which
+it cannot do and would silently fake), `hunk-reviewer` (framing implied a
+verdict), `a11y-review` (unlabeled single-model synthesis), and
+`skill-conductor-test-gate` (tautological-assertion repair assigned to fast).
 
-Known starting points: `a11y-review`, `a11y-review-deep`, `security-review`,
-`review`, `hunk-reviewer`, `sql-code-review`, `postgresql-code-review`.
+Rejected: the `brainstorming` spec-review loop, which escalates to a human and
+gates on user review.
+
+Not examined, and worth a pass if these ever grow verdict steps:
+`awx-job-execution`, `conventional-commit`, `draw-io-diagram-generator`,
+`operational-knowledge-capture`, `pdf-reader`, `pytest-coverage`,
+`team-directory`, `tmux-rename`, `update-copilot-instructions`,
+`using-git-worktrees`, `skill-conductor-context`, `skill-conductor-execution`.
