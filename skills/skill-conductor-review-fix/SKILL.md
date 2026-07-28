@@ -38,14 +38,18 @@ after_fix_applied(fixed_files, previous_results):
     yield r  # fresh analysis of fixed files
 ```
 
-## Model Tier Selection
+## Fix Agent Selection
+
+Fix agents are **actors**, not reporters: they modify files. The reporter seat's
+"any model is fine" rule does not apply, because a wrong edit is a change to the
+codebase rather than a discardable suggestion.
 
 ```
-select_fix_tier(findings):
+select_fix_model(findings):
   if all findings are mechanical (typos, missing sections, formatting):
-    return "fast"  # pattern matching sufficient
+    return "fast"       # deterministic edits, low blast radius
   if any finding requires judgment (restructure, logic, architecture):
-    return "reasoning"  # needs design sense
+    return "frontier"   # restructuring changes behavior
 ```
 
 ## Ownership
@@ -99,17 +103,19 @@ post-spec/post-plan gates are fully autonomous (no per-iteration checkpoint).
 
 ## Reviewer Adapter Contract
 
-Dispatch each reviewer as a **subagent** (not interactive). Use the suggested model
-tier from the review gate's Model Dispatch Table.
+Dispatch each reviewer as a **subagent** (not interactive) in the reporter seat.
+Use the reporter cost from the review gate's Model Dispatch Table.
 
 Adapter prompt pattern:
 1. Artifact content (or diff for MR gate)
-2. Request findings in normalized YAML schema
+2. Request findings in normalized YAML schema, using `proposed_severity`
 3. "Do not ask questions. Do not use AskUser. Produce findings only."
 4. Reviewer's core evaluation criteria as context
 
-For cross-ecosystem dispatch: launch the same prompt to both models in parallel.
-Merge results by fingerprint before processing.
+For ecosystem spread: distribute reviewer passes across available ecosystems. For
+doubled dispatch on security-critical reviewers: launch the same prompt to two
+ecosystems in parallel. Merge results by fingerprint before processing; clustering
+is non-destructive.
 
 | Reviewer | Criteria focus |
 |----------|---------------|

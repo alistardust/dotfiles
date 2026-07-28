@@ -72,37 +72,37 @@ picking one reviewer. Autoplan runs all relevant reviewers sequentially.
 
 ### office-hours
 **When:** New ideas, unclear requirements, stress-test assumptions.
-**Suggested tier:** frontier (creative reasoning, multi-turn Socratic questioning)
+**Suggested model:** frontier (creative reasoning, multi-turn Socratic questioning)
 **Output:** Design doc in ~/.gstack/projects/
 
 ### brainstorming (Superpowers)
 **When:** Lighter ideation, refining existing concept, exploring options.
-**Suggested tier:** frontier (creativity benefits from strongest available model)
+**Suggested model:** frontier (creativity benefits from the strongest available model)
 **Output:** Design spec in docs/superpowers/specs/
 
 ### plan-ceo-review
 **When:** Plan needs scope/strategy validation. "Is this ambitious enough?"
-**Suggested tier:** frontier (ambiguity, strategy, 10-star thinking)
+**Suggested model:** frontier (ambiguity, strategy, 10-star thinking)
 **Output:** Review log, plan updates
 
 ### plan-eng-review
 **When:** Plan needs architecture, test coverage, performance review.
-**Suggested tier:** reasoning (system-level reasoning, interactive)
+**Suggested model:** frontier (system-level judgment, interactive)
 **Output:** Review log, test plan
 
 ### plan-design-review
 **When:** Plan has UI/UX components needing visual/interaction review.
-**Suggested tier:** reasoning (design judgment)
+**Suggested model:** frontier (design judgment)
 **Output:** Review log, design scores
 
 ### autoplan
 **When:** Full review gauntlet without intermediate questions.
-**Suggested tier:** Per-reviewer (each uses its own tier from the review-gate Model Dispatch Table)
+**Suggested model:** Per-reviewer (each uses its reporter cost from the review-gate Model Dispatch Table)
 **Output:** Unified review report
 
 ### cso
 **When:** Security-focused review (secrets, supply chain, OWASP, STRIDE).
-**Suggested tier:** reasoning (attack path reasoning; fast tier misses subtle chains)
+**Suggested model:** frontier (attack path reasoning; cheap models miss subtle chains)
 **Output:** Security report with findings
 
 ## After Choosing

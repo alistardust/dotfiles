@@ -38,12 +38,12 @@ What phase of execution are you in?
 
 ### writing-plans
 **When:** Requirements clear, need step-by-step implementation plan.
-**Suggested tier:** reasoning (structured reasoning, dependency analysis)
+**Suggested model:** frontier (plan design is a judgment call)
 **Output:** plan.md with numbered steps
 
 ### executing-plans
 **When:** Plan exists, time to build step by step.
-**Suggested tier:** reasoning (precision, follows plan faithfully)
+**Suggested model:** mid (following an approved plan is well-specified work)
 **Prerequisite:** A plan artifact must exist (`plan.md`, `docs/superpowers/plans/*`,
 or `.planning/*/PLAN.md`). For GSD plans (`.planning/`), prefer `gsd-execute-phase`
 via the Context layer instead.
@@ -51,41 +51,41 @@ via the Context layer instead.
 
 ### test-driven-development
 **When:** Building new behavior where tests should drive design.
-**Suggested tier:** reasoning (TDD requires disciplined cycle adherence)
+**Suggested model:** mid (the cycle is well-specified; escalate if design is unclear)
 **Best for:** Functions, services, APIs, business logic
 **Not for:** Config, docs, scaffolding
 
 ### dispatching-parallel-agents
 **When:** 2+ independent tasks that can run simultaneously.
-**Suggested tier:** fast per agent; reasoning for orchestrator
+**Suggested model:** fast per agent; frontier for the orchestrator (it decides decomposition)
 **Best for:** Multiple file edits, independent modules, research
 
 ### subagent-driven-development
 **When:** Complex multi-step work requiring coordination.
-**Suggested tier:** reasoning for orchestrator; per-agent tier depends on task complexity
+**Suggested model:** frontier for the orchestrator; per-agent cost depends on task complexity
 **Best for:** Large features spanning many files/modules
 
 ### systematic-debugging
 **When:** Something broken, cause not obvious.
-**Suggested tier:** reasoning (hypothesis generation, root cause analysis)
+**Suggested model:** frontier (hypothesis generation and root cause are judgment)
 **Best for:** Intermittent bugs, mysterious failures, regressions
 
 ### requesting-code-review
 **When:** Code written, want feedback before merging.
-**Suggested tier:** fast (preparing review request is mechanical)
+**Suggested model:** fast (preparing a review request is mechanical)
 
 ### receiving-code-review
 **When:** Review feedback received, need to address it.
-**Suggested tier:** reasoning (judgment needed for non-trivial feedback)
+**Suggested model:** frontier (deciding how to act on feedback is judgment)
 
 ### verification-before-completion
 **When:** Implementation seems done, need to confirm.
-**Suggested tier:** reasoning (needs to reason about acceptance criteria)
+**Suggested model:** frontier (ruling on acceptance criteria is a verdict)
 **Output:** Verification report
 
 ### finishing-a-development-branch
 **When:** Verified, ready to merge/ship.
-**Suggested tier:** fast (mechanical: PR creation, cleanup)
+**Suggested model:** fast (mechanical: PR creation, cleanup)
 **Output:** Merged branch
 
 ## Choosing Between Similar Skills

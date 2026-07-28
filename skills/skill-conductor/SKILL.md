@@ -201,12 +201,14 @@ These rules govern the entire skill-conductor system and all sub-skills:
 
 5. **Proportional effort.** Standards are uniform (all findings block). Effort scales:
    - trivial: inline check, no subagents, no auto-fix loop
-   - moderate: single-tier review, budget=2, single ecosystem
-   - substantial: full gate, both tiers, cross-ecosystem, budget=5
+   - moderate: single-tier review, budget=2, ecosystem spread
+   - substantial: full gate, both tiers, spread plus doubled security passes, budget=5
 
-6. **Cheapest correct model.** Use fast-tier models for pattern matching, checklists,
-   mechanical fixes. Use reasoning-tier for analysis. Use frontier only for genuine
-   ambiguity or creative decisions. Never use frontier for a task fast-tier handles.
+6. **Cheapest correct model.** Reporters may be cheap, because they cannot rule.
+   Use fast models for pattern matching, checklists, and mechanical fixes; mid for
+   well-specified work. Anything that renders a judgment, sets a final severity, or
+   decides what blocks goes to frontier. Never use frontier for work a fast model
+   handles, and never let a fast model rule.
 
 7. **Skip redundant phases.** If context is already established (SESSION has recent
    context work), skip the CONTEXT phase in autopilot. If a plan already exists

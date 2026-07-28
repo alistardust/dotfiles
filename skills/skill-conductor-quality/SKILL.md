@@ -430,7 +430,7 @@ Even with zero-debt policy, proportionality applies to EFFORT, not to STANDARDS:
 |------|-----------|--------|
 | trivial | Same (all findings block) | No auto-fix; findings presented as "fix these before proceeding" |
 | moderate | Same (all findings block) | 2-iteration auto-fix budget |
-| substantial | Same (all findings block) | 4-iteration auto-fix budget + cross-ecosystem |
+| substantial | Same (all findings block) | 4-iteration auto-fix budget + ecosystem spread with doubled security passes |
 
 The user's policy is clear: no finding is ignorable. But for a trivial change,
 presenting 2 LOW findings with "fix before proceeding" is proportionate. Running
