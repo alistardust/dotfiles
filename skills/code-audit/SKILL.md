@@ -99,6 +99,33 @@ verify=False, InsecureRequestWarning, NODE_TLS_REJECT_UNAUTHORIZED
 AWS_SECRET, PRIVATE KEY, BEGIN RSA
 ```
 
+**Match these patterns across line breaks, not per line.** A naive line-oriented
+`grep` for `execute(f"` misses the extremely common case where the call is split
+because a formatter wrapped it:
+
+```python
+self.conn.execute(
+    f"UPDATE {table} SET {assignments} WHERE id = ?",
+    values,
+)
+```
+
+This is not an edge case; it is the dominant style in any repo with a line-length
+limit, because the limit is what forces the break. A real audit found 21 such
+sites in a single package while the per-line pattern matched zero of them, which
+silently classified every one of them as routine. Use multiline matching:
+
+```bash
+# ripgrep: -U enables multiline, (?s) lets . cross newlines
+rg -U --pcre2 'execute\(\s*(?s).{0,80}?f"' --glob '!**/tests/**' .
+rg -U --pcre2 'execute\(\s*(?s).{0,200}?%\s' .
+```
+
+The same applies to `query(`, `raw(`, and any other sink in the list. When a
+pattern's whole purpose is to escalate rigor, a false negative in the pattern
+silently downgrades the finding it should have caught, and nothing in the report
+records that it happened.
+
 **Per-repo overrides.** These defaults suit a general repository. A repo may
 narrow or widen them via `.code-audit.yml` at its root:
 ```yaml
@@ -1212,6 +1239,47 @@ overrule. You may explain why a tool hit is a false positive in context, but say
 explicitly rather than silently discarding it.
 ```
 
+**The read path is not trustworthy for credential-shaped literals.** The
+adjudicator seat rests entirely on one promise: the adjudicator opens the cited
+file instead of trusting the reporter's description. That promise is void when
+the read itself is lossy, and it is lossy in a specific, predictable way.
+
+Tool output layers commonly redact strings that pattern-match as secrets,
+replacing them with a mask before the model ever sees them. Correct source such
+as a bearer-token f-string is therefore displayed as a hardcoded mask literal.
+Reading *harder* does not help, because every read, by every model on the panel,
+goes through the same filter. A whole panel can unanimously confirm a HIGH that
+does not exist, each member having dutifully "verified" it against the same
+corrupted view. This has happened: an audit reported a HIGH for an auth header
+that was correct in the source, and every layer of the pipeline behaved exactly
+as designed while producing a false finding.
+
+Therefore: **any finding whose evidence is a string literal resembling a
+credential, token, key, or password MUST be confirmed at byte level before it can
+carry a severity.** No exceptions, and this is a blocking requirement, not a
+recommendation.
+
+`repr()` is also redacted and does not work. Two techniques are verified to
+survive:
+
+```bash
+# Hex-encode the line and decode it yourself
+python3 -c "l=open('FILE').readlines()[N-1]; print(l.encode('utf-8').hex())"
+
+# Character-spacing defeats the pattern match
+python3 -c "print(' '.join(open('FILE').readlines()[N-1]))"
+```
+
+If byte-level confirmation is impossible, the finding is recorded as
+**unverifiable** and carries no severity. It goes in the report with that label
+rather than being dropped, so the gap stays visible.
+
+Generalize the lesson beyond secrets: when a finding's entire evidence is the
+literal content of a string, and the pipeline has any transformation layer
+between the file on disk and the model's eyes, verify out-of-band before ruling.
+Ask what the instrument does to the sample, not just what the sample appears to
+show.
+
 **Merge panel verdicts deterministically.** Arithmetic decides, never a model:
 - Any adjudicator confirming a severity: that severity holds (conservative
   escalation). A single confirm outweighs any number of rejections.
@@ -1553,6 +1621,12 @@ Before presenting the report, verify quality:
 10. **Every adjudicated CRITICAL cites what was read.** An adjudicator that
    confirmed a CRITICAL without quoting the source did not do its job; send it
    back rather than shipping an unverified CRITICAL.
+11. **Every credential-literal finding was confirmed at byte level.** Any finding
+   whose evidence is a token, key, password, or other credential-shaped string
+   must show byte-level confirmation (hex or character-spacing) in its rationale,
+   or be labeled *unverifiable* and carry no severity. A panel agreeing on a
+   masked literal is not evidence; they may all be reading the same corrupted
+   view.
 
 If any check fails, fix it before presenting.
 
