@@ -1,6 +1,6 @@
 ---
 name: code-audit
-version: "0.4.0"
+version: "0.5.0"
 description: >
   Comprehensive read-only code audit for any repository. Orchestrates SAST tools
   (ruff, bandit, semgrep, radon, eslint, tflint, etc.), skills-hub AI skills
@@ -38,6 +38,70 @@ This skill never modifies the target repository. Specifically:
 - It writes the report to the session files directory (outside the repo)
 - It installs SAST tools into a temporary location (temp venv), not the project
 - It may install missing skills-hub skills globally (with user confirmation)
+
+## Seats and Proportional Rigor
+
+Canonical policy lives in `skill-conductor` ("Multi-Model Review"). The operational
+ladder is restated here so this skill behaves correctly when invoked standalone.
+
+Every AI pass in this audit occupies one of three seats:
+
+- **Reporter.** Any model, any cost, any ecosystem. Read-only. Proposes findings
+  and a `proposed_severity`. Never final, never blocking. A cheap model reading
+  security code and saying "this looks wrong" is useful; it simply does not rule.
+- **Adjudicator.** Frontier models only. Decides which findings are real and sets
+  `final_severity`. **Must open the cited file and line rather than trusting the
+  reporter's description.** A reporter claiming "hardcoded credential at
+  auth.py:42" is a lead, not a fact.
+- **Deterministic.** Tool scans, criticality classification, merge arithmetic, and
+  scoring. No model involved.
+
+No step in this audit is performed by a single model except at the `routine` rung,
+where findings are explicitly labeled unadjudicated.
+
+### Criticality classification (deterministic)
+
+Computed per finding as the **maximum** of three independent signals. Any signal
+escalates; none de-escalates below the others. This must never be delegated to a
+model: whatever decides how hard to look is making the most consequential judgment
+in the pipeline.
+
+1. `proposed_severity` from any reporter
+2. Path sensitivity: the file matches a sensitive path pattern
+3. Tool corroboration: a SAST hit (bandit, semgrep, detect-secrets) on the same
+   file, within 10 lines
+
+**Sensitive path patterns** (extend per repo; matched case-insensitively against
+the relative path):
+```
+auth, login, session, token, credential, secret, password, key, crypto, cipher,
+hash, iam, policy, permission, acl, sudo, migration, schema_change,
+.github/workflows, .gitlab-ci, Dockerfile, terraform, ansible/vault, k8s, helm
+```
+
+### Rigor ladder
+
+| Criticality | Reporters | Adjudicators | Weight | Disputes |
+|-------------|-----------|--------------|--------|----------|
+| routine (LOW/INFO, insensitive path) | 1 pass | none; labeled unadjudicated | fast | annotate inline |
+| standard (MEDIUM, insensitive path) | spread across ecosystems | 2, different ecosystems | mid or better | annotate |
+| elevated (HIGH, or MEDIUM in sensitive path) | spread, security passes doubled | 2, different ecosystems | frontier | prominent disputed section |
+| critical (CRITICAL, any sensitive path, or SAST-corroborated security) | doubled across ecosystems | 3, three ecosystems | frontier, high effort | block and escalate to the user |
+
+**Run-level multiplier:** if the target repo contains production infrastructure or
+handles sensitive data, bump every finding up one rung. Detect via sensitive path
+density or an explicit `--critical` flag from the user. A personal project does
+not get the bump.
+
+### Ecosystems
+
+Anthropic, OpenAI, Google, and Microsoft (MAI). Sibling models within one ecosystem
+do not count as separate coverage; they share training lineage and therefore blind
+spots. Refer to model families, never version numbers.
+
+**Spread** is the default: distribute reporter passes across ecosystems round-robin.
+Same pass count, same cost, multiple lineages. **Doubling** (the same pass in two
+ecosystems) is reserved for security-critical passes and for critical findings.
 
 ## Invocation
 
@@ -135,6 +199,29 @@ frameworks, and tools are in use:
 | `Dockerfile`, `docker-compose.yml` | Docker |
 
 Use `glob` and `view` to check for these files. Record all detected stacks.
+
+**Coverage check (deterministic, required).** Manifest detection fails silently:
+a stack with no matching manifest in the table is simply never audited, and the
+report gives no sign that anything was skipped. Verify detection against the
+actual file census rather than trusting it.
+
+```bash
+# Census of source file extensions, largest first
+git -C "$TARGET_PATH" ls-files \
+  | sed -n 's/.*\.\([a-zA-Z0-9]*\)$/\1/p' \
+  | sort | uniq -c | sort -rn | head -25
+```
+
+Compare the census against the detected stacks. If any extension accounting for
+more than 5% of tracked files maps to no detected stack, the detection is
+incomplete. Do not proceed silently:
+
+1. Add the stack if it is recognizable (the table is not exhaustive).
+2. If no tooling exists for it, record it in the RepoProfile as an
+   **uncovered stack** and surface it in the report's Coverage section.
+
+An audit that quietly skips 30% of a repo is worse than no audit, because it
+reports a clean bill of health for code nobody examined.
 
 ### Step 1.2: Collect repo metrics
 
@@ -459,6 +546,22 @@ Launch all four skills as background agents using the `task` tool. Replace
 `<REPO_PATH>` below with the actual absolute path to the repository root (from
 `git rev-parse --show-toplevel` or `pwd`).
 
+All four occupy the **reporter** seat: read-only, proposing findings that Phase 5
+adjudicates. Any model may fill a reporter seat.
+
+**Ecosystem assignment.** Spread the four passes round-robin across ecosystems
+(Anthropic, OpenAI, Google, MAI) using the `model` parameter on the `task` tool.
+Four passes across four lineages costs the same as four passes on one and covers
+markedly more ground, because models within an ecosystem share blind spots.
+
+**Double the security pass.** Security review runs twice, in two different
+ecosystems, because a missed vulnerability is the most expensive class of miss in
+this audit. Both results feed adjudication as independent reporters; agreement
+across lineages is corroborating evidence, and disagreement surfaces as a dispute
+rather than being averaged away.
+
+Record the assigned ecosystem on every finding a pass emits.
+
 Each agent is launched with `agent_type="general-purpose"` and `mode="background"`.
 Use `read_agent` to collect results after all agents complete.
 
@@ -578,10 +681,13 @@ Skills produce markdown reports. Extract structured findings on a best-effort ba
 3. Map to canonical finding schema:
    - `source`: skill name (e.g., "cto-review")
    - `category`: map to `architecture | security | quality | debt | complexity`
-   - `severity`: from heading context
+   - `severity`: from heading context -> write to `proposed_severity`
+   - `ecosystem`: which ecosystem produced this pass
    - `confidence`: default to MEDIUM for AI-reasoning findings
    - `file`, `line`: extracted from references, null if not found
    - `title`, `description`, `risk`, `recommendation`: from finding text
+   - leave `criticality`, `final_severity`, `adjudication`, `rationale` unset;
+     Phase 5 writes those
 
 4. Findings that cannot be cleanly extracted remain as raw markdown. They are
    included verbatim in the relevant report section and still counted for scoring.
@@ -623,6 +729,14 @@ Agent type selection:
 - **4c (Complexity Deep Dive):** `agent_type="general-purpose"` (needs to read
   functions and reason about structure).
 
+**Ecosystem assignment.** These are reporter seats, so any model qualifies. Assign
+4a, 4b, and 4c to three different ecosystems, and to ecosystems different from the
+ones handling the equivalent Phase 3 concern where possible. Gap passes exist to
+find what earlier passes missed; running them on the same lineage that already
+looked defeats the purpose.
+
+Record the assigned ecosystem on every finding.
+
 Launch all three passes in parallel:
 - **4a (Error Handling):** Pass the repo path and the list of files with broad
   exception catches from the tool scan summary.
@@ -651,12 +765,17 @@ files. The only files this audit creates are in the session workspace
 (`tool-scan-summary.md`, `ai-agent-summary.md`, and the final `audit-report-<repo>-<branch>-<date>.md`).
 
 **All findings from custom passes must use the full canonical schema:**
+
+Reporters emit `proposed_severity`. They must NOT emit `final_severity`: that
+field is written only by adjudication. Naming it this way makes inheriting a
+reporter's claim into the report impossible by construction.
 ```
 finding:
   id: "<source>-<short-id>-<file>:<line>"
   source: "<pass-name>"
+  ecosystem: "<anthropic|openai|google|mai>"
   category: "<architecture|security|quality|error-handling|test-gap|debt|complexity>"
-  severity: "<CRITICAL|HIGH|MEDIUM|LOW|INFO>"
+  proposed_severity: "<CRITICAL|HIGH|MEDIUM|LOW|INFO>"
   confidence: "<HIGH|MEDIUM|LOW>"
   file: "<relative file path>"
   line: <line number or range, null if not applicable>
@@ -665,6 +784,12 @@ finding:
   risk: "<concrete consequence>"
   recommendation: "<specific fix>"
   tool_evidence: null
+  # --- written by adjudication only; reporters leave these unset ---
+  criticality: null      # deterministic: routine|standard|elevated|critical
+  final_severity: null   # adjudicator verdict
+  adjudication: null     # confirmed|upgraded|downgraded|rejected|unadjudicated|disputed
+  adjudicators: []       # which ecosystems ruled, and how each voted
+  rationale: null        # why, citing what was read at file:line
 ```
 
 ### Phase 4a: Error Handling Audit
@@ -759,7 +884,7 @@ For each finding, produce a full canonical finding:
 - `id`: "error-handling-<pattern>-<file>:<line>" (e.g., "error-handling-bare-except-src/api.py:42")
 - `source`: "error-handling-audit"
 - `category`: "error-handling"
-- `severity`: per the severity rules above
+- `severity`: per the severity rules above -> write to `proposed_severity`
 - `confidence`: HIGH for pattern matches (bare except, missing from), MEDIUM for judgment calls (exception as flow control)
 - `file`: exact relative file path
 - `line`: exact line number
@@ -969,9 +1094,14 @@ For each finding, produce a full canonical finding:
 - `category`: "complexity"
 - All other canonical fields populated per the schema above
 
-## Phase 5: Report Synthesis
+## Phase 5: Adjudication and Report Synthesis
 
-After all phases complete, merge everything into a single report.
+After all phases complete, decide which findings are real, then merge everything
+into a single report.
+
+Phases 1 through 4 gather claims. Nothing before this point is a verdict: every
+finding arriving here carries a `proposed_severity` from a reporter that was not
+required to be right. This phase is where claims become findings.
 
 ### Step 5.1: Collect all outputs
 
@@ -982,23 +1112,99 @@ Gather:
 - RepoProfile from Phase 1 (stacks, metrics, CI config)
 - Tool execution results (which tools ran, which failed, which were skipped)
 
-### Step 5.2: Deduplicate findings
+### Step 5.2: Cluster findings (non-destructive)
 
 Multiple passes may flag the same issue (e.g., bandit and security-review both
 find a hardcoded secret, or ruff and code-smell both flag a god class).
 
-Deduplication rules:
-- **Exact match:** same `file + line + category` = definite duplicate
-- **Fuzzy match:** same `file + category` within 10 lines = likely duplicate
-- **Conceptual match:** same `file + same concern` (e.g., "shell.py is dangerous"
-  from one source and "shell.py:87 command injection" from another) = merge if
-  they describe the same underlying risk, even with different granularity
-- When duplicates found, keep the finding with the richest description
-- Add a `also_found_by` note listing all sources that flagged it
-- Only deduplicate normalized findings; raw markdown sections pass through as-is
-- When in doubt, keep both findings rather than incorrectly merging distinct issues
+**Clustering never deletes.** Corroboration across independent reporters is
+evidence, and a merge that discards the losing description destroys it. Group
+findings and cross-link them; every member stays addressable.
 
-### Step 5.3: Compute scorecard
+Clustering rules:
+- **Exact match:** same `file + line + category` = same cluster
+- **Fuzzy match:** same `file + category` within 10 lines = same cluster
+- **Conceptual match:** same `file + same concern` (e.g., "shell.py is dangerous"
+  from one source and "shell.py:87 command injection" from another) = same cluster
+  when they describe the same underlying risk, even at different granularity
+- Promote the richest description to the cluster's representative text
+- Record `also_found_by` listing every source and ecosystem that flagged it
+- Carry the **highest** `proposed_severity` in the cluster forward as the
+  cluster's proposed severity
+- Retain every member finding under `cluster_members`; none are dropped
+- Only cluster normalized findings; raw markdown sections pass through as-is
+- When in doubt, leave findings separate rather than merging distinct issues
+
+Cross-lineage corroboration is a strong signal: when reporters from different
+ecosystems independently flag the same line, record that explicitly, because
+adjudication weighs it as evidence.
+
+### Step 5.3: Adjudicate findings
+
+This step decides what is real. Nothing downstream may alter a verdict.
+
+**Classify criticality first (deterministic).** For each cluster, compute
+criticality as the maximum of proposed severity, sensitive-path match, and SAST
+corroboration, per "Criticality classification" above. No model participates.
+
+**Dispatch adjudicators per the rigor ladder.** Panel size and model weight follow
+criticality. Panels draw from different ecosystems. Adjudicators run as subagents
+in parallel.
+
+Adjudicator prompt pattern:
+```
+You are adjudicating a code audit finding. A reporter proposed it; your job is to
+decide whether it is real and what severity it actually warrants.
+
+You MUST read the cited file at the cited line before ruling. Do not rely on the
+reporter's description. If the citation does not resolve, or the code does not
+match the description, that is grounds for rejection.
+
+Given: the finding, its proposed severity, the reporters that flagged it, and any
+deterministic tool evidence.
+
+Return:
+  verdict: confirmed | upgraded | downgraded | rejected
+  final_severity: CRITICAL | HIGH | MEDIUM | LOW | INFO
+  rationale: what you read at file:line, and why it does or does not support the
+             claim. Quote the relevant code.
+
+Deterministic tool output (bandit, semgrep, detect-secrets) is evidence you do not
+overrule. You may explain why a tool hit is a false positive in context, but say so
+explicitly rather than silently discarding it.
+```
+
+**Merge panel verdicts deterministically.** Arithmetic decides, never a model:
+- Any adjudicator confirming a severity: that severity holds (conservative
+  escalation). A single confirm outweighs any number of rejections.
+- Rejection requires **unanimity**. One dissent keeps the finding alive.
+- Final severity is the **highest** severity any adjudicator assigned.
+- Panel disagreement sets `adjudication: disputed` and records every vote.
+
+Never resolve a split by dispatching a tie-breaker model. That reintroduces a
+single arbiter wearing the costume of a merge step. Splits either resolve by the
+arithmetic above or escalate to the user.
+
+**Disputes** are handled per the ladder: annotated at routine and standard,
+surfaced prominently at elevated, and at critical the audit **stops and asks the
+user** before writing the report.
+
+**Rejected findings are retained**, not deleted. They appear in a report appendix
+with the rejecting rationale so the adjudication itself stays auditable. If
+adjudicators begin suppressing real findings, that is visible.
+
+**Routine findings** skip adjudication entirely and carry
+`adjudication: unadjudicated`. The report labels them as such; the audit does not
+claim they were verified.
+
+### Step 5.4: Compute scorecard (deterministic)
+
+Scoring runs on **adjudicated** findings only, using `final_severity`. Findings
+rejected by adjudication do not affect scores. Unadjudicated routine findings
+(LOW/INFO) contribute only through the MEDIUM-cluster rule, which they cannot
+trigger, so in practice they do not move the score.
+
+This step is pure arithmetic. No model assigns or adjusts a score.
 
 Assign a 1-10 score for each dimension using this proportional rubric:
 
@@ -1030,7 +1236,7 @@ Compute an overall health score (0-100) as the average of all dimension scores
 multiplied by 10. This is a qualitative summary, not a precise metric.
 Round to the nearest integer.
 
-### Step 5.4: Generate the report
+### Step 5.5: Generate the report
 
 Determine the output path. The default is the session files directory:
 
@@ -1086,6 +1292,16 @@ finding. Be specific, not generic.>
 2. <second strongest>
 3. <third strongest>
 
+**Confidence in this report:**
+- Findings adjudicated: <N> of <M> (<N> verified against source by frontier
+  models; the remainder were routine-rung and are labeled unadjudicated)
+- Reporter ecosystems: <list> | Adjudicator ecosystems: <list>
+- Unresolved disputes: <N> (see Disputed Findings)
+- Coverage gaps: <uncovered stacks and excluded paths, or "none">
+
+<State this honestly. A reader deciding whether to act on a CRITICAL needs to know
+whether a model verified it or merely asserted it.>
+
 ---
 
 ## Scorecard
@@ -1104,6 +1320,10 @@ finding. Be specific, not generic.>
 
 ## Findings by Severity
 
+All severities below are **final severities set by adjudication**, not the
+severities proposed by the reporting pass. Findings marked *unadjudicated* were
+routine-rung and passed through without verification.
+
 ### CRITICAL (fix immediately)
 
 <list all CRITICAL findings, each with:>
@@ -1113,7 +1333,10 @@ finding. Be specific, not generic.>
 - **Issue**: <specific description>
 - **Risk**: <concrete consequence>
 - **Fix**: <specific remediation>
-- **Source**: <tool/skill that found it>
+- **Reported by**: <passes and ecosystems that flagged it>
+- **Adjudication**: <confirmed | upgraded from X | downgraded from X | disputed>
+  by <N> adjudicators across <ecosystems>
+- **Rationale**: <what the adjudicators read at file:line>
 
 ### HIGH (fix soon)
 <same format>
@@ -1126,6 +1349,24 @@ finding. Be specific, not generic.>
 
 ### INFO (observations)
 <same format>
+
+---
+
+## Disputed Findings
+
+<Findings where adjudicators split. Both positions are recorded; neither is
+resolved by averaging or by a tie-breaker model. Conservative escalation means
+these appear at the highest severity any adjudicator assigned.>
+
+**[FINDING-ID] <title>** - `<file>:<line>`
+- **Position A** (<ecosystem>): <verdict + severity> - <rationale>
+- **Position B** (<ecosystem>): <verdict + severity> - <rationale>
+- **Carried as**: <severity> (highest assigned)
+
+<If empty: "No adjudicator disagreements.">
+
+<If any dispute was criticality `critical`, the audit stopped and asked the user
+before this report was written. Record the user's decision here.>
 
 ---
 
@@ -1175,6 +1416,32 @@ Otherwise note "structural heuristics only.">
 
 ---
 
+## Appendix: Rejected Findings
+
+<Findings that reporters raised and adjudication rejected. Retained so the
+adjudication itself is auditable: if adjudicators start suppressing real issues,
+that pattern is visible here rather than invisible.>
+
+| ID | File:line | Reported by | Proposed | Rejection rationale |
+|----|-----------|-------------|----------|---------------------|
+| | | | | |
+
+<If empty: "No findings were rejected.">
+
+---
+
+## Appendix: Coverage
+
+**Stacks detected**: <list>
+**Uncovered stacks**: <stacks present in the file census with no tooling, or
+"none">
+**Paths excluded**: <list, with reason>
+
+<Anything the audit did not examine belongs here. A clean report over a partial
+scan is misleading unless the gaps are stated.>
+
+---
+
 ## Appendix: Tool Scan Results
 
 <Summary table of each tool that ran:>
@@ -1190,17 +1457,37 @@ Otherwise note "structural heuristics only.">
 
 ## Methodology
 
+This audit uses a reporter/adjudicator model with proportional rigor.
+
+**Reporters** (Phases 3 and 4) are read-only and propose findings; they never set
+final severity. Reporter passes are spread across model ecosystems so that no
+single training lineage determines what gets noticed, and the security pass is
+doubled across two ecosystems.
+
+**Adjudicators** (Phase 5) are frontier models that read the cited source before
+ruling. Panel size scales with a deterministically computed criticality, so a
+LOW finding in a test fixture does not cost what a CRITICAL in an auth path does.
+
+**No model has the final say.** Panel verdicts merge by conservative arithmetic:
+any confirmation holds, rejection requires unanimity, and the highest assigned
+severity carries. Deterministic tool output is ground truth no model overrules.
+Splits at critical criticality escalate to the user rather than to a tie-breaker
+model.
+
 **Audit performed**: YYYY-MM-DD
 **Total scan time**: <duration from Phase 1 start to Phase 5 completion>
-**Phases executed**: 1 (Recon), 2 (Tool Scans), 3 (AI Reasoning), 4 (Custom Passes), 5 (Report)
+**Phases executed**: 1 (Recon), 2 (Tool Scans), 3 (AI Reasoning), 4 (Custom Passes), 5 (Adjudication and Report)
 **Tools used**: <list of tools that ran successfully>
 **Skills used**: <list of skills that ran>
+**Ecosystems used**: <reporter ecosystems> / <adjudicator ecosystems>
 **Skipped**: <list of tools/skills that were skipped, with reason>
-**Total findings**: N (X critical, Y high, Z medium, W low, V info)
-**Deduplicated**: N findings merged from multiple sources
+**Total findings**: N adjudicated (X critical, Y high, Z medium, W low, V info)
+**Rejected**: N findings rejected by adjudication (see appendix)
+**Unadjudicated**: N routine-rung findings passed through without verification
+**Clustered**: N findings grouped from multiple sources (none discarded)
 ```
 
-### Step 5.5: Verification checklist
+### Step 5.6: Verification checklist
 
 Before presenting the report, verify quality:
 
@@ -1216,10 +1503,22 @@ Before presenting the report, verify quality:
 5. **Report file exists and is >1KB.** If the write failed, retry once.
 6. **No raw JSON or tool output leaked into the report body.** All findings should
    be in human-readable format.
+7. **No finding carries a reporter's proposed severity into the report.** Every
+   finding in Findings by Severity must have either `adjudication` set or an
+   explicit *unadjudicated* label. Any finding whose `final_severity` is unset
+   and is not labeled unadjudicated is a pipeline bug: adjudicate it before
+   presenting.
+8. **Rejected findings appear in the appendix with rationale.** A rejection with
+   no rationale is indistinguishable from a finding that was silently dropped.
+9. **Coverage appendix is honest.** Uncovered stacks and excluded paths are
+   listed. If the file census showed source the audit did not examine, say so.
+10. **Every adjudicated CRITICAL cites what was read.** An adjudicator that
+   confirmed a CRITICAL without quoting the source did not do its job; send it
+   back rather than shipping an unverified CRITICAL.
 
 If any check fails, fix it before presenting.
 
-### Step 5.6: Present the report
+### Step 5.7: Present the report
 
 After writing the report:
 
@@ -1231,7 +1530,7 @@ After writing the report:
 >
 > Would you like me to walk through any section in detail?"
 
-### Step 5.7: Cleanup
+### Step 5.8: Cleanup
 
 Remove the temporary audit venv:
 
