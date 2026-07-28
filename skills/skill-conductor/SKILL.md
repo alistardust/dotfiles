@@ -244,10 +244,12 @@ If active workflow found: present resume options via `ask_user`. Otherwise proce
 
 ### Tier escalation safeguards
 
-- **Security-sensitive files override:** If changeset touches auth, crypto, secrets,
-  or security-critical paths (patterns: `**/auth/**`, `**/crypto/**`, `**/security/**`,
-  `**/*secret*`, `**/*credential*`), minimum tier is `moderate` regardless of file
-  count. CSO reviewer is always required for these paths.
+- **Security-sensitive files override:** If the changeset touches security-critical
+  paths, minimum tier is `moderate` regardless of file count, and the CSO reviewer
+  is always required. The canonical pattern list (paths and content signals) lives
+  in `code-audit` under "Criticality classification"; use it rather than
+  maintaining a second list here, since two lists drift and the narrower one wins
+  by accident.
 - **User downgrade requires justification:** If user requests a lower tier than
   detected ("treat this as trivial"), log the override with stated reason. If no
   reason provided, ask for one.

@@ -67,17 +67,55 @@ model: whatever decides how hard to look is making the most consequential judgme
 in the pipeline.
 
 1. `proposed_severity` from any reporter
-2. Path sensitivity: the file matches a sensitive path pattern
+2. Sensitivity: the file matches a sensitive path pattern, or contains a
+   sensitive content pattern
 3. Tool corroboration: a SAST hit (bandit, semgrep, detect-secrets) on the same
    file, within 10 lines
 
-**Sensitive path patterns** (extend per repo; matched case-insensitively against
-the relative path):
+**Sensitive path patterns** (matched case-insensitively against the relative
+path):
 ```
-auth, login, session, token, credential, secret, password, key, crypto, cipher,
-hash, iam, policy, permission, acl, sudo, migration, schema_change,
-.github/workflows, .gitlab-ci, Dockerfile, terraform, ansible/vault, k8s, helm
+auth, login, logout, session, token, jwt, oauth, saml, sso, credential, secret,
+password, passwd, key, keystore, crypto, cipher, encrypt, decrypt, sign, verify,
+hash, hmac, iam, policy, permission, role, acl, rbac, sudo, privilege,
+migration, schema_change, seed,
+upload, download, import, export, deserial, unmarshal, parse,
+webhook, callback, proxy, redirect, cors, csrf,
+.github/workflows, .gitlab-ci, Jenkinsfile, Dockerfile, docker-compose,
+terraform, ansible/vault, k8s, helm, kustomize, .env
 ```
+
+**Sensitive content patterns.** Path names are a weak signal on their own: the
+most dangerous code is frequently in a file named nothing in particular, and a
+file named `auth_test_fixtures.py` is not automatically risky. Also escalate any
+file containing these, regardless of its name. This is a `grep`, not a judgment,
+so it stays deterministic:
+```
+eval(, exec(, pickle.load, yaml.load(, shell=True, os.system, subprocess.
+innerHTML, dangerouslySetInnerHTML, document.write
+SELECT .* +, execute(f", execute(" .* %, query(` .* ${
+md5, sha1, random.random, Math.random
+verify=False, InsecureRequestWarning, NODE_TLS_REJECT_UNAUTHORIZED
+AWS_SECRET, PRIVATE KEY, BEGIN RSA
+```
+
+**Per-repo overrides.** These defaults suit a general repository. A repo may
+narrow or widen them via `.code-audit.yml` at its root:
+```yaml
+sensitive_paths:
+  add: ["billing/", "src/ingest/"]
+  remove: ["migration"]     # this repo's migrations are generated and reviewed upstream
+critical_repo: true          # applies the run-level multiplier unconditionally
+```
+Removals must be justified in a comment. Narrowing the list is the cheapest way
+to make an audit look clean, so make the choice visible rather than silent.
+
+**Tuning.** This list is the main lever on audit cost, because it decides how
+much of the repo earns frontier attention. Both failure directions are real: too
+narrow and genuinely risky code gets adjudicated at the routine rung, too broad
+and every run pays frontier prices for boilerplate. If the run-level multiplier
+is already active for the repo, prefer the narrower list, since everything is
+escalating a rung regardless.
 
 ### Rigor ladder
 
@@ -90,8 +128,8 @@ hash, iam, policy, permission, acl, sudo, migration, schema_change,
 
 **Run-level multiplier:** if the target repo contains production infrastructure or
 handles sensitive data, bump every finding up one rung. Detect via sensitive path
-density or an explicit `--critical` flag from the user. A personal project does
-not get the bump.
+density, a `critical_repo: true` override in `.code-audit.yml`, or an explicit
+`--critical` flag from the user. A personal project does not get the bump.
 
 ### Ecosystems
 
@@ -1144,8 +1182,8 @@ adjudication weighs it as evidence.
 This step decides what is real. Nothing downstream may alter a verdict.
 
 **Classify criticality first (deterministic).** For each cluster, compute
-criticality as the maximum of proposed severity, sensitive-path match, and SAST
-corroboration, per "Criticality classification" above. No model participates.
+criticality as the maximum of proposed severity, path or content sensitivity, and
+SAST corroboration, per "Criticality classification" above. No model participates.
 
 **Dispatch adjudicators per the rigor ladder.** Panel size and model weight follow
 criticality. Panels draw from different ecosystems. Adjudicators run as subagents
