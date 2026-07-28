@@ -35,12 +35,12 @@ section_copilot_skills() {
     log "Installing Copilot skills (profiles: work=${SKILLS_PROFILE[work]}, home=${SKILLS_PROFILE[home]})..."
 
     # Ensure ~/.copilot/settings.json exists with required defaults
-    # Model selection: work=sonnet (balanced cost/quality), home=haiku (cheapest interface)
+    # The interface model routes work, adjudicates subagent output, and decides
+    # what to escalate, so it is a judgment seat and must be frontier. Cheap
+    # models earn their keep in subagents, not here. Both profiles get Opus;
+    # cost control comes from delegation, not from a weaker interface.
     local settings_file="${HOME}/.copilot/settings.json"
-    local default_model="claude-sonnet-4.5"
-    if [[ "${SKILLS_PROFILE[home]}" == "true" && "${SKILLS_PROFILE[work]}" != "true" ]]; then
-        default_model="claude-haiku-4.5"
-    fi
+    local default_model="claude-opus-5"
     run mkdir -p "${HOME}/.copilot"
     if [[ ! -f "$settings_file" ]]; then
         run tee "$settings_file" <<< '{"memory":{"enabled":true},"model":"'"${default_model}"'","experimental":true}'
