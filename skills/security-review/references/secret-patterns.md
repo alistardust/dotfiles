@@ -92,12 +92,47 @@ redis:\/\/:[^@]+@
 ## Entropy-Based Detection
 
 Apply to string literals > 20 characters in assignment context.
-High entropy (Shannon entropy > 4.5 bits/char) + length > 20 = likely secret.
 
+**Do not calculate entropy yourself.** Shannon entropy is a numerical computation
+over character frequencies, and a language model asked for one will produce a
+plausible number rather than a correct one. The failure is silent: the output
+looks like a measurement, so nothing signals that no measurement occurred.
+
+Run a tool and use its output as ground truth:
+
+```bash
+# Preferred: purpose-built, maintained rulesets
+detect-secrets scan --all-files
+# or
+gitleaks detect --no-git --redact
 ```
-Calculate entropy: -sum(p * log2(p)) for each character frequency p
-Threshold: > 4.5 bits/char AND > 20 chars AND assigned to a variable
+
+If neither is available, compute it deterministically rather than estimating:
+
+```bash
+python3 - "$FILE" <<'PY'
+import math, re, sys
+from collections import Counter
+for lineno, line in enumerate(open(sys.argv[1], errors="replace"), 1):
+    for lit in re.findall(r'["\']([^"\']{20,})["\']', line):
+        counts = Counter(lit)
+        n = len(lit)
+        entropy = -sum((c / n) * math.log2(c / n) for c in counts.values())
+        if entropy > 4.5:
+            print(f"{sys.argv[1]}:{lineno}: entropy={entropy:.2f} {lit[:12]}...")
+PY
 ```
+
+Threshold: > 4.5 bits/char AND > 20 chars AND assigned to a variable.
+
+If no tool ran, say so in the report and mark entropy-based detection as **not
+performed**. Claiming a heuristic that never executed is worse than omitting it,
+because the reader credits the repo with a check nobody ran.
+
+Where the model does add value here is judgment the tool lacks: deciding whether
+a flagged high-entropy string is a real credential or a hash fixture, a UUID, a
+minified asset, or test data. Apply that to tool output; do not use it to replace
+the measurement.
 
 Common false positives to exclude:
 - Lorem ipsum text

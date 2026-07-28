@@ -303,6 +303,19 @@ If Layer A and Layer B identify the same root cause, keep separate findings only
 
 Severity sanity check: everything being CRITICAL is suspicious; everything being LOW is suspicious; only Layer A findings is suspicious; all findings hitting the same populations is suspicious; and all issues being copy issues on a complex UI is suspicious. If the distribution looks suspicious, revisit critique once.
 
+**Adjudication.** This is the lite review: one model runs both layers and this
+synthesis, so nothing independent checks the result. That is an acceptable
+tradeoff for a PR-sized diff, but it must be stated rather than hidden.
+
+- Label severities in the report as **proposed, unadjudicated**.
+- The self-check above is not adjudication. A model reviewing its own output
+  shares the reasoning that produced it, so it catches sloppiness but not
+  conviction.
+- Escalate to `a11y-review-deep`, which has a real adjudication phase, when the
+  diff touches authentication, checkout, forms handling errors, or any flow a
+  user cannot route around. A missed barrier on a required flow locks people out
+  of the product rather than inconveniencing them.
+
 ## Reporting Rules
 
 The report file must contain YAML frontmatter followed by markdown.

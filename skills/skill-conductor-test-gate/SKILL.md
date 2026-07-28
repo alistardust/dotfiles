@@ -310,7 +310,7 @@ The test gate can auto-fix specific finding types:
 |--------------|-------------------|-----------------|
 | Missing boundary test | Generate test from function signature + detected gap | mid |
 | No assertions in test | Add meaningful assertions based on function contract | frontier |
-| Tautological assertion | Replace with meaningful value assertion | fast |
+| Tautological assertion | Replace with meaningful value assertion | mid |
 | Missing regression test | Generate failing-then-passing test from diff | frontier |
 | Low coverage (single branch) | Generate test targeting uncovered branch | mid |
 

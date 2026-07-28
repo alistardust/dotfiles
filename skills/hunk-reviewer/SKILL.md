@@ -51,7 +51,7 @@ Perform a full review covering:
 Respond with ONLY this structured format:
 
 ```
-Issues: <count> | Severity: <highest>
+Issues: <count> | Proposed severity: <highest>
 - [BUG] description
 - [SECURITY] description
 - [STYLE] description
@@ -63,6 +63,12 @@ Issues: <count> | Severity: <highest>
 Categories: BUG, SECURITY, STYLE, NAMING, PERF, TEST
 Severity (include in description if not obvious): CRITICAL, HIGH, MEDIUM, LOW
 
+Severity here is **proposed**, not final. You occupy the reporter seat: you
+surface concerns for the human reviewing the hunk, who decides what matters and
+whether to approve. Report anything suspicious rather than filtering to what you
+are confident about, because a false positive costs one line of reading and a
+miss ships. Never state or imply that a hunk is approved or blocked.
+
 Or if no issues:
 
 ```
@@ -73,7 +79,11 @@ Issues: 0 | No issues found.
 
 When dispatching this skill as a subagent, use:
 - **Agent type:** `explore` (read-only, no side effects)
-- **Model:** Use the fastest available model (capability tier: fast)
+- **Model:** Use the fastest available model (capability tier: fast). This is a
+  reporter seat, so a fast model is correct here: the human adjudicates every
+  hunk before it is committed. Prefer an ecosystem other than the one that wrote
+  the change, since a model reviewing its own lineage's output shares its blind
+  spots.
 - **Prompt:** Include the diff hunk, file content, and repo context as described
   in "Inputs Provided" above
 - **Invocation:** The main session dispatches this via the `task` tool with

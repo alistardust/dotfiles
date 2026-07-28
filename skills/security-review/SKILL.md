@@ -30,9 +30,29 @@ Unlike traditional static analysis tools that match patterns, this skill:
 1. **Reads code like a security researcher** : understanding context, intent, and data flow
 2. **Traces across files** : following how user input moves through your application
 3. **Self-verifies findings** : re-examines each result to filter false positives
-4. **Assigns severity ratings** : CRITICAL / HIGH / MEDIUM / LOW / INFO
+4. **Proposes severity ratings** : CRITICAL / HIGH / MEDIUM / LOW / INFO
 5. **Proposes targeted patches** : every finding includes a concrete fix
 6. **Requires human approval** : nothing is auto-applied; you always review first
+
+## Seat
+
+This skill occupies the **reporter** seat. It proposes findings and a
+`proposed_severity`; it does not set final severity and it does not block.
+
+Self-verification (Step 6) reduces false positives, but a model checking its own
+work is not adjudication: it shares the reasoning that produced the finding, so
+it inherits the same blind spots. Real adjudication requires a different model
+reading the cited source.
+
+- **Invoked via `skill-conductor-review-gate`:** the gate's frontier adjudicator
+  panel sets final severity. Nothing more is needed here.
+- **Invoked standalone:** there is no adjudicator. Label the output
+  **unadjudicated** in the report header and state that severities are proposed.
+  For anything beyond a personal project, run a frontier model over the
+  CRITICAL and HIGH findings, requiring it to open each cited `file:line` and
+  quote the source before confirming. Security review is the highest-stakes
+  review there is; an unverified CRITICAL is expensive in both directions,
+  because a false one burns trust and a missed one ships.
 
 ## Execution Workflow
 
@@ -118,7 +138,10 @@ For EACH finding:
 3. Check if the framework version in use has built-in mitigations for this class
 4. Trace backwards: does user input actually reach this code path without validation?
 5. Downgrade or discard findings where protection exists but was missed in initial scan
-6. Assign final severity: CRITICAL / HIGH / MEDIUM / LOW / INFO
+6. Assign `proposed_severity`: CRITICAL / HIGH / MEDIUM / LOW / INFO
+
+This is a proposal, not a verdict. See "Seat" above: if no adjudicator follows,
+the report must say so rather than presenting these as final.
 
 ### Step 7 : Generate Security Report
 Output the full report in the format defined in `references/report-format.md`.

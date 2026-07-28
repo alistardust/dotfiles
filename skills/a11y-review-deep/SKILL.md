@@ -352,6 +352,9 @@ Before Phase 4:
 
 Execution model:
 - Dispatch parallel explore subagents, one per in-scope population
+- These are reporter seats: any model is acceptable, and spreading them across
+  ecosystems is preferable to running them all on one lineage. They propose
+  severity; Phase 6 adjudicates it.
 - Use `populations_focus` from config when present
 - Pass Phase 1 context and helpful excerpts from Phases 2 and 3
 - Timeout each persona after 30 seconds
@@ -397,11 +400,29 @@ Before Phase 6:
 - Read only `phases/synthesis.md`
 
 Objectives:
-- Consolidate, deduplicate, and rank findings across available phase outputs
+- Consolidate and cluster findings across available phase outputs
+- Adjudicate findings before ranking them (see below)
 - Apply severity overrides from config when specified
 - Count severities and affected populations
 - Build the final report structure and executive summary
 - Explicitly note skipped, failed, or partially completed phases
+
+**Adjudication.** Phase 4 personas are reporters: they propose severity, they do
+not set it. Synthesis must not simply inherit the highest or clearest proposal,
+because a merge step that quietly picks a winner is a single model making the
+final call while wearing the costume of a merge.
+
+- Use a frontier model for this phase.
+- For every CRITICAL and HIGH finding, open the cited evidence and verify the
+  claim against it. A persona's description of a barrier is a lead, not a fact.
+- Record the verdict per finding: confirmed, upgraded, downgraded, or rejected,
+  with a one-line rationale citing what was read.
+- Where personas disagree about severity, carry the **highest** proposed
+  severity and record the disagreement rather than averaging it. Accessibility
+  severity depends on which population is affected, so two personas differing is
+  usually two real impacts rather than one error.
+- Rejected findings go in an appendix with rationale, not the bin.
+- MEDIUM and below may pass through unadjudicated if labeled as such.
 
 Deduplication rules:
 - Prefer the clearest, most actionable wording for overlapping findings
