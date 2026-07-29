@@ -1254,21 +1254,74 @@ corrupted view. This has happened: an audit reported a HIGH for an auth header
 that was correct in the source, and every layer of the pipeline behaved exactly
 as designed while producing a false finding.
 
-Therefore: **any finding whose evidence is a string literal resembling a
-credential, token, key, or password MUST be confirmed at byte level before it can
-carry a severity.** No exceptions, and this is a blocking requirement, not a
-recommendation.
+Therefore adjudication runs a **positive, mechanical check** rather than waiting
+for someone to notice that a piece of evidence looks suspicious. A trigger that
+fires on "this looks credential-shaped" is circular: noticing is precisely the
+perception the corrupted read path degrades. If a mask happens to render as
+something unremarkable, a judgment-triggered rule never fires at all, and the
+failure it exists to catch passes straight through.
 
-`repr()` is also redacted and does not work. Two techniques are verified to
-survive:
+**Every finding at CRITICAL or HIGH whose evidence includes the content of a
+source line MUST be byte-verified before it can carry a severity.** Run the
+check on all of them, not only the ones that look like secrets. This is a
+blocking requirement, not a recommendation.
+
+Scope the trigger to literal-content evidence of any kind. A hardcoded IP
+address, an internal hostname, a PHI-shaped string, an f-string SQL fragment, a
+license key, or a magic constant hits the identical failure, and naming only
+credentials leaves all of them ungated. The test is "does this finding turn on
+what the string says?", never "does this string look dangerous?".
+
+`repr()` is also redacted and does not work. The reliable approach is to keep
+the literal out of the output layer entirely: compare inside the process and
+emit only a verdict, so there is nothing for a filter to mask.
 
 ```bash
-# Hex-encode the line and decode it yourself
+# Preferred. The literal never crosses the output boundary; only the verdict,
+# the length, and a truncated digest do, none of which are redactable.
+python3 - "$FILE" "$N" "$CLAIMED_LITERAL" <<'PY'
+import hashlib, sys
+path, n, claim = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+line = open(path, encoding="utf-8").readlines()[n - 1].rstrip("\n")
+print("MATCH" if claim in line else "MISMATCH")
+print("len=%d sha256=%s" % (len(line), hashlib.sha256(line.encode()).hexdigest()[:16]))
+PY
+```
+
+Two fallbacks survive the filter when the literal itself must be inspected:
+
+```bash
+# Hex-encode the line and decode it yourself.
 python3 -c "l=open('FILE').readlines()[N-1]; print(l.encode('utf-8').hex())"
 
-# Character-spacing defeats the pattern match
+# Character-spacing defeats the pattern match.
 python3 -c "print(' '.join(open('FILE').readlines()[N-1]))"
 ```
+
+**Verify that the workaround itself worked.** Hex output is high-entropy and is
+therefore a plausible future target for the same redaction filters. If that ever
+happens the technique fails silently: the adjudicator reads a masked blob while
+believing it read bytes, which is the original failure wearing a disguise. Never
+trust an out-of-band read that has not asserted its own round trip.
+
+```bash
+# ANCHOR is a short, non-secret substring already known to be on that line: a
+# function name, a dict key, an import. If it does not survive the round trip,
+# the out-of-band read is compromised too and the finding is unverifiable.
+python3 - "$FILE" "$N" "$ANCHOR" <<'PY'
+import sys
+path, n, anchor = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+raw = open(path, "rb").readlines()[n - 1]
+decoded = bytes.fromhex(raw.hex()).decode("utf-8")
+if anchor not in decoded:
+    sys.exit("ROUND-TRIP FAILED: out-of-band read is unreliable for this line")
+print(raw.hex())
+PY
+```
+
+Record the verdict of the comparison in the finding's rationale, along with the
+fact that the round trip was asserted. A rationale that says "verified at byte
+level" without either is not evidence that anything was verified.
 
 If byte-level confirmation is impossible, the finding is recorded as
 **unverifiable** and carries no severity. It goes in the report with that label
@@ -1621,12 +1674,15 @@ Before presenting the report, verify quality:
 10. **Every adjudicated CRITICAL cites what was read.** An adjudicator that
    confirmed a CRITICAL without quoting the source did not do its job; send it
    back rather than shipping an unverified CRITICAL.
-11. **Every credential-literal finding was confirmed at byte level.** Any finding
-   whose evidence is a token, key, password, or other credential-shaped string
-   must show byte-level confirmation (hex or character-spacing) in its rationale,
-   or be labeled *unverifiable* and carry no severity. A panel agreeing on a
-   masked literal is not evidence; they may all be reading the same corrupted
-   view.
+11. **Every CRITICAL and HIGH resting on literal string content was
+   byte-verified.** The check is mechanical and runs on all of them, not only
+   the credential-shaped ones: deciding which literals "look suspicious" relies
+   on the same perception a corrupted read path degrades, so a
+   judgment-triggered gate cannot catch the case it exists for. The rationale
+   must record the verdict of an out-of-band comparison, and that comparison
+   must itself have asserted its round trip. Anything unconfirmed is labeled
+   *unverifiable* and carries no severity. A panel agreeing on a masked literal
+   is not evidence; they may all be reading the same corrupted view.
 
 If any check fails, fix it before presenting.
 
