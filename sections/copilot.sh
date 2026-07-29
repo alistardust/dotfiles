@@ -32,24 +32,10 @@ section_copilot() {
 
     local settings_file="${instructions_dir}/settings.json"
     if [[ -f "$settings_file" ]]; then
-        # Ensure memory is enabled even if settings already exist
-        if python3 -c "import json,sys; d=json.load(open(sys.argv[1])); assert d.get('memory',{}).get('enabled')" "$settings_file" 2>/dev/null; then
-            ok "Copilot settings up to date (memory enabled)."
-        else
-            log "Enabling memory in Copilot settings..."
-            if [[ "$DRY_RUN" == "true" ]]; then
-                printf '\e[2;37m  [dry] enable memory in %s\e[0m\n' "$settings_file"
-            else
-                python3 -c "
-import json,sys
-p=sys.argv[1]
-d=json.load(open(p))
-d.setdefault('memory',{})['enabled']=True
-json.dump(d,open(p,'w'),indent=2)
-" "$settings_file"
-            fi
-            ok "Copilot memory enabled."
-        fi
+        # Deliberately a no-op. This file holds deliberate per-machine choices
+        # (model, effort level, allowed URLs), and rewriting it on every setup
+        # run silently overrode them. Creation-time defaults only.
+        ok "Copilot settings already present (left unchanged)."
     else
         log "Writing Copilot settings..."
         if [[ "$DRY_RUN" == "true" ]]; then
