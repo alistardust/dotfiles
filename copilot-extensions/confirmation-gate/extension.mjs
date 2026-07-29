@@ -37,6 +37,31 @@
 //    locked state that no phrasing can clear.
 //
 // ---------------------------------------------------------------------------
+// v3 design notes
+//
+// 8. Confirmation is ANCHORED, not substring-matched. v2 granted on a confirm
+//    word appearing anywhere in the message, so a long message discussing
+//    approval unlocked edits: the phrase "unanimously confirm a HIGH" was a
+//    real, observed false grant. A confirmation now has to sit in a clause that
+//    is short, is not a question, and carries no hedge or negation.
+//
+// 9. Quoted and displayed text is stripped before matching. Pasting a
+//    transcript, an instruction snippet, or a fenced code block that contains
+//    "go ahead" is quotation, not consent.
+//
+// 10. The state file is a map keyed by session id. v2 stored a single slot, so
+//     concurrent sessions clobbered each other and nearly every lookup missed.
+//     Writes go through a temp file and rename, because writeFileSync is not
+//     atomic and several sessions write here.
+//
+// 11. Form consent understands booleans. v2 only recognised affirmative words,
+//     so an ask_user boolean returning `true` never unlocked anything, which
+//     re-broke the very path item 2 was added to fix. Matching is keyed on the
+//     field NAME meaning approval: name the boolean "approve" or "proceed",
+//     because a field named after the subject ("gate=true") states what is
+//     being discussed rather than granting it.
+//
+// ---------------------------------------------------------------------------
 // REMAINING LIMITATIONS (read before trusting this as a control)
 //
 // - This is not a sandbox. It is a speed bump against accidental edits, not a
@@ -46,8 +71,13 @@
 // - Stickiness is a deliberate tradeoff: one confirmation covers subsequent
 //   edits until revoked. Per-action confirmation for destructive and production
 //   operations is enforced by instruction, not by this gate.
-// - Confirm and revoke matching is regex over prose, so it misfires both ways.
-//   Revoke wins ties, and unmatched input leaves the current state unchanged.
+// - Confirm and revoke matching is still regex over prose. The clause anchoring
+//   narrows it substantially but does not eliminate it: a short unhedged
+//   sentence containing "proceed" grants, whatever its intent. Eliminating this
+//   needs a structured consent channel, not a better regex. Revoke wins ties,
+//   and unmatched input leaves the current state unchanged.
+// - The narrowed matching costs recall. Phrasings like "do what you recommend"
+//   no longer grant. "go ahead" is the reliable form.
 // - `2>file` style stderr redirection is not gated; it is a write, but gating it
 //   was too noisy to be worth it.
 // - Cloud provider CLIs (aws, az, gcloud) are not gated here. Their verb
@@ -56,7 +86,7 @@
 // ---------------------------------------------------------------------------
 
 import { joinSession } from "@github/copilot-sdk/extension";
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, renameSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 
@@ -79,6 +109,63 @@ const REVOKE_PATTERNS = [
   /\b(stop|wait|hold on|hold up|abort|cancel|halt|never ?mind|not yet|don'?t|do not|back out|stand down|undo|revert)\b/i,
 ];
 
+// A confirmation word appearing ANYWHERE in a long message is not consent. The
+// observed failure: a message analysing this very gate contained the phrase
+// "unanimously confirm a HIGH", and that unlocked edits. Discussing approval
+// is not granting it.
+//
+// So a confirmation must appear in a clause that is short, is not a question,
+// and carries no hedge. Clauses are tested individually rather than only the
+// first, so "Sounds good. Go ahead." still works.
+const MAX_CONFIRM_CLAUSE_LEN = 60;
+
+// If any of these appear in the same clause, it is discussion, a question, or
+// a conditional, rather than consent.
+const HEDGE_PATTERNS = [
+  /\b(not|never|n'?t|unsure|unless|until|maybe|might|perhaps|should we|shall we|can we|do we|what if|if you|when you|would you|rather than|instead of)\b/i,
+];
+
+// Strip content that is being quoted or displayed rather than said. Pasting a
+// transcript or an instruction snippet containing "go ahead" must not grant
+// anything. Single quotes are deliberately left alone: apostrophes are common
+// in ordinary prose and stripping on them would eat real text.
+function sanitizeMessage(msg) {
+  return String(msg)
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/`[^`\n]*`/g, " ")
+    .replace(/"[^"\n]*"/g, " ")
+    .replace(/^\s*>.*$/gm, " ");
+}
+
+// Split into clauses while RETAINING the terminator, so that a trailing "?"
+// stays visible. Splitting it away would turn "proceed?" into "proceed".
+function clausesOf(text) {
+  const out = [];
+  const re = /[^.!?;\n\r]+[.!?;]?/g;
+  let match;
+  while ((match = re.exec(text)) !== null) {
+    const clause = match[0].trim();
+    if (clause) out.push(clause);
+  }
+  return out;
+}
+
+function isConfirmation(msg) {
+  return clausesOf(sanitizeMessage(msg)).some((clause) => {
+    if (clause.length > MAX_CONFIRM_CLAUSE_LEN) return false;
+    if (/\?\s*$/.test(clause)) return false;
+    if (HEDGE_PATTERNS.some((p) => p.test(clause))) return false;
+    return CONFIRM_PATTERNS.some((p) => p.test(clause));
+  });
+}
+
+// Revocation matches anywhere in the message, without the clause constraints
+// above. Over-triggering here locks the gate, which is the safe direction to
+// be wrong in.
+function isRevocation(msg) {
+  return REVOKE_PATTERNS.some((p) => p.test(sanitizeMessage(msg)));
+}
+
 // Tokens that, if present anywhere in an ask_user result, block auto-grant.
 // Form results may echo unselected choices, so a result containing both an
 // approve option and a decline option is treated as ambiguous, not as consent.
@@ -89,6 +176,12 @@ const FORM_DECLINE_PATTERNS = [
 const FORM_AFFIRM_PATTERNS = [
   /\b(yes|approve[ds]?|approval|proceed|confirm(ed)?|accept(ed)?|go ahead|commit and push)\b/i,
   /\byes[_-]\w+/i,
+
+  // A boolean field that MEANS approval, set true. Keyed deliberately on the
+  // field NAME: a form answering "gate=true" names the subject under
+  // discussion, not the consent, and must not grant. Name the boolean
+  // "approve" or "proceed" when a form is meant to unlock the gate.
+  /\b(approve|confirm|proceed|consent|authorize|authorise)\w*\s*[=:]\s*(true|yes)\b/i,
 ];
 
 const MUTATING_TOOLS = new Set(["edit", "create"]);
@@ -140,28 +233,44 @@ let confirmationGranted = false;
 let pendingPermission = null;
 let activeSessionId = null;
 
-function loadState(sessionId) {
+// Several sessions share this file, so it holds a map keyed by session id
+// rather than a single slot. v2 stored one entry, which meant concurrent
+// sessions overwrote each other and almost every lookup missed. That failed
+// closed, so it was safe but useless.
+function readStateMap() {
   try {
     const raw = JSON.parse(readFileSync(STATE_FILE, "utf8"));
-    if (raw.sessionId !== sessionId) return false;
-    if (Date.now() - (raw.updatedAt || 0) > STATE_TTL_MS) return false;
-    return raw.granted === true;
+    if (raw && typeof raw === "object" && raw.sessions && typeof raw.sessions === "object") {
+      return raw.sessions;
+    }
+    return {};
   } catch {
-    return false;
+    return {};
   }
+}
+
+function loadState(sessionId) {
+  const entry = readStateMap()[sessionId];
+  if (!entry) return false;
+  if (Date.now() - (entry.updatedAt || 0) > STATE_TTL_MS) return false;
+  return entry.granted === true;
 }
 
 function saveState(sessionId) {
   try {
     mkdirSync(dirname(STATE_FILE), { recursive: true });
-    writeFileSync(
-      STATE_FILE,
-      JSON.stringify({
-        sessionId,
-        granted: confirmationGranted,
-        updatedAt: Date.now(),
-      }),
-    );
+    const now = Date.now();
+    const sessions = readStateMap();
+    for (const [id, entry] of Object.entries(sessions)) {
+      if (now - (entry?.updatedAt || 0) > STATE_TTL_MS) delete sessions[id];
+    }
+    sessions[sessionId] = { granted: confirmationGranted, updatedAt: now };
+
+    // writeFileSync is not atomic. With concurrent sessions writing, a partial
+    // write would leave torn JSON that every session then fails to parse.
+    const tmp = `${STATE_FILE}.${process.pid}.tmp`;
+    writeFileSync(tmp, JSON.stringify({ sessions }));
+    renameSync(tmp, STATE_FILE);
   } catch {
     // Persistence is a convenience. Losing it degrades to in-memory state,
     // which fails closed, so a write failure is never escalated.
@@ -204,10 +313,10 @@ const session = await joinSession({
       activeSessionId = sid;
 
       // Revocation is evaluated first and wins ties.
-      if (REVOKE_PATTERNS.some((p) => p.test(msg))) {
+      if (isRevocation(msg)) {
         setGrant(false, sid);
         pendingPermission = null;
-      } else if (CONFIRM_PATTERNS.some((p) => p.test(msg))) {
+      } else if (isConfirmation(msg)) {
         setGrant(true, sid);
         pendingPermission = null;
       }
