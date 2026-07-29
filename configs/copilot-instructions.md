@@ -94,6 +94,44 @@ These are CI failures and immediate review rejects. No exceptions.
 Input validation: validate at every external boundary (API, CLI, queue). Whitelist what is allowed;
 reject everything else. Never trust client-supplied role or permission data.
 
+## The Confirmation Gate
+
+A local extension at `~/.copilot/extensions/confirmation-gate/extension.mjs`,
+installed by `setup.sh --copilot`, enforces the confirmation requirement
+mechanically. It denies the `edit` and `create` tools, and denies bash commands
+that write files or change repo state, until the user confirms a proposed
+approach.
+
+How it unlocks:
+- A typed message matching an unambiguous affirmative ("yes", "go ahead",
+  "proceed", "confirm", "approved", "do it", "ship it").
+- An affirmative `ask_user` form answer. Both paths work; neither is preferred.
+
+How it locks again:
+- An explicit revocation ("stop", "wait", "hold on", "abort", "cancel", "not
+  yet", "don't"). Revocation always wins over a confirmation in the same message.
+
+The grant is **sticky**: once given it persists across turns until revoked, so a
+mid-task correction or a "continue" does not silently withdraw consent. It
+authorises the line of work that was described, not arbitrary new changes. If
+the scope shifts materially, describe the new scope and confirm again.
+
+The gate is a backstop, not the rule. It does not replace the per-action
+confirmation required for destructive, production, and shared-infrastructure
+operations, and a sticky grant never covers those.
+
+**Never route around the gate.** It is not a sandbox and it is defeatable: an
+unusual bash invocation, an editor, or a compiled helper can still write.
+Treating any of those as a way to proceed while blocked is working around a
+safety control, regardless of whether the underlying edit was authorised. If the
+gate blocks work the user has genuinely approved, say so and ask for a typed
+confirmation. Do not experiment with phrasings that evade it.
+
+**Disclose bypasses.** If a file was modified through bash rather than
+`edit`/`create` for any reason, including legitimate ones such as appending a
+heredoc, say so in the same turn. The value of the control is the audit trail,
+and an unreported write destroys that even when the change itself was fine.
+
 ## Function and Code Design
 
 - **Single Responsibility:** one function does one thing, completely.
