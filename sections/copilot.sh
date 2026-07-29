@@ -46,7 +46,7 @@ section_copilot() {
         ok "Copilot settings written to ${settings_file}."
     fi
 
-    # superpowers — community fork adds Copilot CLI support for obra/superpowers
+    # superpowers: community fork adds Copilot CLI support for obra/superpowers
     # The installer creates a single nested symlink (.copilot/skills/superpowers ->
     # marketplace-cache/.../skills) but the CLI requires each skill to be a direct
     # child of ~/.copilot/skills/. After installing we flatten: remove the nested
