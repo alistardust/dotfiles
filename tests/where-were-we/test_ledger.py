@@ -1,5 +1,6 @@
 # tests/where-were-we/test_ledger.py
 import wwm_ledger
+import wwm_session
 
 FULL = """# where-were-we
 
@@ -80,3 +81,114 @@ def test_empty_file_parses_to_empty_ledger():
     led = wwm_ledger.parse("")
     assert led.goal is None
     assert led.decisions == []
+
+
+def test_clean_ledger_reports_no_damage():
+    """A well-formed ledger must never raise a false alarm."""
+    assert wwm_ledger.parse(FULL).damaged == []
+
+
+def test_malformed_decision_line_is_disclosed_not_swallowed():
+    """A typo'd date must be reported, not silently dropped.
+
+    A dropped line is a lost decision, and a lost decision is exactly the
+    failure this skill exists to prevent. Losing it quietly is worse than
+    losing it loudly.
+    """
+    text = FULL.replace("- 2026-08-05", "- 2026/08/05")
+    led = wwm_ledger.parse(text)
+    assert "decisions" in led.damaged
+
+
+def test_malformed_thread_line_is_disclosed():
+    text = FULL.replace("- [ ]", "- (]")
+    led = wwm_ledger.parse(text)
+    assert "threads" in led.damaged
+
+
+def test_partial_damage_preserves_every_other_section():
+    """One bad section must not cost the user the rest of the ledger."""
+    text = FULL.replace("- 2026-08-05", "- 2026/08/05")
+    led = wwm_ledger.parse(text)
+    assert led.goal is not None
+    assert led.state is not None
+    assert led.last_synced_turn == 42
+    assert "threads" not in led.damaged
+
+
+def test_record_stamps_turn_from_store(fake_home, seeded):
+    seeded("s1", 5)  # turn_index 0..4
+    wwm_ledger.record(
+        "s1", kind="decision", text="Chose Python", why="parameterized SQL"
+    )
+    led = wwm_ledger.load("s1")
+    assert led.last_synced_turn == 4
+    assert led.decisions[0].text == "Chose Python"
+    assert led.decisions[0].why == "parameterized SQL"
+
+
+def test_record_never_stamps_ahead_of_the_store(fake_home, seeded):
+    """The calling turn is in progress and not yet flushed. Do not compensate."""
+    seeded("s1", 3)  # highest committed index is 2
+    wwm_ledger.record("s1", kind="decision", text="Something decided this turn")
+    assert wwm_ledger.load("s1").last_synced_turn == 2
+
+
+def test_record_ignores_caller_supplied_sync_value(fake_home, seeded):
+    seeded("s1", 3)
+    wwm_ledger.record("s1", kind="decision", text="x", last_synced_turn=999)
+    assert wwm_ledger.load("s1").last_synced_turn == 2
+
+
+def test_record_blocker_and_thread(fake_home, seeded):
+    seeded("s1", 1)
+    wwm_ledger.record("s1", kind="blocker", text="waiting on review")
+    wwm_ledger.record("s1", kind="thread", text="wire up setup verify")
+    led = wwm_ledger.load("s1")
+    assert led.blockers == ["waiting on review"]
+    assert led.threads[0].text == "wire up setup verify"
+
+
+def test_record_creates_ledger_when_absent(fake_home, seeded):
+    seeded("s1", 2)
+    assert not wwm_session.ledger_path("s1").exists()
+    wwm_ledger.record("s1", kind="decision", text="first")
+    assert wwm_session.ledger_path("s1").exists()
+
+
+def test_adopt_copies_content_but_not_sync_state(fake_home, seeded):
+    seeded("old", 400)
+    seeded("new", 3)
+    wwm_ledger.record("old", kind="decision", text="carried over", why="still true")
+    assert wwm_ledger.load("old").last_synced_turn == 399
+
+    wwm_ledger.adopt(source="old", target="new")
+    led = wwm_ledger.load("new")
+    assert led.decisions[0].text == "carried over"
+    assert led.adopted_from == "old"
+    assert led.last_synced_turn == 0
+
+
+def test_adopt_does_not_mutate_the_source(fake_home, seeded):
+    seeded("old", 10)
+    seeded("new", 1)
+    wwm_ledger.record("old", kind="decision", text="keep")
+    wwm_ledger.adopt(source="old", target="new")
+    assert wwm_ledger.load("old").last_synced_turn == 9
+
+
+def test_write_is_atomic(fake_home, seeded, monkeypatch):
+    """A crash mid-write must not leave a truncated ledger."""
+    seeded("s1", 2)
+    wwm_ledger.record("s1", kind="decision", text="good")
+    original = wwm_session.ledger_path("s1").read_text()
+
+    def boom(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(wwm_ledger.os, "replace", boom)
+    try:
+        wwm_ledger.record("s1", kind="decision", text="doomed")
+    except OSError:
+        pass
+    assert wwm_session.ledger_path("s1").read_text() == original

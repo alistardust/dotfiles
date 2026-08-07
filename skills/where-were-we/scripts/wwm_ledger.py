@@ -7,8 +7,15 @@ which own every metadata field including last_synced_turn.
 
 from __future__ import annotations
 
+import os
 import re
+import sqlite3
+from contextlib import closing
 from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
+from pathlib import Path
+
+import wwm_session
 
 META_KEYS = ("goal", "started", "updated", "last_synced_turn", "adopted_from")
 KNOWN_SECTIONS = ("state", "next", "decisions", "threads", "blockers")
@@ -101,12 +108,22 @@ def parse(text: str) -> Ledger:
         ("blockers", _blockers),
     ):
         try:
-            parsed[name] = parser(sections.get(name, []))
-        except Exception:
-            # Keep every section that parses, record every section that does
-            # not. The caller discloses the loss; it is never swallowed.
+            result, dropped = parser(sections.get(name, []))
+        except Exception:  # noqa: BLE001 - see below
+            # Deliberately blind. The ledger is the last surviving record of
+            # intent when the store is gone, so no parse failure may take the
+            # whole file down with it. This is not a silent swallow: the
+            # section name lands in `damaged` and the renderer tells the user
+            # what it could not read.
             parsed[name] = []
             damaged.append(name)
+        else:
+            # A section can parse and still lose individual lines to a typo.
+            # Dropping those silently is the same data loss wearing a
+            # friendlier face, so a partial read is disclosed as damaged too.
+            parsed[name] = result
+            if dropped:
+                damaged.append(name)
 
     return Ledger(
         goal=meta.get("goal"),
@@ -130,9 +147,12 @@ def _block(lines: list[str] | None) -> str | None:
     return text or None
 
 
-def _decisions(lines: list[str]) -> list[Decision]:
+def _decisions(lines: list[str]) -> tuple[list[Decision], bool]:
     out: list[Decision] = []
+    dropped = False
     for line in lines:
+        if not line.strip():
+            continue
         match = DECISION.match(line)
         if match:
             out.append(Decision(date=match.group(1), text=match.group(2).strip()))
@@ -141,27 +161,37 @@ def _decisions(lines: list[str]) -> list[Decision]:
         if cont and out:
             key, value = cont.group(1), cont.group(2).strip()
             out[-1] = replace(out[-1], **{key: value})
-    return out
+            continue
+        dropped = True
+    return out, dropped
 
 
-def _threads(lines: list[str]) -> list[Thread]:
+def _threads(lines: list[str]) -> tuple[list[Thread], bool]:
     out: list[Thread] = []
+    dropped = False
     for line in lines:
+        if not line.strip():
+            continue
         match = THREAD.match(line)
         if match:
             out.append(Thread(done=match.group(1) == "x", text=match.group(2).strip()))
-    return out
+            continue
+        dropped = True
+    return out, dropped
 
 
-def _blockers(lines: list[str]) -> list[str]:
+def _blockers(lines: list[str]) -> tuple[list[str], bool]:
     out: list[str] = []
+    dropped = False
     for line in lines:
         stripped = line.strip()
         if not stripped or stripped == "(none)":
             continue
         if stripped.startswith("- "):
             out.append(stripped[2:].strip())
-    return out
+            continue
+        dropped = True
+    return out, dropped
 
 
 def serialize(led: Ledger) -> str:
@@ -199,3 +229,149 @@ def serialize(led: Ledger) -> str:
     parts += [f"- {b}" for b in led.blockers] if led.blockers else ["(none)"]
     parts.append("")
     return "\n".join(parts)
+
+
+def load(session_id: str) -> Ledger:
+    """Read and parse a session ledger, tolerating a missing or unreadable file.
+
+    Args:
+        session_id: The session whose ledger to read.
+
+    Returns:
+        The parsed ledger, or an empty Ledger when no readable ledger exists.
+    """
+    path = wwm_session.ledger_path(session_id)
+    if not path.exists():
+        return Ledger()
+    try:
+        return parse(path.read_text(encoding="utf-8"))
+    except OSError:
+        return Ledger()
+
+
+def _max_turn_index(session_id: str) -> int:
+    """Return the highest committed turn index, or 0 when none is readable.
+
+    Read straight from the store so record() stamps last_synced_turn from
+    reality rather than from any caller-supplied value. The connection is
+    read-only by URI so a bug here cannot corrupt session history, and it is
+    wrapped in contextlib.closing because a bare sqlite3.connect context manager
+    commits without closing and would leak the handle.
+    """
+    path = wwm_session.store_path()
+    if not path.exists():
+        return 0
+    try:
+        with closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as conn:
+            row = conn.execute(
+                "SELECT MAX(turn_index) AS m FROM turns WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+    except sqlite3.Error:
+        return 0
+    return row[0] or 0
+
+
+def _today() -> str:
+    """Return today's date as an ISO (YYYY-MM-DD) string.
+
+    Uses a timezone-aware UTC clock so the stamp is deterministic and
+    unambiguous across machines and timezones.
+    """
+    return datetime.now(tz=timezone.utc).date().isoformat()
+
+
+def _atomic_write(path: Path, text: str) -> None:
+    """Write text to path atomically, never truncating an existing file.
+
+    The content lands in a sibling temp file first and is moved into place with
+    a single os.replace, so a crash mid-write leaves the previous ledger intact.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def record(
+    session_id: str,
+    kind: str,
+    text: str,
+    why: str = "",
+    rejected: str = "",
+    **ignored: object,
+) -> Ledger:
+    """Append one milestone to the ledger and re-stamp sync metadata.
+
+    Args:
+        session_id: The session whose ledger to update.
+        kind: One of decision, thread, blocker, state, next, or goal.
+        text: The milestone content.
+        why: Rationale, recorded only for decisions.
+        rejected: Rejected alternatives, recorded only for decisions.
+        **ignored: Absorbs any extra keyword arguments so a caller passing
+            last_synced_turn cannot set it. The value is read from the store,
+            never accepted, because the model has no reliable way to know its
+            own turn index and a value that runs ahead of reality would suppress
+            real turns.
+
+    Returns:
+        The updated ledger that was written to disk.
+
+    Raises:
+        ValueError: If kind is not a recognized milestone type.
+    """
+    led = load(session_id)
+    today = _today()
+
+    if kind == "decision":
+        led = replace(
+            led,
+            decisions=[*led.decisions, Decision(today, text, why, rejected)],
+        )
+    elif kind == "thread":
+        led = replace(led, threads=[*led.threads, Thread(False, text)])
+    elif kind == "blocker":
+        led = replace(led, blockers=[*led.blockers, text])
+    elif kind == "state":
+        led = replace(led, state=text)
+    elif kind == "next":
+        led = replace(led, next=text)
+    elif kind == "goal":
+        led = replace(led, goal=text)
+    else:
+        raise ValueError(f"unknown kind: {kind}")
+
+    led = replace(
+        led,
+        started=led.started or today,
+        updated=today,
+        last_synced_turn=_max_turn_index(session_id),
+    )
+    _atomic_write(wwm_session.ledger_path(session_id), serialize(led))
+    return led
+
+
+def adopt(source: str, target: str) -> Ledger:
+    """Carry a stranded ledger into the current session.
+
+    Content transfers. Sync state does not: turn_index is per-session, so an
+    inherited last_synced_turn is meaningless here and, if it ran high, would
+    mark the new ledger current and hide every real turn in it.
+
+    Args:
+        source: The session whose ledger content is being carried over.
+        target: The current session that adopts the content.
+
+    Returns:
+        The adopted ledger that was written to the target session.
+    """
+    src = load(source)
+    adopted = replace(
+        src,
+        adopted_from=source,
+        last_synced_turn=0,
+        updated=_today(),
+    )
+    _atomic_write(wwm_session.ledger_path(target), serialize(adopted))
+    return adopted
