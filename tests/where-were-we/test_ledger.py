@@ -192,3 +192,42 @@ def test_write_is_atomic(fake_home, seeded, monkeypatch):
     except OSError:
         pass
     assert wwm_session.ledger_path("s1").read_text() == original
+
+
+def test_hand_edited_heading_case_still_parses(fake_home):
+    """A user editing their own ledger types `## Decisions`, not `## decisions`.
+
+    Regression, S-F9. The heading regex was `[a-z_]+`, so a capitalised
+    heading was not a heading at all: every decision under it was silently
+    discarded and the lines were absorbed into whatever section came before.
+    """
+    led = wwm_ledger.parse(
+        "# where-were-we\n\n## Decisions\n- 2026-08-05 chose sqlite\n"
+    )
+    assert [d.text for d in led.decisions] == ["chose sqlite"]
+    assert led.damaged == []
+
+
+def test_unknown_heading_is_disclosed_not_swallowed(fake_home):
+    """Content under a heading we do not understand must not vanish quietly."""
+    led = wwm_ledger.parse(
+        "# where-were-we\n\n## decisions\n- 2026-08-05 kept\n"
+        "## scratchpad\nsomething the user typed and would never see again\n"
+    )
+    assert [d.text for d in led.decisions] == ["kept"]
+    assert "scratchpad" in led.damaged
+
+
+def test_empty_unknown_heading_is_not_a_false_alarm(fake_home):
+    """A stray heading with nothing under it loses nothing, so stays quiet."""
+    led = wwm_ledger.parse("# where-were-we\n\n## notes\n\n## decisions\n- x\n")
+    assert "notes" not in led.damaged
+
+
+def test_duplicate_heading_merges_instead_of_discarding(fake_home):
+    """The second `## decisions` used to reset the list and drop the first."""
+    led = wwm_ledger.parse(
+        "# where-were-we\n\n## decisions\n- 2026-08-05 first\n"
+        "## decisions\n- 2026-08-06 second\n"
+    )
+    assert [d.text for d in led.decisions] == ["first", "second"]

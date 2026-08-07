@@ -19,7 +19,7 @@ import wwm_session
 
 META_KEYS = ("goal", "started", "updated", "last_synced_turn", "adopted_from")
 KNOWN_SECTIONS = ("state", "next", "decisions", "threads", "blockers")
-HEADING = re.compile(r"^##\s+([a-z_]+)\s*$")
+HEADING = re.compile(r"^##\s+(.+?)\s*$")
 DECISION = re.compile(r"^-\s+(\d{4}-\d{2}-\d{2})\s+(.*)$")
 THREAD = re.compile(r"^-\s+\[( |x)\]\s+(.*)$")
 CONTINUATION = re.compile(r"^\s+(why|rejected):\s*(.*)$")
@@ -57,32 +57,47 @@ class Ledger:
     damaged: list[str] = field(default_factory=list)
 
 
-def _split_sections(text: str) -> tuple[list[str], dict[str, list[str]]]:
-    """Return preamble lines and a map of known section name to its lines.
+def _split_sections(text: str) -> tuple[list[str], dict[str, list[str]], list[str]]:
+    """Return preamble lines, known sections, and unreadable heading names.
 
-    Unknown or malformed headings are dropped rather than raising, so a corrupt
-    section costs only that section.
+    Headings are matched loosely and compared case-insensitively, so a
+    hand-edited `## Decisions` still lands in the decisions section. A heading
+    that is genuinely not understood does not silently swallow the lines under
+    it: those lines are discarded and the heading name is returned so the
+    caller can disclose the loss.
     """
     preamble: list[str] = []
     sections: dict[str, list[str]] = {}
+    unknown: list[str] = []
     current: str | None = None
+    orphan: str | None = None
     for line in text.splitlines():
         match = HEADING.match(line)
         if match:
-            name = match.group(1)
-            current = name if name in KNOWN_SECTIONS else None
-            if current:
-                sections[current] = []
+            name = match.group(1).strip().lower()
+            if name in KNOWN_SECTIONS:
+                current = name
+                # Merge rather than reset. A duplicated heading used to drop
+                # everything above it without a word.
+                sections.setdefault(current, [])
+                orphan = None
+            else:
+                current = None
+                orphan = name
+            continue
+        if orphan is not None:
+            if line.strip() and orphan not in unknown:
+                unknown.append(orphan)
             continue
         if current is None:
             preamble.append(line)
         else:
             sections[current].append(line)
-    return preamble, sections
+    return preamble, sections, unknown
 
 
 def parse(text: str) -> Ledger:
-    preamble, sections = _split_sections(text)
+    preamble, sections, unknown = _split_sections(text)
 
     meta: dict[str, str] = {}
     for line in preamble:
@@ -124,6 +139,8 @@ def parse(text: str) -> Ledger:
             parsed[name] = result
             if dropped:
                 damaged.append(name)
+
+    damaged.extend(unknown)
 
     return Ledger(
         goal=meta.get("goal"),
