@@ -62,9 +62,9 @@ def is_copilot_runtime() -> bool:
     the only surviving source. Runtime is judged by the session-state layout and
     the environment variable, not by the database file.
     """
-    return bool(os.environ.get(ENV_SESSION)) or (
-        copilot_home() / "session-state"
-    ).is_dir()
+    return (
+        bool(os.environ.get(ENV_SESSION)) or (copilot_home() / "session-state").is_dir()
+    )
 
 
 def has_store() -> bool:

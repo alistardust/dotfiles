@@ -1,6 +1,5 @@
 # tests/where-were-we/test_session.py
 import pytest
-
 import wwm_session
 
 
