@@ -27,6 +27,10 @@ def store(fake_home):
     """A minimal session store with the columns the skill actually reads."""
     path = fake_home / ".copilot" / "session-store.db"
     path.parent.mkdir(parents=True, exist_ok=True)
+    # A real ~/.copilot that has a store always has the session-state layout
+    # beside it. Creating only the database made the runtime gate report a
+    # foreign runtime, which no real Copilot install can be.
+    (fake_home / ".copilot" / "session-state").mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path)
     conn.executescript(
         """
