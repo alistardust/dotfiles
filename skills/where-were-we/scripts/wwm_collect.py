@@ -99,9 +99,16 @@ def collect(session_id: str) -> dict:
     # A marker at or beyond the store is stale, not current. It can only mean an
     # unflushed turn or a tampered file; either way, reconcile from what the
     # store actually confirms rather than trusting the claim.
-    stale = bool(led.decisions or led.state) and led.last_synced_turn < store_max
-    if led.last_synced_turn > store_max:
-        stale = True
+    #
+    # With no store there is nothing to compare against, so staleness is simply
+    # unknowable. Claiming "newer turns folded in below" when zero turns were
+    # folded in points the reader at content that is not there, which is a
+    # worse failure than staying quiet.
+    stale = False
+    if store_ok:
+        stale = bool(led.decisions or led.state) and led.last_synced_turn < store_max
+        if led.last_synced_turn > store_max:
+            stale = True
 
     # Fetch the checkpoint first so any unspent allowance can be handed to the
     # turn slices. 44% of sessions have no checkpoint; for those, reserving

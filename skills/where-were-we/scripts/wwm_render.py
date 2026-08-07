@@ -250,3 +250,45 @@ def render(
     # complete, which the spec forbids.
     lines.append(f"+{omitted} more. {MENU}" if omitted else MENU)
     return "\n".join(line.rstrip() for line in lines).strip("\n")
+
+
+SESSION_SUMMARY_W = 40
+SESSION_REPO_W = 18
+SESSION_DATE_W = 10
+
+
+def sessions_table(rows: list[dict], total: int, days: int) -> str:
+    """Render the cross-session list at the same fixed width as everything else.
+
+    Summaries are free text and some of them are multi-line: one real session
+    was titled "How to talk to me in this session:\n\n- W...", which under a
+    bare slice broke into three ragged lines and destroyed the columns. The
+    whole point of this table is being scannable at a glance, so the text is
+    collapsed through the same cleaner the rest of the output uses.
+    """
+    lines: list[str] = []
+    for r in rows:
+        summary = _clean(r["summary"] or "") or "(no summary)"
+        repo = _clean(r["repository"] or "") or "?"
+        updated = _clean(r["updated_at"] or "")[:SESSION_DATE_W]
+        lines.append(
+            "  "
+            f"{_ellipsize(summary, SESSION_SUMMARY_W):<{SESSION_SUMMARY_W}} "
+            f"{_ellipsize(repo, SESSION_REPO_W):<{SESSION_REPO_W}} "
+            f"{updated}".rstrip()
+        )
+    if not lines:
+        lines.append(f"  No sessions in the last {days} days.")
+    if total > len(rows):
+        lines.append("")
+        lines.append(f"  {total - len(rows)} more in the last {days} days")
+    return "\n".join(lines)
+
+
+def _ellipsize(text: str, width: int) -> str:
+    """Truncate to `width`, spending three of those characters saying so."""
+    if len(text) <= width:
+        return text
+    if width <= 3:
+        return text[:width]
+    return text[: width - 3].rstrip() + "..."

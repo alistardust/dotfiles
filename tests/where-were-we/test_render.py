@@ -249,3 +249,45 @@ def test_adopted_ledger_is_disclosed():
     adopted = {**BUNDLE, "adopted_from": "old-session-id"}
     out = wwm_render.render(adopted, level="tldr", prose="")
     assert "adopted" in out.lower()
+
+
+def test_sessions_table_survives_a_multiline_summary():
+    """Regression. A real session was titled "How to talk to me in this
+    session:\n\n- W...", and the bare slice in the CLI broke it into three
+    ragged lines that destroyed every column in the table."""
+    rows = [
+        {
+            "summary": "How to talk to me in this session:\n\n- Wrap at 80\n- Ask",
+            "repository": "alistardust/dotfiles",
+            "updated_at": "2026-08-06T12:00:00Z",
+        }
+    ]
+    out = wwm_render.sessions_table(rows, total=1, days=14)
+    assert len(out.splitlines()) == 1
+    assert all(len(line) <= wwm_render.TOTAL for line in out.splitlines())
+
+
+def test_sessions_table_never_exceeds_the_fixed_width():
+    rows = [
+        {"summary": "s" * 200, "repository": "r" * 200, "updated_at": "2026-08-06"}
+    ] * 5
+    out = wwm_render.sessions_table(rows, total=99, days=14)
+    assert all(len(line) <= wwm_render.TOTAL for line in out.splitlines())
+
+
+def test_sessions_table_tolerates_missing_fields():
+    rows = [{"summary": None, "repository": None, "updated_at": None}]
+    out = wwm_render.sessions_table(rows, total=1, days=14)
+    assert "(no summary)" in out
+    assert all(len(line) <= wwm_render.TOTAL for line in out.splitlines())
+
+
+def test_sessions_table_says_so_when_there_is_nothing():
+    out = wwm_render.sessions_table([], total=0, days=14)
+    assert "No sessions" in out
+
+
+def test_sessions_table_counts_the_remainder():
+    rows = [{"summary": "a", "repository": "b", "updated_at": "2026-08-06"}]
+    out = wwm_render.sessions_table(rows, total=20, days=14)
+    assert "19 more in the last 14 days" in out

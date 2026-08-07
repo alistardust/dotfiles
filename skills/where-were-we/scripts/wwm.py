@@ -31,12 +31,21 @@ def _resolve(args) -> str:
     _require_runtime()
     explicit = getattr(args, "session", None)
     session_id = wwm_session.resolve_session_id(explicit)
-    if explicit:
+    if not explicit:
+        return session_id
+    has_ledger = wwm_session.ledger_path(session_id).exists()
+    try:
         known = wwm_history.session_exists(session_id)
-        if not known and not wwm_session.ledger_path(session_id).exists():
-            raise wwm_session.SessionUnknown(
-                f"Session '{session_id}' is not in the store."
-            )
+    except wwm_history.StoreUnavailable:
+        # Losing the database must not also throw away the ledger. That is the
+        # exact moment the ledger is the only surviving record of intent, and
+        # refusing here discarded every recorded decision to protect against a
+        # typo. If the ledger is there, the session is real enough to answer.
+        if has_ledger:
+            return session_id
+        raise
+    if not known and not has_ledger:
+        raise wwm_session.SessionUnknown(f"Session '{session_id}' is not in the store.")
     return session_id
 
 
@@ -90,18 +99,14 @@ def cmd_sessions(args) -> int:
     """Listing sessions is how a user finds one, so it needs no current session.
 
     It is still gated on the runtime: on a foreign tool there is nothing to
-    list and saying so beats printing an empty table.
+    list and saying so beats printing an empty table. Formatting is the
+    renderer's job, not this function's; a hand-rolled slice here let a
+    multi-line summary break the columns.
     """
     _require_runtime()
     rows = wwm_history.recent_sessions(days=args.days, limit=args.limit)
     total = wwm_history.count_sessions_in_window(days=args.days)
-    for row in rows:
-        summary = (row["summary"] or "(no summary)")[:40]
-        repo = (row["repository"] or "?")[:18]
-        updated = (row["updated_at"] or "")[:10]
-        print(f"  {summary:<40} {repo:<18} {updated}")
-    if total > len(rows):
-        print(f"\n  {total - len(rows)} more in the last {args.days} days")
+    print(wwm_render.sessions_table(rows, total=total, days=args.days))
     return 0
 
 

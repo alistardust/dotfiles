@@ -132,3 +132,18 @@ def test_files_are_omitted_rather_than_faked_when_store_is_gone(fake_home, seede
     bundle = wwm_collect.collect("s1")
     assert bundle["files"] == []
     assert bundle["origin"] == []
+
+
+def test_no_store_does_not_claim_the_ledger_is_stale(fake_home, seeded):
+    """Regression, found end-to-end. With no store, store_max fell back to 0,
+    so any ledger looked "behind" and the render told the reader that newer
+    turns had been folded in below when nothing had. Pointing someone at
+    content that is not there is worse than saying nothing."""
+    seeded("s1", 40)
+    wwm_ledger.record("s1", kind="decision", text="chose python")
+    (fake_home / ".copilot" / "session-store.db").unlink()
+    bundle = wwm_collect.collect("s1")
+    assert bundle["stale"] is False
+    out = wwm_render.render(bundle, level="tldr", prose="")
+    assert "folded in below" not in out
+    assert "history unreadable" in out

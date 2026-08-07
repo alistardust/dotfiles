@@ -147,3 +147,33 @@ def test_bad_level_is_refused_by_the_parser(fake_home, seeded):
     result = run(["render", "--level", "everything"], fake_home, session="s1")
     assert result.returncode != 0
     assert result.stdout == ""
+
+
+def test_losing_the_store_does_not_discard_the_ledger(fake_home, seeded):
+    """Regression, CRITICAL, found end-to-end against a copy of the real store.
+
+    The unit tests called collect() directly and never crossed the CLI gate,
+    so they never saw this: with the database gone, `_resolve` refused with
+    exit 2 and printed nothing, throwing away every recorded decision at
+    exactly the moment the ledger was the only surviving record of intent."""
+    seeded("s1", 4)
+    run(
+        ["record", "--kind", "decision", "--text", "chose python"],
+        fake_home,
+        session="s1",
+    )
+    (fake_home / ".copilot" / "session-store.db").unlink()
+
+    result = run(["render", "--session", "s1"], fake_home)
+    assert result.returncode == 0, result.stderr
+    assert "chose python" in result.stdout
+    assert "history unreadable" in result.stdout
+
+
+def test_no_store_and_no_ledger_still_refuses(fake_home, seeded):
+    """Degrading is for sessions we have something on; not a blanket amnesty."""
+    seeded("s1", 4)
+    (fake_home / ".copilot" / "session-store.db").unlink()
+    result = run(["render", "--session", "ghost"], fake_home)
+    assert result.returncode != 0
+    assert result.stdout == ""
