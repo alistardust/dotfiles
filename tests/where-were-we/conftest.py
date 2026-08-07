@@ -5,6 +5,11 @@ from pathlib import Path
 
 import pytest
 
+# Importing the skill scripts would otherwise leave __pycache__ inside
+# skills/where-were-we/scripts/, which the installer copies verbatim onto the
+# user's machine. Suppress bytecode before the path is ever importable.
+sys.dont_write_bytecode = True
+
 SCRIPTS = Path(__file__).resolve().parents[2] / "skills" / "where-were-we" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
