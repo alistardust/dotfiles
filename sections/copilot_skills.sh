@@ -164,6 +164,16 @@ verify_copilot_skills() {
             || fail "Local skill missing: ${skill}"
     done
 
+    # The skill can install cleanly while automatic capture is silently absent,
+    # in which case there is nothing to summarize later and the failure only
+    # surfaces when the user has already lost the context they needed.
+    local instructions="${HOME}/.copilot/copilot-instructions.md"
+    if [[ -f "$instructions" ]] && grep -q "where-were-we milestone capture" "$instructions"; then
+        pass "where-were-we capture rule present in instructions"
+    else
+        fail "where-were-we capture rule missing from ${instructions}"
+    fi
+
     # Check a11y-review-deep phases directory
     local phases_dir="${skills_dir}/a11y-review-deep/phases"
     if [[ -d "$phases_dir" ]]; then
