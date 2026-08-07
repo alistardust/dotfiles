@@ -183,6 +183,11 @@ _install_local_skills() {
         fi
         run mkdir -p "$dest"
         run cp -R "${src}/." "$dest/"
+        # cp -R copies the working tree, not git, so gitignored build artifacts
+        # from running a skill's scripts locally would otherwise ship to the
+        # user's machine.
+        run find "$dest" -name '__pycache__' -type d -prune -exec rm -rf {} +
+        run find "$dest" -name '*.pyc' -type f -delete
     done
 }
 
