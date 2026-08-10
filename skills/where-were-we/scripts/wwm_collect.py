@@ -62,6 +62,24 @@ def _same_event(a: str, b: str, threshold: float = 0.6) -> bool:
 def _recorded_items(led: wwm_ledger.Ledger) -> list[dict]:
     """Everything the user explicitly recorded, all tagged `rec`."""
     items: list[dict] = []
+    # Goal leads. It was collected and then dropped by the renderer, so a
+    # ledger holding only a goal rendered a completely blank answer: the user
+    # told the skill what they were doing and it showed them nothing.
+    if led.goal:
+        items.append({"label": "Goal", "text": led.goal, "source": "rec"})
+    # Superseded goals, oldest first. Held back to `full` by the renderer so
+    # they can never crowd the current goal out of the tldr.
+    for past in led.goal_history:
+        items.append(
+            {
+                "label": "was",
+                # The date carries the meaning here. A bare list of former
+                # goals is trivia; a dated one is the arc of the session.
+                "text": f"{past.text} ({past.date})",
+                "source": "rec",
+                "date": past.date,
+            }
+        )
     for dec in led.decisions:
         items.append(
             {
@@ -188,6 +206,34 @@ def collect(session_id: str) -> dict:
                 {"label": "Next", "text": checkpoint["next_steps"], "source": "inf"}
             )
 
+    # Where the session began. `origin` was collected, counted as evidence by
+    # `insufficient`, and then never rendered by anything, so a session whose
+    # only evidence was its own history answered with a blank screen.
+    #
+    # Shown only when it is not simply a restatement of the current goal: a
+    # session that never pivoted gains nothing from being told twice where it
+    # started. Placed directly under the goal it diverges from, so the shift
+    # reads as one thought rather than two facts pages apart.
+    if origin:
+        first = origin[0]
+        already_shown = any(i.get("turn_index") == first["turn_index"] for i in items)
+        echoes_goal = bool(led.goal) and _same_event(first["text"], led.goal)
+        if not already_shown and not echoes_goal:
+            anchor = (1 if led.goal else 0) + len(led.goal_history)
+            items.insert(
+                anchor,
+                {
+                    "label": "Started",
+                    "text": first["text"],
+                    "source": "inf",
+                    "turn_index": first["turn_index"],
+                },
+            )
+            # Promoted, not copied. Leaving the turn in `origin` as well put
+            # the same string in the bundle twice and pushed the payload past
+            # BUDGET_TOTAL by exactly its own length.
+            origin = origin[1:]
+
     return {
         "session_id": session_id,
         "goal": led.goal,
@@ -199,5 +245,10 @@ def collect(session_id: str) -> dict:
         "has_ledger": has_ledger,
         "has_history": store_ok,
         "ledger_damaged": led.damaged,
-        "insufficient": not items and not origin,
+        # Origin is no longer counted separately: it now becomes a `Started`
+        # item above, so anything that suppresses this guard is guaranteed to
+        # be something the renderer can actually show. The old form counted
+        # origin as evidence while nothing rendered it, which let the skill
+        # answer confidently with an empty screen.
+        "insufficient": not items,
     }

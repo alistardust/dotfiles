@@ -19,7 +19,14 @@ from pathlib import Path
 import wwm_session
 
 META_KEYS = ("goal", "started", "updated", "last_synced_turn", "adopted_from")
-KNOWN_SECTIONS = ("state", "next", "decisions", "threads", "blockers")
+KNOWN_SECTIONS = (
+    "state",
+    "next",
+    "decisions",
+    "threads",
+    "blockers",
+    "goal history",
+)
 HEADING = re.compile(r"^##\s+(.+?)\s*$")
 DECISION = re.compile(r"^-\s+(\d{4}-\d{2}-\d{2})\s+(.*)$")
 THREAD = re.compile(r"^-\s+\[( |x)\]\s+(.*)$")
@@ -47,6 +54,11 @@ class Thread:
 @dataclass(frozen=True)
 class Ledger:
     goal: str | None = None
+    # A long session changes what it is about, so replacing the goal is
+    # intended, not data loss. What would be data loss is forgetting the goals
+    # it replaced, because those are the record of how the work arrived here.
+    # Oldest first; each entry is dated the day it stopped being the goal.
+    goal_history: list[Decision] = field(default_factory=list)
     started: str | None = None
     updated: str | None = None
     # -1, not 0, means nothing is synced. Turn indexes are 0-based and
@@ -174,6 +186,9 @@ def parse(text: str) -> Ledger:
         ("decisions", _decisions),
         ("threads", _threads),
         ("blockers", _blockers),
+        # Same `- YYYY-MM-DD text` shape as decisions, so it reuses the same
+        # parser and inherits the same preserve-verbatim behaviour for free.
+        ("goal history", _decisions),
     ):
         try:
             result, dropped = parser(sections.get(name, []))
@@ -204,6 +219,7 @@ def parse(text: str) -> Ledger:
 
     return Ledger(
         goal=meta.get("goal"),
+        goal_history=parsed["goal history"],
         started=meta.get("started"),
         updated=meta.get("updated"),
         last_synced_turn=max(-1, synced),
@@ -282,6 +298,17 @@ def serialize(led: Ledger) -> str:
         parts.append(f"{key}: {value}")
     parts += led.unparsed.get("preamble", [])
     parts.append("")
+
+    # Written high in the file, directly under the current goal, so that
+    # reading the ledger by eye shows the arc of the session before its
+    # details. Emitted only when it holds something: adding an empty heading
+    # to every ledger would rewrite every existing file for no content.
+    if led.goal_history or led.unparsed.get("goal history"):
+        parts.append("## goal history")
+        for past in led.goal_history:
+            parts.append(f"- {past.date} {past.text}")
+        parts += led.unparsed.get("goal history", [])
+        parts.append("")
 
     if led.state:
         parts += ["## state", led.state, ""]
@@ -463,7 +490,16 @@ def record(
     elif kind == "next":
         led = replace(led, next=text)
     elif kind == "goal":
-        led = replace(led, goal=text)
+        # Replacing the goal is correct: a session's purpose genuinely
+        # changes. Forgetting the goal it replaced is not, because months
+        # later that is the only thing that explains why the work looks the
+        # way it does. So the old goal moves into history automatically
+        # rather than requiring the user to remember to write it down, which
+        # is precisely the memory this skill exists to not depend on.
+        history = led.goal_history
+        if led.goal and led.goal != text:
+            history = [*history, Decision(today, led.goal)]
+        led = replace(led, goal=text, goal_history=history)
     else:
         raise ValueError(f"unknown kind: {kind}")
 
@@ -528,6 +564,7 @@ def _has_content(led: Ledger) -> bool:
     """True when a ledger holds anything worth preserving."""
     return bool(
         led.goal
+        or led.goal_history
         or led.state
         or led.next
         or led.decisions

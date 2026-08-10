@@ -88,11 +88,14 @@ LEVELS = ("tldr", "summary", "full")
 SECTIONS = {
     "decisions": ("Decided",),
     "threads": ("Thread",),
-    "timeline": ("Discussed", "Direction"),
+    "timeline": ("Discussed", "Direction", "Started"),
     "files": ("Files",),
     "blockers": ("Blocked",),
 }
 TLDR_PRIORITY = (
+    # Goal first. "Where were we" is answered by what this session is FOR
+    # before it is answered by what happened in it.
+    "Goal",
     "Decided",
     # State before Next: the question this skill is named after is "where am
     # I", and orienting has to come before acting. Chosen by the user after
@@ -107,6 +110,10 @@ TLDR_PRIORITY = (
     # case the history fallback exists to serve.
     "Discussed",
     "Direction",
+    # Last resort. On a session with no ledger and no checkpoint, where it
+    # began is the only orienting fact there is, so it must stay eligible;
+    # ranked last so it never displaces a fact the user recorded themselves.
+    "Started",
 )
 TLDR_MAX_LINES = 8
 PROSE_MAX_LINES = 2
@@ -164,6 +171,11 @@ def _fit(item: dict, budget: int) -> list[str]:
 
 
 def _select(items: list[dict], level: str, section: str | None) -> list[dict]:
+    # Superseded goals are history, not current state. They belong in `full`,
+    # where the user has deliberately gone looking for them, and nowhere that
+    # competes with the current goal for the eight lines of a tldr.
+    if level != "full":
+        items = [i for i in items if i["label"] != "was"]
     if section is not None:
         if section not in SECTIONS:
             raise UnknownSection(
@@ -263,8 +275,18 @@ def render(
     per_item = ITEM_MAX_LINES if (level == "tldr" and section is None) else None
     for item in selected:
         rendered = row(item["label"], item["text"], item["source"])
-        if per_item is not None and len(rendered) > per_item:
-            rendered = _fit(item, per_item)
+        cap = per_item
+        # `Started` is an orienting fragment, not evidence. It carries a raw
+        # opening turn, which is routinely a several-hundred-word paste, and
+        # at `full` that rendered as a ten-line wall sitting directly under
+        # the goal: the exact wall-of-text failure this skill exists to
+        # prevent. Capped at every level EXCEPT an explicit `--section
+        # timeline`, where asking for the timeline is asking for the whole
+        # turn.
+        if item["label"] == "Started" and section is None:
+            cap = ITEM_MAX_LINES if cap is None else min(cap, ITEM_MAX_LINES)
+        if cap is not None and len(rendered) > cap:
+            rendered = _fit(item, cap)
         if budget is not None and len(body) + len(rendered) > budget:
             # Never return a tldr with zero facts. An empty body looks like a
             # confident answer and carries nothing, which is the worst possible

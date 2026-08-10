@@ -434,3 +434,90 @@ def test_a_long_hand_typed_heading_cannot_break_the_fixed_width():
         out = wwm_render.render(bundle, level)
         widest = max(len(ln) for ln in out.splitlines())
         assert widest <= wwm_render.TOTAL, f"{level} produced a {widest}-char line"
+
+
+GOAL_BUNDLE = {
+    **BUNDLE,
+    "items": [
+        {"label": "Goal", "text": "Ship the where-were-we skill", "source": "rec"},
+        {"label": "was", "text": "Design the skill (2026-08-05)", "source": "rec"},
+        {"label": "was", "text": "Write the rules (2026-08-07)", "source": "rec"},
+        {"label": "Next", "text": "Write the implementation plan", "source": "rec"},
+    ],
+}
+
+
+def test_goal_renders_at_every_level():
+    """Regression, CRITICAL. The renderer never referenced `goal` at all, so a
+    goal-only session rendered as nothing but the `more?` menu."""
+    for level in wwm_render.LEVELS:
+        out = wwm_render.render(GOAL_BUNDLE, level)
+        assert "Ship the where-were-we skill" in out, level
+        assert out.splitlines()[0].strip().startswith("Goal"), level
+
+
+def test_superseded_goals_appear_only_in_full():
+    """Chosen by the user: the current goal is always the headline, and the
+    history must never compete for the eight lines of a tldr."""
+    for level in ("tldr", "summary"):
+        assert "Design the skill" not in wwm_render.render(GOAL_BUNDLE, level), level
+    full = wwm_render.render(GOAL_BUNDLE, "full")
+    assert "Design the skill (2026-08-05)" in full
+    assert "Write the rules (2026-08-07)" in full
+
+
+def test_goal_history_stays_within_the_fixed_width():
+    long_goal = {
+        **BUNDLE,
+        "items": [
+            {"label": "Goal", "text": "g" * 300, "source": "rec"},
+            {"label": "was", "text": "w" * 300, "source": "rec"},
+        ],
+    }
+    for level in wwm_render.LEVELS:
+        out = wwm_render.render(long_goal, level)
+        assert all(len(line) <= 72 for line in out.splitlines()), level
+
+
+def test_a_bundle_with_facts_never_renders_an_empty_body():
+    """The blank screen this whole change exists to remove."""
+    for level in wwm_render.LEVELS:
+        out = wwm_render.render(GOAL_BUNDLE, level)
+        body = [ln for ln in out.splitlines() if ln.strip() and "more?" not in ln]
+        assert body, level
+
+
+LONG_START = {
+    **BUNDLE,
+    "items": [
+        {"label": "Goal", "text": "Ship the skill", "source": "rec"},
+        {
+            "label": "Started",
+            "text": "there should be a handoff file somewhere " * 30,
+            "source": "inf",
+            "turn_index": 0,
+        },
+    ],
+}
+
+
+def test_the_opening_turn_never_becomes_a_wall_of_text():
+    """Regression. `Started` carries a raw opening turn, routinely a
+    several-hundred-word paste. At `full` it rendered as a ten-line wall
+    sitting directly under the goal."""
+    for level in wwm_render.LEVELS:
+        out = wwm_render.render(LONG_START, level)
+        started = [ln for ln in out.splitlines() if ln.strip().startswith("Started")]
+        assert len(started) == 1, level
+        idx = out.splitlines().index(started[0])
+        block = out.splitlines()[idx : idx + wwm_render.ITEM_MAX_LINES + 1]
+        assert not block[-1].startswith(" " * 12), (
+            f"Started ran past ITEM_MAX_LINES at {level}"
+        )
+
+
+def test_asking_for_the_timeline_still_gives_the_whole_opening_turn():
+    """The cap is for orientation, not censorship. `--section timeline` is an
+    explicit request for the full turn."""
+    out = wwm_render.render(LONG_START, "full", section="timeline")
+    assert len(out.splitlines()) > wwm_render.ITEM_MAX_LINES + 2

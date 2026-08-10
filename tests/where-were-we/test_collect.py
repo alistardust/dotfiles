@@ -29,10 +29,19 @@ def test_no_ledger_falls_back_to_the_NEWEST_turns(fake_home, seeded):
     seeded("s1", 60)
     bundle = wwm_collect.collect("s1")
     assert bundle["has_ledger"] is False
-    used = [i["turn_index"] for i in bundle["items"] if "turn_index" in i]
+    # Scoped to the fallback slice. `Started` is turn 0 by design, promoted
+    # deliberately as an orienting row, so including it here would mask the
+    # very regression this test exists to catch.
+    used = [
+        i["turn_index"]
+        for i in bundle["items"]
+        if "turn_index" in i and i["label"] != "Started"
+    ]
     assert used, "fallback produced no turns at all"
     assert max(used) == 59, "fallback must reach the end of the session"
     assert min(used) > 30, f"fallback returned early turns: {min(used)}"
+    started = [i for i in bundle["items"] if i["label"] == "Started"]
+    assert len(started) == 1 and started[0]["turn_index"] == 0
 
 
 def test_missing_store_degrades_to_ledger_and_says_so(fake_home, seeded):
@@ -84,10 +93,15 @@ def test_empty_session_says_so_rather_than_inventing(fake_home, store):
 
 
 def test_pivot_is_surfaced_when_origin_and_now_diverge(fake_home, seeded):
+    """The name promised a surfaced pivot but the assertion only checked that
+    the origin slice was fetched. `origin` was collected and then dropped by
+    every renderer, so this passed while the pivot was invisible."""
     seeded("s1", 1, user="set up CI for the repo")
     seeded("s1", 12, user="rewrite the search indexer", start=1)
     bundle = wwm_collect.collect("s1")
-    assert bundle["origin"], "origin turns must survive the budget"
+    started = [i for i in bundle["items"] if i["label"] == "Started"]
+    assert len(started) == 1, "the session's opening must be surfaced"
+    assert "CI" in started[0]["text"]
 
 
 def test_total_budget_is_never_exceeded(fake_home, seeded):
@@ -267,3 +281,55 @@ def test_a_ledger_holding_only_a_blocker_still_counts_as_a_ledger(fake_home, see
     seeded("s1", 12)
     wwm_ledger.record("s1", kind="blocker", text="waiting on vendor")
     assert wwm_collect.collect("s1")["has_ledger"] is True
+
+
+def test_a_recorded_goal_becomes_a_visible_item(fake_home, seeded):
+    """Regression, CRITICAL. `goal` was collected into the bundle and then
+    read by nothing, so a ledger holding only a goal produced an item list of
+    [] and rendered a completely blank answer. The user told the skill what
+    they were doing and it showed them nothing."""
+    seeded("s1", 1)
+    wwm_ledger.record("s1", kind="goal", text="Ship the where-were-we skill")
+    bundle = wwm_collect.collect("s1")
+    goals = [i for i in bundle["items"] if i["label"] == "Goal"]
+    assert len(goals) == 1
+    assert goals[0]["text"] == "Ship the where-were-we skill"
+    assert goals[0]["source"] == "rec"
+    assert bundle["insufficient"] is False
+
+
+def test_superseded_goals_are_collected_with_their_dates(fake_home, seeded):
+    seeded("s1", 1)
+    wwm_ledger.record("s1", kind="goal", text="Design the skill")
+    wwm_ledger.record("s1", kind="goal", text="Ship the skill")
+    bundle = wwm_collect.collect("s1")
+    was = [i for i in bundle["items"] if i["label"] == "was"]
+    assert len(was) == 1
+    assert was[0]["text"].startswith("Design the skill (")
+    assert was[0]["date"] in was[0]["text"]
+
+
+def test_origin_is_promoted_not_duplicated(fake_home, seeded):
+    """The Started row is the rendered form of the opening turn. Leaving that
+    turn in `origin` too put the same string in the bundle twice and pushed
+    the payload past BUDGET_TOTAL by exactly its own length."""
+    seeded("s1", 1, user="set up CI for the repo")
+    seeded("s1", 12, user="rewrite the search indexer", start=1)
+    bundle = wwm_collect.collect("s1")
+    started = next(i for i in bundle["items"] if i["label"] == "Started")
+    assert all(t["turn_index"] != started["turn_index"] for t in bundle["origin"])
+
+
+def test_origin_is_not_repeated_when_it_merely_restates_the_goal(fake_home, seeded):
+    """A session that never pivoted gains nothing from being told twice where
+    it started. Paired with the diverging case so this cannot pass merely by
+    `Started` not existing at all."""
+    seeded("s1", 1, user="rewrite the search indexer")
+    wwm_ledger.record("s1", kind="goal", text="rewrite the search indexer")
+    same = wwm_collect.collect("s1")
+    assert not [i for i in same["items"] if i["label"] == "Started"]
+
+    seeded("s2", 1, user="set up CI for the repo")
+    wwm_ledger.record("s2", kind="goal", text="rewrite the search indexer")
+    pivoted = wwm_collect.collect("s2")
+    assert [i for i in pivoted["items"] if i["label"] == "Started"]

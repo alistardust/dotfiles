@@ -507,3 +507,54 @@ def test_adopt_refuses_a_source_it_cannot_read(fake_home, seeded):
         wwm_ledger.adopt(source="old", target="fresh")
 
     assert not wwm_session.ledger_path("fresh").exists()
+
+
+def test_recording_a_new_goal_keeps_the_old_one(fake_home, seeded):
+    """Regression, HIGH. Goals change over a long session, so overwriting is
+    correct, but the goal that was replaced is the only record of how the work
+    got here. It used to be dropped on the floor."""
+    seeded("s1", 3)
+    wwm_ledger.record("s1", kind="goal", text="Design the skill")
+    led = wwm_ledger.record("s1", kind="goal", text="Ship the skill")
+    assert led.goal == "Ship the skill"
+    assert [p.text for p in led.goal_history] == ["Design the skill"]
+
+
+def test_goal_history_is_ordered_oldest_first(fake_home, seeded):
+    seeded("s1", 3)
+    for text in ("first", "second", "third"):
+        wwm_ledger.record("s1", kind="goal", text=text)
+    led = wwm_ledger.load("s1")
+    assert led.goal == "third"
+    assert [p.text for p in led.goal_history] == ["first", "second"]
+
+
+def test_recording_the_same_goal_twice_does_not_grow_history(fake_home, seeded):
+    """Re-affirming the goal is not a pivot and must not pad the history."""
+    seeded("s1", 3)
+    wwm_ledger.record("s1", kind="goal", text="Ship the skill")
+    led = wwm_ledger.record("s1", kind="goal", text="Ship the skill")
+    assert led.goal_history == []
+
+
+def test_goal_history_survives_a_round_trip(fake_home, seeded):
+    """A superseded goal that parses but does not serialize is destroyed by
+    the next unrelated record()."""
+    seeded("s1", 3)
+    wwm_ledger.record("s1", kind="goal", text="Design the skill")
+    wwm_ledger.record("s1", kind="goal", text="Ship the skill")
+    wwm_ledger.record("s1", kind="decision", text="Chose option A")
+    led = wwm_ledger.load("s1")
+    assert [p.text for p in led.goal_history] == ["Design the skill"]
+    assert led.damaged == [], "the history section must parse cleanly"
+
+
+def test_a_ledger_with_no_history_gains_no_empty_section(fake_home, seeded):
+    """An empty heading written into every ledger would rewrite every existing
+    file for no content. Paired with the positive case so this cannot pass
+    merely by the section never being written at all."""
+    seeded("s1", 3)
+    wwm_ledger.record("s1", kind="goal", text="Ship the skill")
+    assert "## goal history" not in wwm_session.ledger_path("s1").read_text()
+    wwm_ledger.record("s1", kind="goal", text="Ship it differently")
+    assert "## goal history" in wwm_session.ledger_path("s1").read_text()

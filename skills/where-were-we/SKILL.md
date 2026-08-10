@@ -63,6 +63,11 @@ python3 $S/wwm.py record --kind decision \
 
 Kinds: `decision`, `thread`, `blocker`, `state`, `next`, `goal`.
 
+Record a new `goal` whenever the session's purpose actually shifts. It
+replaces the current goal on purpose, and the one it replaced is filed into
+`## goal history` automatically, so nothing is lost by re-recording it. The
+current goal shows at every level; superseded ones show only in `full`.
+
 ## When there is no ledger
 
 `collect` reports `has_ledger: false`. Offer adoption only if a ledger from
