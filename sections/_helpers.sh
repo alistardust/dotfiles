@@ -215,3 +215,250 @@ install_gstack() {
         ok "gstack installed (${host_flag})."
     fi
 }
+
+# -- Copilot settings.json -----------------------------------------------------
+# Both the `copilot` and `copilot_skills` sections can create this file and each
+# is independently opt-in, so the defaults live here to stop them drifting apart.
+# Two classes of key, deliberately distinguished:
+#
+#   seed    written only when the key is absent, so deliberate per-machine
+#           choices survive every subsequent setup run
+#   enforce reasserted on every run; capabilities dotfiles genuinely owns
+#
+# `model` is seeded, not enforced. Rewriting it on every run silently reverted
+# deliberate per-machine version pins, which is the behaviour the old
+# creation-time-only guard existed to prevent. The Anthropic-primary guarantee
+# is kept by verify_copilot_settings, which fails loudly on drift instead.
+COPILOT_DEFAULT_MODEL="claude-opus-5"
+
+install_copilot_settings() {
+    local settings_file="${HOME}/.copilot/settings.json"
+
+    run mkdir -p "${HOME}/.copilot"
+
+    if [[ "$DRY_RUN" == "true" ]]; then
+        printf '\e[2;37m  [dry] apply Copilot settings defaults to %s\e[0m\n' "$settings_file"
+        return 0
+    fi
+
+    local result
+    if ! result=$(python3 - "$settings_file" "$COPILOT_DEFAULT_MODEL" <<'PYEOF' 2>&1
+import json
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+path = Path(sys.argv[1])
+model = sys.argv[2]
+
+seed = [
+    (("model",), model),
+    (("experimental",), True),
+    (("sidebar", "showResumableSessions"), False),
+]
+enforce = [
+    (("memory", "enabled"), True),
+]
+
+
+def read(data, keys):
+    for key in keys[:-1]:
+        data = data.get(key)
+        if not isinstance(data, dict):
+            return None, False
+    return data.get(keys[-1]), keys[-1] in data
+
+
+def write(data, keys, value):
+    for key in keys[:-1]:
+        nxt = data.get(key)
+        if not isinstance(nxt, dict):
+            nxt = {}
+            data[key] = nxt
+        data = nxt
+    data[keys[-1]] = value
+
+
+def identical(current, value):
+    # Type-exact, recursively. JSON `1` must not satisfy an enforced `True`, and
+    # `"false"` must not satisfy an enforced `False`, because bool is a subclass
+    # of int and `1 == True` in Python. Containers recurse so that a future
+    # nested default is held to the same standard as a scalar one.
+    if isinstance(value, bool):
+        return current is value
+    if type(current) is not type(value):
+        return False
+    if isinstance(value, dict):
+        return current.keys() == value.keys() and all(
+            identical(current[k], v) for k, v in value.items()
+        )
+    if isinstance(value, list):
+        return len(current) == len(value) and all(
+            identical(c, v) for c, v in zip(current, value)
+        )
+    return current == value
+
+
+created = not path.exists()
+if created:
+    data = {}
+else:
+    try:
+        data = json.loads(path.read_text() or "{}")
+    except json.JSONDecodeError as exc:
+        sys.exit(f"invalid JSON: {exc}")
+    if not isinstance(data, dict):
+        sys.exit("settings.json is not a JSON object")
+
+changed = []
+for keys, value in seed:
+    if not read(data, keys)[1]:
+        write(data, keys, value)
+        changed.append(".".join(keys))
+for keys, value in enforce:
+    current, present = read(data, keys)
+    if not present or not identical(current, value):
+        write(data, keys, value)
+        changed.append(".".join(keys))
+
+if created or changed:
+    # Write via a temp file in the same directory then rename, so an interrupted
+    # or out-of-space run cannot leave a truncated settings.json behind. Mode is
+    # carried over from the existing file; new files get 0600 to match what the
+    # Copilot CLI itself creates.
+    mode = 0o600 if created else path.stat().st_mode & 0o777
+    handle, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".settings-", suffix=".json")
+    try:
+        with os.fdopen(handle, "w") as stream:
+            stream.write(json.dumps(data, indent=2) + "\n")
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+if created:
+    print("created")
+elif changed:
+    print("updated:" + ",".join(changed))
+else:
+    print("unchanged")
+PYEOF
+    ); then
+        # Non-fatal on purpose. A hand-corrupted settings.json should not abort
+        # the remaining sections under `set -e`, and verify_copilot_settings
+        # fails on it, so the problem is reported rather than swallowed.
+        warn "Could not apply Copilot settings defaults to ${settings_file}: ${result:-unknown error}"
+        warn "Leaving ${settings_file} untouched. Fix it by hand, then re-run setup."
+        return 0
+    fi
+
+    case "$result" in
+        created)   ok "Created ${settings_file} (model: ${COPILOT_DEFAULT_MODEL})." ;;
+        updated:*) ok "Copilot settings updated (${result#updated:})." ;;
+        *)         ok "Copilot settings already correct (left unchanged)." ;;
+    esac
+}
+
+# Shared by verify_copilot and verify_copilot_skills, since either section may
+# have been the one to create the file. Seeded keys report neutrally when they
+# have been overridden on purpose; enforced keys fail.
+verify_copilot_settings() {
+    local settings_file="${HOME}/.copilot/settings.json"
+
+    if [[ ! -f "$settings_file" ]]; then
+        fail "Copilot settings missing (${settings_file})"
+        return 0
+    fi
+
+    # One python call reports on every key. Checks are type-exact: a string
+    # "false" is not a boolean false and must not be allowed to pass. The
+    # classification is done in python and only fixed tokens are handed back, so
+    # a hostile or malformed model string cannot forge a verdict. The model is
+    # echoed separately for display and is stripped of anything outside printable
+    # ASCII, which keeps it from injecting extra lines or fields. Every
+    # invocation is guarded against a non-zero exit, because `set -e` is active
+    # and a bare failing command substitution would abort the whole verify run
+    # instead of reporting a failed check.
+    local report
+    report=$(python3 - "$settings_file" <<'PYEOF' 2>/dev/null
+import json
+import re
+import sys
+from pathlib import Path
+
+try:
+    data = json.loads(Path(sys.argv[1]).read_text() or "{}")
+except (OSError, ValueError):
+    print("status\tinvalid")
+    raise SystemExit(0)
+
+if not isinstance(data, dict):
+    print("status\tnotobject")
+    raise SystemExit(0)
+
+print("status\tok")
+
+model = data.get("model")
+print("model\t" + ("anthropic" if isinstance(model, str) and model.startswith("claude-") else "other"))
+shown = model if isinstance(model, str) and model else "unset"
+print("display\t" + (re.sub(r"[^\x20-\x7e]", "?", shown)[:60] or "unset"))
+
+memory = data.get("memory")
+if not isinstance(memory, dict):
+    print("memory\t" + ("unset" if memory is None else "invalid"))
+else:
+    print("memory\t" + ("true" if memory.get("enabled") is True else "false"))
+
+sidebar = data.get("sidebar")
+if sidebar is None:
+    print("sidebar\tunset")
+elif not isinstance(sidebar, dict):
+    print("sidebar\tinvalid")
+else:
+    restore = sidebar.get("showResumableSessions")
+    if restore is False:
+        print("sidebar\tdisabled")
+    elif restore is True:
+        print("sidebar\tenabled")
+    elif restore is None:
+        print("sidebar\tunset")
+    else:
+        print("sidebar\tinvalid")
+PYEOF
+    ) || report=$'status\tcrashed'
+
+    local status model display memory sidebar
+    status=$(printf '%s\n'  "$report" | awk -F'\t' '$1=="status"{print $2}')
+    model=$(printf '%s\n'   "$report" | awk -F'\t' '$1=="model"{print $2}')
+    display=$(printf '%s\n' "$report" | awk -F'\t' '$1=="display"{print $2}')
+    memory=$(printf '%s\n'  "$report" | awk -F'\t' '$1=="memory"{print $2}')
+    sidebar=$(printf '%s\n' "$report" | awk -F'\t' '$1=="sidebar"{print $2}')
+
+    case "$status" in
+        ok)        pass "Copilot settings present and valid JSON" ;;
+        invalid)   fail "Copilot settings is not valid JSON"; return 0 ;;
+        notobject) fail "Copilot settings is not a JSON object"; return 0 ;;
+        *)         fail "Copilot settings could not be read"; return 0 ;;
+    esac
+
+    if [[ "$model" == "anthropic" ]]; then
+        pass "Primary model is Anthropic (${display})"
+    else
+        fail "Primary model is not Anthropic (${display})"
+    fi
+
+    if [[ "$memory" == "true" ]]; then
+        pass "Copilot memory enabled"
+    else
+        fail "Copilot memory not enabled"
+    fi
+
+    case "$sidebar" in
+        disabled) pass "Sidebar session restore disabled" ;;
+        enabled)  skip_check "Sidebar session restore enabled (per-machine override)" ;;
+        unset)    skip_check "Sidebar session restore unset (CLI default: on)" ;;
+        *)        fail "Sidebar session restore is not a boolean" ;;
+    esac
+}

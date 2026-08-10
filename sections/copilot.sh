@@ -30,21 +30,7 @@ section_copilot() {
     local instructions_src="${SCRIPT_DIR}/configs/copilot-instructions.md"
     install_instructions "$instructions_dir" "$instructions_file" "$instructions_src" "Copilot"
 
-    local settings_file="${instructions_dir}/settings.json"
-    if [[ -f "$settings_file" ]]; then
-        # Deliberately a no-op. This file holds deliberate per-machine choices
-        # (model, effort level, allowed URLs), and rewriting it on every setup
-        # run silently overrode them. Creation-time defaults only.
-        ok "Copilot settings already present (left unchanged)."
-    else
-        log "Writing Copilot settings..."
-        if [[ "$DRY_RUN" == "true" ]]; then
-            printf '\e[2;37m  [dry] write Copilot settings to %s\e[0m\n' "$settings_file"
-        else
-            printf '{"model":"claude-opus-5","memory":{"enabled":true}}\n' > "$settings_file"
-        fi
-        ok "Copilot settings written to ${settings_file}."
-    fi
+    install_copilot_settings
 
     # superpowers: community fork adds Copilot CLI support for obra/superpowers
     # The installer creates a single nested symlink (.copilot/skills/superpowers ->
@@ -119,8 +105,7 @@ verify_copilot() {
     command_exists copilot              && pass "Copilot CLI installed"                        || fail "Copilot CLI not installed"
     [[ -f "$HOME/.copilot/copilot-instructions.md" ]] \
                                         && pass "Copilot instructions written"                 || fail "Copilot instructions missing"
-    [[ -f "$HOME/.copilot/settings.json" ]] \
-                                        && pass "Copilot settings written"                     || fail "Copilot settings missing"
+    verify_copilot_settings
     [[ -L "$HOME/.copilot/skills/brainstorming" ]] \
                                         && pass "Superpowers for Copilot installed (flat symlinks)" || fail "Superpowers for Copilot not installed"
     { command_exists bun || [[ -x "$HOME/.bun/bin/bun" ]]; } \

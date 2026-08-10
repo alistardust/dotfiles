@@ -34,36 +34,13 @@ SKILLS_SHARED=(
 section_copilot_skills() {
     log "Installing Copilot skills (profiles: work=${SKILLS_PROFILE[work]}, home=${SKILLS_PROFILE[home]})..."
 
-    # Ensure ~/.copilot/settings.json exists with required defaults
-    # The interface model routes work, adjudicates subagent output, and decides
-    # what to escalate, so it is a judgment seat and must be frontier. Cheap
-    # models earn their keep in subagents, not here. Both profiles get Opus;
-    # cost control comes from delegation, not from a weaker interface.
-    local settings_file="${HOME}/.copilot/settings.json"
-    local default_model="claude-opus-5"
-    run mkdir -p "${HOME}/.copilot"
-    if [[ ! -f "$settings_file" ]]; then
-        run tee "$settings_file" <<< '{"memory":{"enabled":true},"model":"'"${default_model}"'","experimental":true}'
-        ok "Created settings.json (model: ${default_model})"
-    else
-        run python3 -c "
-import json,sys
-p=sys.argv[1]
-model=sys.argv[2]
-d=json.load(open(p))
-changed=False
-if not d.get('memory',{}).get('enabled'):
-    d.setdefault('memory',{})['enabled']=True
-    changed=True
-if d.get('model')!=model:
-    d['model']=model
-    changed=True
-if changed:
-    json.dump(d,open(p,'w'),indent=2)
-    sys.exit(0)
-sys.exit(1)
-" "$settings_file" "$default_model" && ok "Updated settings.json (model: ${default_model})" || true
-    fi
+    # Copilot settings defaults live in sections/_helpers.sh so this section and
+    # the `copilot` section cannot drift apart. The interface model routes work,
+    # adjudicates subagent output, and decides what to escalate, so it is a
+    # judgment seat and must be frontier. Cheap models earn their keep in
+    # subagents, not here. Both profiles get Opus; cost control comes from
+    # delegation, not from a weaker interface.
+    install_copilot_settings
 
     # Install local skills from this repo (all directories in skills/)
     _install_local_skills "$HOME/.copilot/skills"
@@ -139,20 +116,9 @@ verify_copilot_skills() {
         && pass "~/.copilot/skills/ directory exists" \
         || { fail "~/.copilot/skills/ directory missing"; return; }
 
-    # Check memory is enabled in settings.json
-    local settings_file="${HOME}/.copilot/settings.json"
-    if python3 -c "import json,sys; d=json.load(open(sys.argv[1])); assert d.get('memory',{}).get('enabled')" "$settings_file" 2>/dev/null; then
-        pass "Copilot memory enabled in settings.json"
-    else
-        fail "Copilot memory not enabled in settings.json"
-    fi
-
-    # Check default model is set to Anthropic
-    if python3 -c "import json,sys; d=json.load(open(sys.argv[1])); assert d.get('model','').startswith('claude-')" "$settings_file" 2>/dev/null; then
-        pass "Default model is Anthropic ($(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('model','unset'))" "$settings_file"))"
-    else
-        fail "Default model is not Anthropic in settings.json"
-    fi
+    # Settings checks are shared with verify_copilot; either section may have
+    # been the one to create the file.
+    verify_copilot_settings
 
     # Check local skills (all directories in skills/ should be installed)
     local skill src
