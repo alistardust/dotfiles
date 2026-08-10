@@ -384,3 +384,53 @@ def test_fit_still_labels_an_item_whose_text_is_empty():
     out = wwm_render._fit({"label": "Decided", "text": "", "source": "rec"}, 2)
     assert out
     assert "Decided" in out[0] and "[rec]" in out[0]
+
+
+def test_status_notes_never_crowd_out_every_fact():
+    """The worst failure this skill can produce: prose plus apologies with no
+    facts under them, while still announcing "newer turns folded in below".
+
+    Two notes plus a two-line prose drove the tldr budget to zero, and the
+    "at least one fact" guard was itself gated on the budget being positive,
+    so it never ran. Adopting a stranded ledger and doing a little work is
+    exactly when the recorded facts are the only reliable record.
+    """
+    prose = (
+        "Carrying the design-session ledger forward into this new session and "
+        "picking up right where the earlier thread left off before the reboot."
+    )
+    bundle = {
+        "items": [
+            {"label": "Decided", "text": "chose python", "source": "rec"},
+            {"label": "Next", "text": "wire the CLI", "source": "rec"},
+            {"label": "Blocked", "text": "vendor cert", "source": "rec"},
+        ],
+        "origin": [],
+        "adopted_from": "a1b2c3d4e5f6",
+        "stale": True,
+    }
+    out = wwm_render.render(bundle, "tldr", prose=prose)
+    facts = [ln for ln in out.splitlines() if "[rec]" in ln or "[inf]" in ln]
+    assert facts, "tldr returned prose and apologies with zero facts"
+    assert len(out.splitlines()) <= wwm_render.TLDR_MAX_LINES
+    assert max(len(ln) for ln in out.splitlines()) <= wwm_render.TOTAL
+    # Collapsing the notes must not silently hide that they existed.
+    assert "notes" in out
+
+
+def test_a_long_hand_typed_heading_cannot_break_the_fixed_width():
+    """Damage notes quote names straight out of the user's ledger, so nothing
+    upstream bounds their length. Emitted raw, one invented heading produced a
+    109-character line and shattered the layout."""
+    bundle = {
+        "items": [{"label": "Decided", "text": "chose python", "source": "rec"}],
+        "origin": [],
+        "ledger_damaged": [
+            "a-very-long-hand-typed-heading-name-that-someone-invented",
+            "another-equally-long-one",
+        ],
+    }
+    for level in ("tldr", "summary", "full"):
+        out = wwm_render.render(bundle, level)
+        widest = max(len(ln) for ln in out.splitlines())
+        assert widest <= wwm_render.TOTAL, f"{level} produced a {widest}-char line"

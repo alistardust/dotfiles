@@ -117,6 +117,18 @@ class UnknownSection(Exception):
     """Raised when a section name does not exist. Never guessed."""
 
 
+def _wrap_note(note: str) -> list[str]:
+    """Wrap one status note to TOTAL, indenting continuation lines.
+
+    Notes quote hand-typed heading and metadata key names straight out of the
+    user's ledger, so their length is bounded by nothing. Emitting them raw
+    broke the fixed-width layout: one invented heading produced a
+    109-character line.
+    """
+    body = _wrap(_clean(note), TOTAL - INDENT)
+    return [" " * INDENT + line for line in body]
+
+
 def _prose_lines(prose: str, cap: int = PROSE_MAX_LINES) -> list[str]:
     """Wrap the prose opening and cap it.
 
@@ -211,6 +223,25 @@ def render(
     if bundle.get("ledger_damaged"):
         damaged = ", ".join(bundle["ledger_damaged"])
         notes.append(f"  (unreadable in ledger: {damaged})")
+
+    # Notes carry hand-typed heading and key names straight from the user's
+    # ledger, so they are not bounded by anything upstream. Emitting them raw
+    # broke the one guarantee the whole layout rests on: a single invented
+    # heading produced a 109-character line. Wrap them like every other line.
+    notes = [wrapped for note in notes for wrapped in _wrap_note(note)]
+
+    # Notes must never crowd out every fact. With enough of them plus a two
+    # line prose the tldr budget went negative, the "at least one fact" guard
+    # below was gated on budget > 0, and the answer came back as prose plus
+    # apologies with nothing under them, while still claiming "newer turns
+    # folded in below". A confident empty answer is the precise failure this
+    # skill exists to prevent, so when the notes would leave no room they
+    # collapse to a single line that still says how many there were.
+    if level == "tldr" and section is None and notes:
+        available = TLDR_MAX_LINES - len(lines) - 2
+        if available - (len(notes) + 1) < 1:
+            notes = [_ellipsize(f"  ({len(notes)} notes; see [full])", TOTAL)]
+
     if notes:
         lines += notes
         lines.append("")
@@ -239,7 +270,12 @@ def render(
             # confident answer and carries nothing, which is the worst possible
             # failure for a memory aid. If the very first item cannot fit, cut
             # the item's text down until it does rather than dropping it.
-            if not body and budget > 0:
+            #
+            # This is deliberately not gated on the budget being positive. It
+            # used to be, so a budget driven to zero by status notes skipped the
+            # guard entirely and produced exactly the empty answer it exists to
+            # stop. _fit floors the budget at one line for this reason.
+            if not body:
                 rendered = _fit(item, budget)
                 body += rendered
                 omitted = max(0, len(selected) - 1)
