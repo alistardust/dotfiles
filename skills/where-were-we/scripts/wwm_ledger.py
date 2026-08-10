@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import re
 import sqlite3
+import tempfile
 from contextlib import closing
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
@@ -100,6 +101,12 @@ def parse(text: str) -> Ledger:
     preamble, sections, unknown = _split_sections(text)
 
     meta: dict[str, str] = {}
+    # A key: value line the parser does not recognise is almost always a typo
+    # for one that it does ("gola:" for "goal:"). Skipping it quietly loses
+    # whatever the user wrote, so an unrecognised key is disclosed by name and
+    # they can see what to correct. Same rule as decisions, threads and
+    # headings: nothing readable is discarded without saying so.
+    bad_keys: list[str] = []
     for line in preamble:
         if ":" not in line:
             continue
@@ -107,6 +114,8 @@ def parse(text: str) -> Ledger:
         key = key.strip()
         if key in META_KEYS:
             meta[key] = value.strip()
+        elif key and " " not in key and not key.startswith("#"):
+            bad_keys.append(key)
 
     try:
         synced = int(meta.get("last_synced_turn", "0"))
@@ -115,6 +124,7 @@ def parse(text: str) -> Ledger:
         damaged = ["last_synced_turn"]
     else:
         damaged = []
+    damaged += bad_keys
 
     parsed: dict[str, object] = {}
     for name, parser in (
@@ -303,11 +313,23 @@ def _atomic_write(path: Path, text: str) -> None:
 
     The content lands in a sibling temp file first and is moved into place with
     a single os.replace, so a crash mid-write leaves the previous ledger intact.
+
+    The temp name is unique per call. A fixed `.tmp` suffix races when two
+    processes record against the same session at once, which is routine here:
+    a subagent and its parent both hold the same session id, so the first
+    rename pulls the file out from under the second and it dies with
+    FileNotFoundError.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, path)
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=path.name, suffix=".tmp")
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def record(

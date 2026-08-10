@@ -313,3 +313,74 @@ def test_tldr_orients_before_it_directs():
     }
     out = wwm_render.render(bundle, level="tldr", prose="")
     assert out.index("halfway through the rewrite") < out.index("run the migration")
+
+
+def test_tldr_never_comes_back_empty_when_the_first_item_cannot_fit():
+    """The renderer's most important safety net, and it was untested. An empty
+    body reads as a confident 'nothing to report', which is the worst possible
+    failure for a memory aid: it looks like an answer and carries nothing.
+
+    The trigger is a maximally degraded session: an adopted ledger, stale
+    content, unreadable history and a damaged heading all emit a note, which
+    leaves exactly one line of budget for an item that wants two. Squeeze it
+    rather than dropping it.
+    """
+    bundle = {
+        "items": [
+            {"label": "Decided", "text": "x" * 300, "source": "rec"},
+            {"label": "Next", "text": "y" * 300, "source": "rec"},
+        ],
+        "origin": [],
+        "adopted_from": "abcdef123456",
+        "stale": True,
+        "has_history": False,
+        "ledger_damaged": ["Decisions"],
+    }
+    out = wwm_render.render(bundle, "tldr")
+    assert "Decided" in out, "tldr rendered with zero facts"
+    assert len(out.splitlines()) <= wwm_render.TLDR_MAX_LINES
+    assert max(len(ln) for ln in out.splitlines()) <= wwm_render.TOTAL
+    assert "+1 more" in out, "omitted count lost when the fallback fired"
+
+
+def test_an_unknown_level_is_refused_rather_than_guessed():
+    """LEVELS is ("tldr", "summary", "full"); anything else must refuse rather
+    than silently falling through to a default shape."""
+    with pytest.raises(ValueError, match="unknown level"):
+        wwm_render.render({"items": [], "origin": [], "damaged": []}, "brief")
+
+
+def test_ellipsize_does_not_pad_a_column_narrower_than_its_marker():
+    """Under four characters there is no room for both text and '...', so the
+    marker is dropped rather than overflowing the column and breaking width."""
+    assert wwm_render._ellipsize("abcdef", 3) == "abc"
+    assert wwm_render._ellipsize("abcdef", 2) == "ab"
+    assert wwm_render._ellipsize("ab", 5) == "ab"
+    assert wwm_render._ellipsize("abcdef", 5) == "ab..."
+
+
+def test_fit_honours_its_never_empty_contract_even_at_zero_budget():
+    """_fit's docstring promises it never returns empty; before the clamp a
+    zero budget made that false. render() never asks for zero today, but a
+    helper whose stated contract is a lie is a trap for the next caller."""
+    item = {"label": "Decided", "text": "chose python for the parser", "source": "rec"}
+    for budget in (0, -3):
+        out = wwm_render._fit(item, budget)
+        assert out, f"_fit returned nothing at budget {budget}"
+        assert max(len(ln) for ln in out) <= wwm_render.TOTAL
+
+
+def test_fit_shortens_rather_than_overflowing_a_tight_budget():
+    item = {"label": "Decided", "text": "z" * 500, "source": "rec"}
+    out = wwm_render._fit(item, 1)
+    assert len(out) == 1
+    assert len(out[0]) <= wwm_render.TOTAL
+    assert "[rec]" in out[0], "source tag lost while shortening"
+
+
+def test_fit_still_labels_an_item_whose_text_is_empty():
+    """An empty text would otherwise render as a bare label with no tag. The
+    label plus an ellipsis at least says 'there was something here'."""
+    out = wwm_render._fit({"label": "Decided", "text": "", "source": "rec"}, 2)
+    assert out
+    assert "Decided" in out[0] and "[rec]" in out[0]

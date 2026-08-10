@@ -2,6 +2,7 @@
 import wwm_collect
 import wwm_ledger
 import wwm_render
+import wwm_session
 
 
 def test_ledger_content_is_labeled_recorded(fake_home, seeded):
@@ -147,3 +148,122 @@ def test_no_store_does_not_claim_the_ledger_is_stale(fake_home, seeded):
     out = wwm_render.render(bundle, level="tldr", prose="")
     assert "folded in below" not in out
     assert "history unreadable" in out
+
+
+def test_every_recordable_kind_reaches_the_bundle_as_recorded(fake_home, seeded):
+    """Coverage gap found at the quality gate. Every collect test recorded a
+    decision, so four of the six documented kinds had never been exercised
+    through collect at all: a `record --kind thread` that silently failed to
+    surface would have shipped."""
+    seeded("s1", 3)
+    wwm_ledger.record("s1", kind="decision", text="chose python")
+    wwm_ledger.record("s1", kind="thread", text="retry logic still open")
+    wwm_ledger.record("s1", kind="blocker", text="waiting on vendor")
+    wwm_ledger.record("s1", kind="next", text="wire up the parser")
+    wwm_ledger.record("s1", kind="state", text="halfway through the rewrite")
+
+    bundle = wwm_collect.collect("s1")
+    by_label = {i["label"]: i for i in bundle["items"]}
+    for label in ("Decided", "Thread", "Blocked", "Next", "State"):
+        assert label in by_label, f"{label} never reached the bundle"
+        assert by_label[label]["source"] == "rec", f"{label} lost its rec tag"
+    assert "retry logic still open" in by_label["Thread"]["text"]
+    assert "waiting on vendor" in by_label["Blocked"]["text"]
+
+
+def test_a_finished_thread_is_not_shown_as_open(fake_home, seeded):
+    seeded("s1", 3)
+    wwm_ledger.record("s1", kind="thread", text="done and dusted")
+    path = __import__("wwm_session").ledger_path("s1")
+    path.write_text(path.read_text().replace("- [ ] done", "- [x] done"))
+    bundle = wwm_collect.collect("s1")
+    assert all(i["label"] != "Thread" for i in bundle["items"])
+
+
+def test_checkpoint_supplies_state_and_next_when_the_ledger_has_none(
+    fake_home, seeded, checkpointed
+):
+    """The checkpoint is the main source of State and Next on real sessions,
+    and the unit tests never created one."""
+    seeded("s1", 5)
+    checkpointed("s1", overview="rewriting the indexer", next_steps="benchmark it")
+    bundle = wwm_collect.collect("s1")
+    by_label = {i["label"]: i for i in bundle["items"]}
+    assert "rewriting the indexer" in by_label["State"]["text"]
+    assert "benchmark it" in by_label["Next"]["text"]
+    # Inferred content must never be dressed up as a recorded decision.
+    assert by_label["State"]["source"] == "inf"
+    assert by_label["Next"]["source"] == "inf"
+    assert all(i["label"] != "Decided" for i in bundle["items"])
+
+
+def test_recorded_state_wins_over_the_checkpoint(fake_home, seeded, checkpointed):
+    """What the user said about where they are outranks what we guessed."""
+    seeded("s1", 5)
+    checkpointed("s1", overview="guessed state", next_steps="guessed next")
+    wwm_ledger.record("s1", kind="state", text="the real state")
+    wwm_ledger.record("s1", kind="next", text="the real next")
+    bundle = wwm_collect.collect("s1")
+    states = [i for i in bundle["items"] if i["label"] == "State"]
+    nexts = [i for i in bundle["items"] if i["label"] == "Next"]
+    assert len(states) == 1 and states[0]["text"] == "the real state"
+    assert len(nexts) == 1 and nexts[0]["text"] == "the real next"
+
+
+def test_checkpoint_spend_is_deducted_from_the_turn_budget(
+    fake_home, seeded, checkpointed
+):
+    """The donation only applies to what the checkpoint did NOT use."""
+    seeded("s1", 40, user="x" * 400)
+    checkpointed("s1", overview="o" * 900, next_steps="n" * 1400)
+    bundle = wwm_collect.collect("s1")
+    spent = sum(len(i["text"]) for i in bundle["items"])
+    spent += sum(len(t["text"]) for t in bundle["origin"])
+    assert spent <= wwm_collect.wwm_history.BUDGET_TOTAL
+
+
+def test_dedup_ignores_items_with_no_meaningful_words(fake_home, seeded):
+    """All-stopword text has an empty fingerprint. Two *identical* such strings
+    are the case that matters: without the guard the overlap calculation
+    divides by min(0, 0) and raises, so this must be False and not a crash."""
+    assert wwm_collect._fingerprint("the it is we") == frozenset()
+    assert wwm_collect._same_event("the it is we", "the it is we") is False
+    assert wwm_collect._same_event("", "") is False
+
+
+def test_a_corrupt_store_degrades_to_the_ledger_instead_of_crashing(fake_home, seeded):
+    """A file being present is not a readable database. sqlite only reports a
+    truncated or foreign file once a statement runs, so guarding on existence
+    alone let `no such table: turns` escape as a traceback, discarding every
+    recorded decision at the moment the ledger was the only surviving record."""
+    seeded("s1", 3)
+    wwm_ledger.record("s1", kind="decision", text="chose python")
+    wwm_session.store_path().write_bytes(b"not a database at all")
+
+    bundle = wwm_collect.collect("s1")
+    assert bundle["has_history"] is False
+    assert [i["text"] for i in bundle["items"]] == ["chose python"]
+    assert bundle["insufficient"] is False
+    # Staleness is unknowable without a store; claiming it points the reader at
+    # content that is not there.
+    assert bundle["stale"] is False
+    assert bundle["origin"] == [] and bundle["files"] == []
+
+
+def test_a_ledger_holding_only_a_thread_still_counts_as_a_ledger(fake_home, seeded):
+    """has_ledger drives whether the sync boundary is honoured. Omitting
+    threads and blockers meant a ledger with an open thread was treated as no
+    ledger at all, replaying turns the user had already accounted for."""
+    seeded("s1", 12)
+    wwm_ledger.record("s1", kind="thread", text="retry logic still open")
+    bundle = wwm_collect.collect("s1")
+    assert bundle["has_ledger"] is True
+    assert all(i["label"] != "Discussed" for i in bundle["items"]), (
+        "sync boundary ignored: already-synced turns were replayed"
+    )
+
+
+def test_a_ledger_holding_only_a_blocker_still_counts_as_a_ledger(fake_home, seeded):
+    seeded("s1", 12)
+    wwm_ledger.record("s1", kind="blocker", text="waiting on vendor")
+    assert wwm_collect.collect("s1")["has_ledger"] is True

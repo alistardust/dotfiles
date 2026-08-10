@@ -87,14 +87,70 @@ def _recorded_items(led: wwm_ledger.Ledger) -> list[dict]:
 
 def collect(session_id: str) -> dict:
     led = wwm_ledger.load(session_id)
-
-    # The store being unreadable is a degraded mode, not a fatal error. Every
-    # recorded fact in the ledger is still valid and still worth showing; we
-    # just say plainly that the history half is missing.
-    store_ok = wwm_session.has_store()
-    store_max = wwm_history.max_turn_index(session_id) if store_ok else 0
-
     items = _recorded_items(led)
+
+    # Branch on whether a ledger exists at all, NOT on whether `newer` came back
+    # empty. `turns_after(after=0)` sorts ASC, so on a session with no ledger it
+    # happily returns the OLDEST turns and is therefore always truthy. Keying
+    # the fallback off `not newer` meant a 461-turn session answered "where were
+    # we" with turns 1-29. Verified against the real store.
+    #
+    # Threads and blockers count. Omitting them meant a ledger holding only an
+    # open thread was treated as no ledger at all, which threw away its own
+    # last_synced_turn boundary and replayed history the user had already seen.
+    has_ledger = bool(
+        led.decisions
+        or led.state
+        or led.goal
+        or led.next
+        or led.threads
+        or led.blockers
+    )
+
+    # A file being present is not the same as a readable database: sqlite only
+    # reports a truncated, empty or foreign file once a statement actually runs.
+    # So every store read sits inside one degradation boundary, and the store is
+    # only trusted after it has answered. Losing history is a degraded mode, not
+    # a fatal error. Every recorded fact in the ledger is still valid and still
+    # worth showing; we just say plainly that the history half is missing.
+    store_ok = wwm_session.has_store()
+    store_max = 0
+    checkpoint = None
+    newer: list[dict] = []
+    origin: list[dict] = []
+    files: list[str] = []
+    if store_ok:
+        try:
+            store_max = wwm_history.max_turn_index(session_id)
+
+            # Fetch the checkpoint first so any unspent allowance can be handed
+            # to the turn slices. 44% of sessions have no checkpoint; for those,
+            # reserving 2500 chars for a row that does not exist would throw
+            # away the only evidence the skill actually has.
+            checkpoint = wwm_history.latest_checkpoint(session_id)
+            spent = checkpoint["spent"] if checkpoint else 0
+            turn_budget = wwm_history.BUDGET_RECENT + max(
+                0, wwm_history.BUDGET_CHECKPOINT - spent
+            )
+
+            if has_ledger:
+                newer = wwm_history.turns_after(
+                    session_id,
+                    after=min(led.last_synced_turn, store_max),
+                    budget=turn_budget,
+                )
+            else:
+                newer = wwm_history.recent_turns(session_id, budget=turn_budget)
+
+            origin = wwm_history.earliest_turns(session_id)
+            files = wwm_history.session_files(session_id)
+        except wwm_history.StoreUnavailable:
+            store_ok = False
+            store_max = 0
+            checkpoint = None
+            newer = []
+            origin = []
+            files = []
 
     # A marker at or beyond the store is stale, not current. It can only mean an
     # unflushed turn or a tampered file; either way, reconcile from what the
@@ -109,32 +165,6 @@ def collect(session_id: str) -> dict:
         stale = bool(led.decisions or led.state) and led.last_synced_turn < store_max
         if led.last_synced_turn > store_max:
             stale = True
-
-    # Fetch the checkpoint first so any unspent allowance can be handed to the
-    # turn slices. 44% of sessions have no checkpoint; for those, reserving
-    # 2500 chars for a row that does not exist would throw away the only
-    # evidence the skill actually has.
-    checkpoint = wwm_history.latest_checkpoint(session_id) if store_ok else None
-    spare = wwm_history.BUDGET_CHECKPOINT - (checkpoint["spent"] if checkpoint else 0)
-    turn_budget = wwm_history.BUDGET_RECENT + max(0, spare)
-
-    # Branch on whether a ledger exists at all, NOT on whether `newer` came back
-    # empty. `turns_after(after=0)` sorts ASC, so on a session with no ledger it
-    # happily returns the OLDEST turns and is therefore always truthy. Keying
-    # the fallback off `not newer` meant a 461-turn session answered "where were
-    # we" with turns 1-29. Verified against the real store.
-    has_ledger = bool(led.decisions or led.state or led.goal or led.next)
-
-    if not store_ok:
-        newer = []
-    elif has_ledger:
-        newer = wwm_history.turns_after(
-            session_id,
-            after=min(led.last_synced_turn, store_max),
-            budget=turn_budget,
-        )
-    else:
-        newer = wwm_history.recent_turns(session_id, budget=turn_budget)
 
     recorded_texts = [i["text"] for i in items]
     for turn in newer:
@@ -158,15 +188,13 @@ def collect(session_id: str) -> dict:
                 {"label": "Next", "text": checkpoint["next_steps"], "source": "inf"}
             )
 
-    origin = wwm_history.earliest_turns(session_id) if store_ok else []
-
     return {
         "session_id": session_id,
         "goal": led.goal,
         "adopted_from": led.adopted_from,
         "origin": origin,
         "items": items,
-        "files": wwm_history.session_files(session_id) if store_ok else [],
+        "files": files,
         "stale": stale,
         "has_ledger": has_ledger,
         "has_history": store_ok,

@@ -1,5 +1,6 @@
 # tests/where-were-we/test_cli.py
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -12,6 +13,13 @@ def run(args, home, session=None):
     env = {"HOME": str(home), "PATH": "/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE": "1"}
     if session:
         env["COPILOT_AGENT_SESSION_ID"] = session
+    # The env is deliberately minimal so these tests cannot accidentally read
+    # the real session store. Coverage needs three variables to follow a
+    # subprocess, though, and without them wwm.py measures 0% despite being
+    # exercised end to end here, which hides real gaps behind a false zero.
+    for passthrough in ("COVERAGE_PROCESS_START", "COV_CORE_DATAFILE", "PYTHONPATH"):
+        if passthrough in os.environ:
+            env[passthrough] = os.environ[passthrough]
     return subprocess.run(
         [sys.executable, str(CLI), *args],
         capture_output=True,

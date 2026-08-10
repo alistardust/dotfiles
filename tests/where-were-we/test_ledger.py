@@ -1,4 +1,5 @@
 # tests/where-were-we/test_ledger.py
+import pytest
 import wwm_ledger
 import wwm_session
 
@@ -231,3 +232,130 @@ def test_duplicate_heading_merges_instead_of_discarding(fake_home):
         "## decisions\n- 2026-08-06 second\n"
     )
     assert [d.text for d in led.decisions] == ["first", "second"]
+
+
+def test_a_hand_edited_sync_marker_is_reported_not_crashed_on(fake_home, tmp_path):
+    path = wwm_session.ledger_path("s1")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "# where-were-we\n\nlast_synced_turn: yesterday\n\n"
+        "## decisions\n- 2026-08-05 chose python\n"
+    )
+    led = wwm_ledger.parse(path.read_text())
+    assert led.last_synced_turn == 0
+    assert "last_synced_turn" in led.damaged
+    # The rest of the file must still survive a bad marker.
+    assert [d.text for d in led.decisions] == ["chose python"]
+
+
+def test_a_parser_blowing_up_costs_one_section_not_the_whole_file(
+    fake_home, monkeypatch
+):
+    """The blind `except Exception` around each section parser is a last-resort
+    guard: the ledger is the only surviving record of intent when the store is
+    gone, so no single malformed section may take the file down. It had never
+    been exercised, which is the worst state for a safety net to be in."""
+
+    def explode(_lines):
+        raise RuntimeError("parser bug")
+
+    monkeypatch.setattr(wwm_ledger, "_decisions", explode)
+    led = wwm_ledger.parse(
+        "## decisions\n- chose python\n\n## blockers\n- waiting on vendor\n"
+    )
+    assert led.decisions == []
+    assert "decisions" in led.damaged
+    assert led.blockers == ["waiting on vendor"], "one bad section took out another"
+
+
+def test_an_unreadable_ledger_file_yields_an_empty_ledger_not_an_error(fake_home):
+    path = wwm_session.ledger_path("s1")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.mkdir()  # a directory where a file belongs: read_text raises OSError
+    led = wwm_ledger.load("s1")
+    assert led.decisions == [] and led.threads == []
+
+
+def test_recording_an_unknown_kind_is_refused(fake_home, tmp_path):
+    with pytest.raises(ValueError, match="unknown kind"):
+        wwm_ledger.record("s1", kind="vibe", text="something")
+
+
+def test_goal_is_recordable_and_round_trips(fake_home):
+    wwm_ledger.record("s1", kind="goal", text="ship the skill")
+    assert wwm_ledger.load("s1").goal == "ship the skill"
+
+
+def test_store_max_turn_returns_zero_when_the_store_is_absent(fake_home):
+    assert wwm_ledger._max_turn_index("s1") == 0
+
+
+def test_store_max_turn_returns_zero_when_the_store_is_not_a_database(fake_home):
+    store = wwm_session.store_path()
+    store.parent.mkdir(parents=True, exist_ok=True)
+    store.write_bytes(b"this is not sqlite")
+    assert wwm_ledger._max_turn_index("s1") == 0
+
+
+def test_a_hand_typed_blocker_without_a_bullet_is_disclosed_not_dropped():
+    """Same disclosure rule as decisions and threads: a line the parser cannot
+    read is reported through `damaged`, never discarded in silence."""
+    led = wwm_ledger.parse(
+        "# where-were-we\n\n## blockers\n"
+        "- waiting on vendor\nstill blocked on the cert\n"
+    )
+    assert led.blockers == ["waiting on vendor"]
+    assert "blockers" in led.damaged
+
+
+def test_a_typo_in_a_metadata_key_is_disclosed_not_swallowed():
+    """Third instance of the same class as dropped decisions and unreadable
+    headings: a `key: value` line the parser does not recognise is almost
+    always a typo for one it does, and dropping it loses what the user wrote."""
+    led = wwm_ledger.parse("# where-were-we\n\ngola: ship the thing\n\n## decisions\n")
+    assert led.goal is None
+    assert "gola" in led.damaged
+
+
+def test_a_clean_ledger_reports_no_damage():
+    """Guards the disclosure above from becoming a false alarm on every file:
+    prose, headings and bullets must not be mistaken for metadata keys."""
+    led = wwm_ledger.parse(
+        "# where-were-we\n\ngoal: ship it\nlast_synced_turn: 4\n\n"
+        "## decisions\n- 2026-08-05 chose python\n  why: it fits\n\n"
+        "## threads\n- [ ] retry logic\n"
+    )
+    assert led.damaged == []
+    assert led.goal == "ship it" and led.last_synced_turn == 4
+
+
+def test_concurrent_writers_do_not_destroy_each_others_ledger(fake_home):
+    """A fixed .tmp name races when two processes record against the same
+    session, which is routine here: a subagent and its parent share a session
+    id. The first rename pulls the temp file out from under the second."""
+    import threading
+
+    path = wwm_session.ledger_path("s1")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    errors: list[BaseException] = []
+    barrier = threading.Barrier(8)
+
+    def writer(n: int) -> None:
+        try:
+            barrier.wait()
+            for _ in range(20):
+                wwm_ledger._atomic_write(path, f"# where-were-we\n\ngoal: {n}\n")
+        except BaseException as err:  # noqa: BLE001 - recorded and asserted on
+            errors.append(err)
+
+    threads = [threading.Thread(target=writer, args=(n,)) for n in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert not errors, f"concurrent writes failed: {errors[:3]}"
+    # Whoever won, the file must be one complete ledger and never a fragment.
+    assert wwm_ledger.parse(path.read_text()).goal in {str(n) for n in range(8)}
+    leftovers = list(path.parent.glob("*.tmp"))
+    assert not leftovers, f"temp files left behind: {leftovers}"

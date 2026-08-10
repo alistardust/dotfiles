@@ -73,7 +73,13 @@ def row(label: str, text: str, tag: str) -> list[str]:
     last = out[-1]
     if len(last) + 1 + TAG_W <= TOTAL:
         out[-1] = last.ljust(TOTAL - TAG_W) + marker
-    else:
+    else:  # pragma: no cover - unreachable with the current widths
+        # Structurally dead today: TIGHT_W is TOTAL - TEXT_COL - TAG_W - 1, so
+        # the re-wrap above always leaves room for the tag. Kept because the
+        # "no line exceeds TOTAL" invariant would otherwise depend silently on
+        # that arithmetic holding; if someone retunes the widths this catches
+        # it instead of shipping a ragged table. Verified unreachable across
+        # 60,000 randomized inputs rather than assumed.
         out.append(" " * (TOTAL - TAG_W) + marker)
     return out
 
@@ -130,6 +136,10 @@ def _prose_lines(prose: str, cap: int = PROSE_MAX_LINES) -> list[str]:
 
 def _fit(item: dict, budget: int) -> list[str]:
     """Render one item shortened to fit `budget` lines. Never returns empty."""
+    # A caller that has run out of budget still needs *something* back: this
+    # helper exists because an empty tldr is the worst possible output, so
+    # honouring a zero budget by returning nothing would defeat its purpose.
+    budget = max(1, budget)
     text = item["text"]
     while text:
         rendered = row(item["label"], text, item["source"])

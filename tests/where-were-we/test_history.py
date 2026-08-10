@@ -3,6 +3,7 @@ import sqlite3
 
 import pytest
 import wwm_history
+import wwm_session
 
 
 def test_store_is_opened_read_only(fake_home, store):
@@ -210,3 +211,57 @@ def test_recent_sessions_windowed_and_limited(fake_home, store):
 def test_missing_store_raises_rather_than_inventing(fake_home):
     with pytest.raises(wwm_history.StoreUnavailable):
         wwm_history.max_turn_index("s1")
+
+
+def test_a_turn_with_no_reply_yet_still_carries_its_user_message(fake_home, store):
+    """The newest turn is routinely mid-flight: the user has spoken and the
+    assistant has not answered. That turn is the single most relevant one for
+    'where were we', so it must not be formatted as an empty exchange."""
+    conn = sqlite3.connect(store)
+    conn.execute(
+        "INSERT INTO turns (session_id, turn_index, user_message,"
+        " assistant_response, timestamp) VALUES (?, ?, ?, ?, ?)",
+        ("s1", 1, "what about the parser", None, "2026-08-05T00:00:00Z"),
+    )
+    conn.commit()
+    conn.close()
+    turns = wwm_history.recent_turns("s1", budget=2500)
+    assert turns and "what about the parser" in turns[0]["text"]
+    assert "->" not in turns[0]["text"], "empty reply rendered as an exchange"
+
+
+def test_a_turn_with_neither_side_is_skipped_rather_than_shown_blank(fake_home, store):
+    conn = sqlite3.connect(store)
+    conn.executemany(
+        "INSERT INTO turns (session_id, turn_index, user_message,"
+        " assistant_response, timestamp) VALUES (?, ?, ?, ?, ?)",
+        [
+            ("s1", 1, "", "", "2026-08-05T00:00:00Z"),
+            ("s1", 2, "a real question", "a real answer", "2026-08-05T00:01:00Z"),
+        ],
+    )
+    conn.commit()
+    conn.close()
+    turns = wwm_history.recent_turns("s1", budget=2500)
+    assert [t["turn_index"] for t in turns] == [2]
+
+
+def test_cap_never_emits_more_than_it_was_given(fake_home):
+    """A budget can legitimately arrive at zero once earlier slices have spent
+    it; capping must return nothing rather than an ellipsis that costs three
+    characters nobody allocated."""
+    assert wwm_history._cap("some text", 0) == ""
+    assert wwm_history._cap("some text", -5) == ""
+    for limit in (1, 2, 3):
+        assert len(wwm_history._cap("some text", limit)) <= limit
+    assert wwm_history._cap("some text", 6) == "som..."
+
+
+def test_an_unopenable_store_is_reported_as_unavailable(fake_home):
+    """sqlite refuses to open a directory; the caller must get the typed
+    StoreUnavailable it knows how to degrade on, not a raw sqlite error."""
+    store = wwm_session.store_path()
+    store.parent.mkdir(parents=True, exist_ok=True)
+    store.mkdir()
+    with pytest.raises(wwm_history.StoreUnavailable):
+        wwm_history.recent_turns("s1", budget=100)

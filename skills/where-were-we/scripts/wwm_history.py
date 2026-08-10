@@ -8,7 +8,8 @@ cannot corrupt the user's session history.
 from __future__ import annotations
 
 import sqlite3
-from contextlib import closing
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 import wwm_session
 
@@ -43,10 +44,32 @@ def connect() -> sqlite3.Connection:
         raise StoreUnavailable(f"No session store at {path}")
     try:
         conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-    except sqlite3.OperationalError as err:
+    except sqlite3.Error as err:
         raise StoreUnavailable(str(err)) from err
     conn.row_factory = sqlite3.Row
     return conn
+
+
+@contextmanager
+def _open() -> Iterator[sqlite3.Connection]:
+    """Yield a read-only connection, turning any sqlite failure into
+    StoreUnavailable.
+
+    Wrapping the whole block rather than just the connect is the point.
+    sqlite only reports a truncated, corrupt or foreign database when a
+    statement actually runs, so guarding connect() alone let `no such table:
+    turns` escape as a raw traceback. That took the skill down at exactly
+    the moment the ledger was the only surviving record of intent, which is
+    the failure this whole design exists to prevent. Callers degrade on
+    StoreUnavailable, so every sqlite error must arrive wearing that type.
+    """
+    conn = connect()
+    try:
+        yield conn
+    except sqlite3.Error as err:
+        raise StoreUnavailable(str(err)) from err
+    finally:
+        conn.close()
 
 
 def _cap(text: str | None, limit: int) -> str:
@@ -95,7 +118,7 @@ def _collect(rows: list[sqlite3.Row], budget: int, per_turn: int | None) -> list
 
 def max_turn_index(session_id: str) -> int:
     """Return the highest turn index for a session, or 0 if it has no turns."""
-    with closing(connect()) as conn:
+    with _open() as conn:
         row = conn.execute(
             "SELECT MAX(turn_index) AS m FROM turns WHERE session_id = ?",
             (session_id,),
@@ -112,7 +135,7 @@ def session_exists(session_id: str) -> bool:
     `max_turn_index(...) == 0` therefore rejects real single-turn sessions as
     unknown. A real example exists in the store today.
     """
-    with closing(connect()) as conn:
+    with _open() as conn:
         row = conn.execute(
             "SELECT 1 FROM turns WHERE session_id = ? LIMIT 1", (session_id,)
         ).fetchone()
@@ -121,7 +144,7 @@ def session_exists(session_id: str) -> bool:
 
 def earliest_turns(session_id: str, budget: int = BUDGET_ORIGIN) -> list[dict]:
     """Return the opening turns of a session, bounded by `budget`."""
-    with closing(connect()) as conn:
+    with _open() as conn:
         rows = conn.execute(
             "SELECT turn_index, user_message, assistant_response FROM turns"
             " WHERE session_id = ? ORDER BY turn_index ASC LIMIT ?",
@@ -137,7 +160,7 @@ def recent_turns(
     per_turn: int = RECENT_PER_TURN,
 ) -> list[dict]:
     """Return the newest turns of a session, oldest-first, bounded by `budget`."""
-    with closing(connect()) as conn:
+    with _open() as conn:
         rows = conn.execute(
             "SELECT turn_index, user_message, assistant_response FROM turns"
             " WHERE session_id = ? ORDER BY turn_index DESC LIMIT ?",
@@ -153,7 +176,7 @@ def turns_after(
     per_turn: int = RECENT_PER_TURN,
 ) -> list[dict]:
     """Return turns strictly newer than `after`, oldest-first."""
-    with closing(connect()) as conn:
+    with _open() as conn:
         rows = conn.execute(
             "SELECT turn_index, user_message, assistant_response FROM turns"
             " WHERE session_id = ? AND turn_index > ? ORDER BY turn_index ASC",
@@ -175,7 +198,7 @@ def latest_checkpoint(session_id: str, budget: int = BUDGET_CHECKPOINT) -> dict 
     recent-turns slice. 44% of sessions have no checkpoint at all, and for those
     the recent turns are the only signal available.
     """
-    with closing(connect()) as conn:
+    with _open() as conn:
         row = conn.execute(
             "SELECT title, overview, next_steps, important_files FROM checkpoints"
             " WHERE session_id = ? ORDER BY checkpoint_number DESC LIMIT 1",
@@ -196,7 +219,7 @@ def latest_checkpoint(session_id: str, budget: int = BUDGET_CHECKPOINT) -> dict 
 
 def session_files(session_id: str, limit: int = 8) -> list[str]:
     """Return the most recently touched file paths for a session."""
-    with closing(connect()) as conn:
+    with _open() as conn:
         rows = conn.execute(
             "SELECT DISTINCT file_path FROM session_files WHERE session_id = ?"
             " ORDER BY turn_index DESC LIMIT ?",
@@ -212,7 +235,7 @@ def recent_sessions(
 ) -> list[dict]:
     """Return sessions updated within the last `days`, newest first."""
     anchor = f"{now} 00:00:00" if now else "now"
-    with closing(connect()) as conn:
+    with _open() as conn:
         rows = conn.execute(
             "SELECT id, repository, cwd, branch, summary, updated_at FROM sessions"
             " WHERE updated_at >= datetime(?, ?) ORDER BY updated_at DESC LIMIT ?",
@@ -226,7 +249,7 @@ def count_sessions_in_window(
 ) -> int:
     """Return how many sessions were updated within the last `days`."""
     anchor = f"{now} 00:00:00" if now else "now"
-    with closing(connect()) as conn:
+    with _open() as conn:
         row = conn.execute(
             "SELECT COUNT(*) AS c FROM sessions WHERE updated_at >= datetime(?, ?)",
             (anchor, f"-{int(days)} days"),

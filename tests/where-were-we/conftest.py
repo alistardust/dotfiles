@@ -77,3 +77,21 @@ def seeded(store):
         conn.close()
 
     return _seed
+
+
+@pytest.fixture
+def checkpointed(store):
+    """Return a helper that inserts a checkpoint for a session."""
+
+    def _checkpoint(session_id, overview="mid-refactor", next_steps="run migration"):
+        conn = sqlite3.connect(store)
+        conn.execute(
+            "INSERT INTO checkpoints (session_id, checkpoint_number, title,"
+            " overview, next_steps, important_files, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (session_id, 1, "cp", overview, next_steps, "", "2026-08-05T00:00:00Z"),
+        )
+        conn.commit()
+        conn.close()
+
+    return _checkpoint
