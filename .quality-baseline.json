@@ -1,0 +1,25 @@
+{
+  "updated_at": "2026-08-10T00:00:00Z",
+  "scope": "skills/where-were-we and tests/where-were-we",
+  "coverage": {
+    "line_percent": 100.0,
+    "branch_percent": 98.9,
+    "files_measured": 6,
+    "missing_statements": 0,
+    "partial_branches": 3
+  },
+  "debt": {
+    "total_findings": 0,
+    "exempted_findings": 0,
+    "exemptions": []
+  },
+  "metrics": {
+    "test_count": 199,
+    "real_sessions_swept": 176,
+    "real_renders_clean": 528
+  },
+  "notes": [
+    "The 3 partial branches are structurally unreachable and documented at their sites.",
+    "Coverage is measured with COVERAGE_PROCESS_START so subprocess CLI tests are counted."
+  ]
+}
