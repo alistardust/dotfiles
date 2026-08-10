@@ -88,8 +88,11 @@ SECTIONS = {
 }
 TLDR_PRIORITY = (
     "Decided",
-    "Next",
+    # State before Next: the question this skill is named after is "where am
+    # I", and orienting has to come before acting. Chosen by the user after
+    # seeing the same live session rendered both ways.
     "State",
+    "Next",
     "Blocked",
     "Thread",
     # Recorded labels win, but history-only labels MUST remain eligible.

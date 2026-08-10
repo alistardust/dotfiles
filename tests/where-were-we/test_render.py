@@ -291,3 +291,25 @@ def test_sessions_table_counts_the_remainder():
     rows = [{"summary": "a", "repository": "b", "updated_at": "2026-08-06"}]
     out = wwm_render.sessions_table(rows, total=20, days=14)
     assert "19 more in the last 14 days" in out
+
+
+def test_tldr_orients_before_it_directs():
+    """State outranks Next by explicit user decision.
+
+    The question this skill is named after is "where am I", so orienting comes
+    before acting. Nothing pinned the order before, which meant the decision
+    could be reversed by an unrelated edit without a single test noticing.
+    """
+    order = wwm_render.TLDR_PRIORITY
+    assert order.index("State") < order.index("Next")
+    assert order.index("Decided") < order.index("State")
+
+    bundle = {
+        "items": [
+            {"label": "Next", "text": "run the migration", "source": "inf"},
+            {"label": "State", "text": "halfway through the rewrite", "source": "inf"},
+        ],
+        "origin": [],
+    }
+    out = wwm_render.render(bundle, level="tldr", prose="")
+    assert out.index("halfway through the rewrite") < out.index("run the migration")
