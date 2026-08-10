@@ -265,3 +265,19 @@ def test_an_unopenable_store_is_reported_as_unavailable(fake_home):
     store.mkdir()
     with pytest.raises(wwm_history.StoreUnavailable):
         wwm_history.recent_turns("s1", budget=100)
+
+
+def test_a_session_with_no_turns_yet_still_exists(fake_home, store):
+    """29 sessions in the real store have a row here and no turns at all.
+
+    Asking `turns` alone called those ids "not in the store" while they sat in
+    it, and made a freshly created session impossible to target with --session
+    until its first turn was committed.
+    """
+    conn = sqlite3.connect(store)
+    conn.execute("INSERT INTO sessions (id) VALUES ('brand-new')")
+    conn.commit()
+    conn.close()
+
+    assert wwm_history.session_exists("brand-new") is True
+    assert wwm_history.session_exists("never-existed") is False

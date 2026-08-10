@@ -158,6 +158,7 @@ def main(argv: list[str] | None = None) -> int:
         wwm_session.UnsupportedRuntime,
         wwm_history.StoreUnavailable,
         wwm_render.UnknownSection,
+        wwm_ledger.LedgerRefused,
     ) as err:
         print(f"where-were-we: {err}", file=sys.stderr)
         return 2

@@ -134,12 +134,20 @@ def session_exists(session_id: str) -> bool:
     indistinguishable from "no turns at all". Testing existence via
     `max_turn_index(...) == 0` therefore rejects real single-turn sessions as
     unknown. A real example exists in the store today.
+
+    Both tables are consulted. 29 sessions in the real store have a row in
+    `sessions` and no rows in `turns`, so asking `turns` alone reported
+    "not in the store" about ids that are demonstrably in it, and made a
+    freshly created session impossible to target with --session before its
+    first turn was committed.
     """
     with _open() as conn:
         row = conn.execute(
-            "SELECT 1 FROM turns WHERE session_id = ? LIMIT 1", (session_id,)
+            "SELECT EXISTS(SELECT 1 FROM turns WHERE session_id = ?)"
+            " OR EXISTS(SELECT 1 FROM sessions WHERE id = ?)",
+            (session_id, session_id),
         ).fetchone()
-    return row is not None
+    return bool(row[0])
 
 
 def earliest_turns(session_id: str, budget: int = BUDGET_ORIGIN) -> list[dict]:

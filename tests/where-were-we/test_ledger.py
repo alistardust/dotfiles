@@ -167,7 +167,9 @@ def test_adopt_copies_content_but_not_sync_state(fake_home, seeded):
     led = wwm_ledger.load("new")
     assert led.decisions[0].text == "carried over"
     assert led.adopted_from == "old"
-    assert led.last_synced_turn == 0
+    # Not 0. Reconciliation selects turn_index > last_synced_turn, so 0 would
+    # claim the new session's own first turn was already folded in.
+    assert led.last_synced_turn == -1
 
 
 def test_adopt_does_not_mutate_the_source(fake_home, seeded):
@@ -286,15 +288,17 @@ def test_goal_is_recordable_and_round_trips(fake_home):
     assert wwm_ledger.load("s1").goal == "ship the skill"
 
 
-def test_store_max_turn_returns_zero_when_the_store_is_absent(fake_home):
-    assert wwm_ledger._max_turn_index("s1") == 0
+def test_store_max_turn_reports_nothing_synced_when_the_store_is_absent(fake_home):
+    assert wwm_ledger._max_turn_index("s1") == -1
 
 
-def test_store_max_turn_returns_zero_when_the_store_is_not_a_database(fake_home):
+def test_store_max_turn_reports_nothing_synced_when_the_store_is_not_a_database(
+    fake_home,
+):
     store = wwm_session.store_path()
     store.parent.mkdir(parents=True, exist_ok=True)
     store.write_bytes(b"this is not sqlite")
-    assert wwm_ledger._max_turn_index("s1") == 0
+    assert wwm_ledger._max_turn_index("s1") == -1
 
 
 def test_a_hand_typed_blocker_without_a_bullet_is_disclosed_not_dropped():
@@ -359,3 +363,147 @@ def test_concurrent_writers_do_not_destroy_each_others_ledger(fake_home):
     assert wwm_ledger.parse(path.read_text()).goal in {str(n) for n in range(8)}
     leftovers = list(path.parent.glob("*.tmp"))
     assert not leftovers, f"temp files left behind: {leftovers}"
+
+
+# --- Preserve-verbatim policy -------------------------------------------
+# The ledger is the user's own written record. Everywhere the parser cannot
+# read something, the text must still survive the next write. Disclosure
+# without preservation is data loss with a warning label on it.
+
+DAMAGED = """# where-were-we
+
+started: 2026-01-01
+gola: typo for goal
+a bare prose note with no colon
+
+## decisions
+- 2026-01-01 a decision that parses
+this line does not parse but is mine
+
+## scratchpad
+hand written note I care about
+
+## blockers
+- db is down
+"""
+
+
+def _write_ledger(session_id: str, text: str) -> None:
+    path = wwm_session.ledger_path(session_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def test_record_preserves_every_line_it_could_not_parse(fake_home, seeded):
+    seeded("s1", 3)
+    _write_ledger("s1", DAMAGED)
+
+    wwm_ledger.record("s1", kind="thread", text="new thread")
+
+    after = wwm_session.ledger_path("s1").read_text()
+    for line in (
+        "gola: typo for goal",
+        "a bare prose note with no colon",
+        "this line does not parse but is mine",
+        "## scratchpad",
+        "hand written note I care about",
+    ):
+        assert line in after, f"record() destroyed: {line!r}"
+    assert "- [ ] new thread" in after
+
+
+def test_damaged_sections_are_still_disclosed_while_preserved(fake_home, seeded):
+    seeded("s1", 3)
+    _write_ledger("s1", DAMAGED)
+    led = wwm_ledger.load("s1")
+    # Preserving the text must not quietly downgrade the warning.
+    assert "decisions" in led.damaged
+    assert "gola" in led.damaged
+    assert led.unknown_sections["scratchpad"] == ["hand written note I care about"]
+
+
+def test_preserved_content_is_stable_across_repeated_records(fake_home, seeded):
+    seeded("s1", 3)
+    _write_ledger("s1", DAMAGED)
+    wwm_ledger.record("s1", kind="blocker", text="b1")
+    once = wwm_session.ledger_path("s1").read_text()
+    wwm_ledger.record("s1", kind="blocker", text="b2")
+    twice = wwm_session.ledger_path("s1").read_text()
+    # Only the new blocker may differ. Content that is re-parsed and re-written
+    # on every save must not drift, duplicate, or accumulate.
+    assert twice == once.replace("- b1\n", "- b1\n- b2\n")
+
+
+def test_record_refuses_to_overwrite_a_ledger_it_cannot_read(fake_home, seeded):
+    seeded("s1", 3)
+    path = wwm_session.ledger_path("s1")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"\xff\xfe\x00not utf-8 at all")
+    before = path.read_bytes()
+
+    with pytest.raises(wwm_ledger.LedgerRefused):
+        wwm_ledger.record("s1", kind="decision", text="should not be written")
+
+    assert path.read_bytes() == before, "refused write still modified the file"
+
+
+def test_unreadable_ledger_is_distinguishable_from_no_ledger(fake_home, seeded):
+    seeded("s1", 3)
+    path = wwm_session.ledger_path("s1")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"\xff\xfe\x00")
+    assert wwm_ledger.load("s1").unreadable is True
+    assert wwm_ledger.load("absent-session").unreadable is False
+
+
+def test_adopt_refuses_a_source_with_no_content(fake_home, seeded):
+    seeded("mine", 3)
+    wwm_ledger.record("mine", kind="decision", text="MY OWN WORK")
+
+    with pytest.raises(wwm_ledger.LedgerRefused, match="typoed"):
+        wwm_ledger.adopt(source="typoed", target="mine")
+
+    assert "MY OWN WORK" in wwm_session.ledger_path("mine").read_text()
+
+
+def test_adopt_refuses_to_replace_a_target_that_has_content(fake_home, seeded):
+    seeded("old", 3)
+    seeded("mine", 3)
+    wwm_ledger.record("old", kind="decision", text="theirs")
+    wwm_ledger.record("mine", kind="decision", text="MY OWN WORK")
+
+    with pytest.raises(wwm_ledger.LedgerRefused):
+        wwm_ledger.adopt(source="old", target="mine")
+
+    assert "MY OWN WORK" in wwm_session.ledger_path("mine").read_text()
+
+
+def test_adopt_leaves_turn_zero_unsynced(fake_home, seeded):
+    seeded("old", 3)
+    seeded("fresh", 3)
+    wwm_ledger.record("old", kind="decision", text="carried")
+    wwm_ledger.adopt(source="old", target="fresh")
+    # 0 would mean "turn 0 already folded in" and hide the first turn.
+    assert wwm_ledger.load("fresh").last_synced_turn == -1
+
+
+def test_store_max_turn_reports_nothing_synced_for_a_session_with_no_turns(
+    fake_home, seeded
+):
+    seeded("other", 5)
+    # 'ghost' is a real id with no turns yet. Returning 0 here would stamp
+    # last_synced_turn: 0 on its first record and hide its opening turn.
+    assert wwm_ledger._max_turn_index("ghost") == -1
+
+
+def test_adopt_refuses_a_source_it_cannot_read(fake_home, seeded):
+    seeded("old", 3)
+    seeded("fresh", 3)
+    path = wwm_session.ledger_path("old")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"\xff\xfe\x00")
+
+    with pytest.raises(wwm_ledger.LedgerRefused):
+        wwm_ledger.adopt(source="old", target="fresh")
+
+    assert not wwm_session.ledger_path("fresh").exists()
