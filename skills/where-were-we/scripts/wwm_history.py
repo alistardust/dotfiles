@@ -19,6 +19,12 @@ BUDGET_CHECKPOINT = 2500
 BUDGET_CP_OVERVIEW = 1000
 BUDGET_CP_NEXT = 1500
 BUDGET_RECENT = 2500
+# Recorded ledger content gets its own ceiling rather than a share of the
+# history budget. It is the highest-value material in the bundle, being the
+# only part the user wrote deliberately, so it is not made to compete with
+# inferred history for room. The three history slices above already sum to
+# BUDGET_TOTAL, so this is the second and last unbounded surface closed.
+BUDGET_LEDGER = BUDGET_TOTAL
 RECENT_COUNT = 12
 RECENT_PER_TURN = 250
 ORIGIN_TURNS = 2

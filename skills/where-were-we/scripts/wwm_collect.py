@@ -103,9 +103,45 @@ def _recorded_items(led: wwm_ledger.Ledger) -> list[dict]:
     return items
 
 
+# Labels that hold exactly one value. They cannot grow without bound and they
+# are the spine of the answer, so the budget is never allowed to take them.
+SINGULAR = ("Goal", "Next", "State")
+
+
+def _bound(items: list[dict]) -> tuple[list[dict], int]:
+    """Hold recorded content to the same budget every other slice obeys.
+
+    History slices are each budgeted; recorded items were not. A ledger grows
+    for the life of a session, so a long-running one handed the model a payload
+    many times the size the rest of the bundle is held to.
+
+    Repeatable entries are trimmed oldest-first, because a ledger reads
+    oldest-first while the newest milestones are the ones that answer "where
+    were we". Singular entries are never trimmed: dropping them would silently
+    delete the goal, which is the one line the whole answer is built around.
+
+    Returns:
+        The surviving items in their original order, and how many were dropped.
+    """
+    spent = sum(len(i["text"]) for i in items if i["label"] in SINGULAR)
+    keep = {id(i) for i in items if i["label"] in SINGULAR}
+
+    dropped = 0
+    for item in reversed(items):
+        if item["label"] in SINGULAR:
+            continue
+        spent += len(item["text"])
+        if spent > wwm_history.BUDGET_LEDGER:
+            dropped += 1
+            continue
+        keep.add(id(item))
+
+    return [i for i in items if id(i) in keep], dropped
+
+
 def collect(session_id: str) -> dict:
     led = wwm_ledger.load(session_id)
-    items = _recorded_items(led)
+    items, ledger_omitted = _bound(_recorded_items(led))
 
     # Branch on whether a ledger exists at all, NOT on whether `newer` came back
     # empty. `turns_after(after=0)` sorts ASC, so on a session with no ledger it
@@ -245,6 +281,7 @@ def collect(session_id: str) -> dict:
         "has_ledger": has_ledger,
         "has_history": store_ok,
         "ledger_damaged": led.damaged,
+        "ledger_omitted": ledger_omitted,
         # Origin is no longer counted separately: it now becomes a `Started`
         # item above, so anything that suppresses this guard is guaranteed to
         # be something the renderer can actually show. The old form counted

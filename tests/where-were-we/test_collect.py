@@ -1,5 +1,6 @@
 # tests/where-were-we/test_collect.py
 import wwm_collect
+import wwm_history
 import wwm_ledger
 import wwm_render
 import wwm_session
@@ -333,3 +334,61 @@ def test_origin_is_not_repeated_when_it_merely_restates_the_goal(fake_home, seed
     wwm_ledger.record("s2", kind="goal", text="rewrite the search indexer")
     pivoted = wwm_collect.collect("s2")
     assert [i for i in pivoted["items"] if i["label"] == "Started"]
+
+
+def test_a_huge_ledger_is_bounded_and_discloses_the_loss(fake_home, seeded):
+    """Every history slice is budgeted; recorded items were not. A ledger grows
+    for the life of a session, so a long-running one handed the model a payload
+    many times the size the rest of the bundle is held to."""
+    seeded("s1", 3)
+    for i in range(400):
+        wwm_ledger.record("s1", kind="decision", text=f"decision {i} " + "x" * 60)
+
+    bundle = wwm_collect.collect("s1")
+    spent = sum(len(i["text"]) for i in bundle["items"] if i["source"] == "rec")
+    assert spent <= wwm_history.BUDGET_LEDGER, "recorded items must be bounded"
+    assert bundle["ledger_omitted"] > 0
+    assert len(bundle["items"]) < 400
+
+
+def test_the_newest_recorded_items_are_the_ones_kept(fake_home, seeded):
+    """A ledger reads oldest-first, but the newest milestones are the ones that
+    answer 'where were we'. Trimming from the wrong end would keep exactly the
+    items least likely to be useful."""
+    seeded("s1", 3)
+    for i in range(400):
+        wwm_ledger.record("s1", kind="decision", text=f"decision {i} " + "x" * 60)
+
+    texts = " ".join(item["text"] for item in wwm_collect.collect("s1")["items"])
+    assert "decision 399" in texts
+    assert "decision 0 " not in texts
+
+
+def test_a_small_ledger_omits_nothing(fake_home, seeded):
+    """Paired with the truncation cases so they cannot pass by everything
+    always being dropped."""
+    seeded("s1", 3)
+    wwm_ledger.record("s1", kind="decision", text="Chose option A")
+    bundle = wwm_collect.collect("s1")
+    assert bundle["ledger_omitted"] == 0
+    assert any("Chose option A" in item["text"] for item in bundle["items"])
+
+
+def test_the_goal_survives_a_huge_ledger(fake_home, seeded):
+    """Trimming newest-first would drop the goal, which is item zero and the
+    one line the entire answer is built around. Losing it to a budget would
+    recreate the blank-answer bug by a different route."""
+    seeded("s1", 3)
+    wwm_ledger.record("s1", kind="goal", text="Ship the where-were-we skill")
+    wwm_ledger.record("s1", kind="next", text="Run the real-data sweep")
+    for i in range(400):
+        wwm_ledger.record("s1", kind="decision", text=f"decision {i} " + "x" * 60)
+
+    bundle = wwm_collect.collect("s1")
+    labels = {item["label"]: item["text"] for item in bundle["items"]}
+    assert labels["Goal"] == "Ship the where-were-we skill"
+    assert labels["Next"] == "Run the real-data sweep"
+    assert bundle["ledger_omitted"] > 0
+
+    out = wwm_render.render(bundle, level="tldr")
+    assert "Ship the where-were-we skill" in out

@@ -231,6 +231,32 @@ Priority order:
 "Let's build X" -> brainstorming first, then implementation skills.
 "Fix this bug" -> systematic-debugging first, then domain-specific skills.
 
+## where-were-we milestone capture
+
+Applies to Copilot CLI only.
+
+When a decision is made, a commit lands, or a blocker appears, record it
+in-turn:
+
+    python3 ~/.copilot/skills/where-were-we/scripts/wwm.py record \
+      --kind decision --text "<what>" --why "<why>" --rejected "<not chosen>"
+
+Kinds: `decision`, `thread`, `blocker`, `state`, `next`, `goal`.
+
+Record it as it happens, not at the end of the session. Batching capture to
+session end is what fails today: a session that runs for weeks between
+reboots may never reach a clean end, and the summary is needed most
+precisely when the session was interrupted rather than closed. The moment of
+decision is the only point at which the reasoning is still available.
+
+Record a new `goal` whenever the session's purpose actually shifts. The goal
+it replaces is filed into history automatically, so nothing is lost.
+
+Never edit `ledger.md` by hand; the script owns its metadata.
+
+When asked where were we, what were we doing, catch me up, remind me, or for
+a tl;dr of the session, use the `where-were-we` skill.
+
 # <<< dotfiles-managed >>>
 
 # >>> local overrides (setup.sh never touches below) <<<

@@ -521,3 +521,73 @@ def test_asking_for_the_timeline_still_gives_the_whole_opening_turn():
     explicit request for the full turn."""
     out = wwm_render.render(LONG_START, "full", section="timeline")
     assert len(out.splitlines()) > wwm_render.ITEM_MAX_LINES + 2
+
+
+# --- display width ---------------------------------------------------------
+
+
+def test_a_wide_character_row_still_fits_the_terminal():
+    """len() counts codepoints; a terminal draws CJK two columns wide. A row
+    that measured 72 by len() occupied 132 real columns and destroyed the
+    layout the whole design rests on."""
+    text = "\u8a2d\u8a08\u3092\u898b\u76f4\u3057\u3066" * 12
+    lines = wwm_render.row("Decided", text, "rec")
+    assert all(wwm_render.display_width(line) <= 72 for line in lines)
+    assert lines[-1].endswith("[rec]")
+
+
+def test_an_emoji_row_still_fits_the_terminal():
+    text = "\U0001f680 ship it " * 14
+    lines = wwm_render.row("Next", text, "rec")
+    assert all(wwm_render.display_width(line) <= 72 for line in lines)
+
+
+def test_display_width_counts_columns_not_codepoints():
+    assert wwm_render.display_width("abc") == 3
+    assert wwm_render.display_width("\u8a2d\u8a08") == 4
+    assert wwm_render.display_width("e\u0301") == 1, "combining marks draw in zero"
+
+
+def test_the_tag_is_aligned_by_columns_on_a_wide_row():
+    """Paired with the ASCII case so this cannot pass by the tag simply never
+    being placed."""
+    ascii_lines = wwm_render.row("Next", "ship it", "rec")
+    assert wwm_render.display_width(ascii_lines[-1]) == 72
+    wide = wwm_render.row("Next", "\u8a2d\u8a08\u3092\u898b\u76f4", "rec")
+    assert wwm_render.display_width(wide[-1]) == 72
+
+
+def test_ellipsize_measures_columns():
+    out = wwm_render._ellipsize("\u8a2d\u8a08\u3092\u898b\u76f4\u3057", 8)
+    assert wwm_render.display_width(out) <= 8
+    assert out.endswith("...")
+
+
+def test_omitted_ledger_items_are_disclosed():
+    """Silent truncation is the failure mode this whole skill exists to avoid.
+    Paired with the absent case so it cannot pass vacuously."""
+    out = wwm_render.render({**BUNDLE, "ledger_omitted": 4}, level="full")
+    assert "4 older recorded items omitted" in out
+    quiet = wwm_render.render({**BUNDLE, "ledger_omitted": 0}, level="full")
+    assert "omitted" not in quiet
+
+
+def test_wrapping_narrower_than_one_wide_character_terminates():
+    """A wide character cannot fit in a one-column width, so the re-break loop
+    can make no progress. Without the guard this spins forever and the CLI
+    hangs instead of answering."""
+    out = wwm_render._wrap("\u8a2d\u8a08", 1)
+    assert out, "must return something rather than hang or empty out"
+    assert all(isinstance(line, str) for line in out)
+
+
+def test_wrapping_a_wide_string_breaks_on_real_columns():
+    out = wwm_render._wrap("\u8a2d\u8a08" * 20, 10)
+    assert len(out) > 1
+    assert all(wwm_render.display_width(line) <= 10 for line in out)
+    assert "".join(out) == "\u8a2d\u8a08" * 20, "no characters may be lost"
+
+
+def test_truncating_to_a_width_that_already_fits_keeps_everything():
+    assert wwm_render._truncate_to_width("hello", 40) == "hello"
+    assert wwm_render._truncate_to_width("\u8a2d\u8a08", 4) == "\u8a2d\u8a08"

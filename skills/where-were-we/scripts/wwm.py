@@ -156,6 +156,7 @@ def main(argv: list[str] | None = None) -> int:
     except (
         wwm_session.SessionUnknown,
         wwm_session.UnsupportedRuntime,
+        wwm_session.InvalidSessionId,
         wwm_history.StoreUnavailable,
         wwm_render.UnknownSection,
         wwm_ledger.LedgerRefused,

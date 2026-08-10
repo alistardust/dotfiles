@@ -68,6 +68,11 @@ replaces the current goal on purpose, and the one it replaced is filed into
 `## goal history` automatically, so nothing is lost by re-recording it. The
 current goal shows at every level; superseded ones show only in `full`.
 
+Each of `--text`, `--why`, and `--rejected` is one line. A newline is
+refused outright rather than silently truncated, because the ledger format
+is line-oriented and a partly-kept milestone is worse than a rejected one.
+Record each line as its own entry instead.
+
 ## When there is no ledger
 
 `collect` reports `has_ledger: false`. Offer adoption only if a ledger from

@@ -7,11 +7,12 @@ which own every metadata field including last_synced_turn.
 
 from __future__ import annotations
 
+import fcntl
 import os
 import re
 import sqlite3
 import tempfile
-from contextlib import closing
+from contextlib import closing, contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,6 +20,7 @@ from pathlib import Path
 import wwm_session
 
 META_KEYS = ("goal", "started", "updated", "last_synced_turn", "adopted_from")
+KINDS = ("decision", "thread", "blocker", "state", "next", "goal")
 KNOWN_SECTIONS = (
     "state",
     "next",
@@ -435,6 +437,53 @@ def _atomic_write(path: Path, text: str) -> None:
         raise
 
 
+@contextmanager
+def _locked(session_id: str):
+    """Hold an exclusive interprocess lock for one session's ledger.
+
+    record() is a read-modify-write: it loads the whole ledger, appends one
+    item, and replaces the file. Two of those interleaving means the second
+    write is computed from a snapshot taken before the first, so the first
+    milestone is silently lost. That is not a rare race here: a subagent and
+    its parent share a session id, so concurrent recording is the normal case.
+
+    The lock is a sibling file rather than the ledger itself, because the
+    ledger is replaced by rename and a lock held on the old inode would
+    protect nothing after the first write.
+    """
+    path = wwm_session.ledger_path(session_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock = path.with_name(path.name + ".lock")
+    with open(lock, "w") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def _single_line(value: str, field_name: str) -> str:
+    """Reject text carrying newlines rather than silently truncating it.
+
+    Every milestone is serialized as one line. A newline in the middle of one
+    used to end the line early, so the remainder was written back as an
+    unparsable stray and everything after the first line vanished from the
+    rendered answer. Refusing is the only honest option: the alternative is
+    accepting the user's words and then not keeping them.
+
+    Raises:
+        LedgerRefused: If the text spans more than one line.
+    """
+    text = str(value)
+    if "\n" in text or "\r" in text:
+        raise LedgerRefused(
+            f"The {field_name} spans multiple lines, and a ledger entry is one "
+            "line. Nothing was recorded. Re-run with the newlines removed, or "
+            "record each line as its own entry."
+        )
+    return text
+
+
 def record(
     session_id: str,
     kind: str,
@@ -464,52 +513,63 @@ def record(
         ValueError: If kind is not a recognized milestone type.
         LedgerRefused: If the existing ledger could not be read at all.
     """
-    led = load(session_id)
-    # Content that cannot be read cannot be preserved. Everywhere else a
-    # damaged ledger is kept verbatim and written back, but a file we could
-    # not decode has no recoverable form, so writing would simply destroy it.
-    if led.unreadable:
-        raise LedgerRefused(
-            f"The ledger for {session_id} exists but could not be read, so "
-            "recording would overwrite it. Move or repair the file first: "
-            f"{wwm_session.ledger_path(session_id)}"
-        )
-    today = _today()
+    if kind not in KINDS:
+        raise ValueError(f"unknown kind: {kind}")
+    # Validated before the lock is taken: a refusal must not make a concurrent
+    # writer wait, and nothing here depends on the ledger's contents.
+    text = _single_line(text, "text")
+    why = _single_line(why, "why")
+    rejected = _single_line(rejected, "rejected")
 
-    if kind == "decision":
+    # The load and the write are one critical section. Two record() calls
+    # interleaving meant the second computed its result from a snapshot taken
+    # before the first, so the first milestone was silently lost.
+    with _locked(session_id):
+        led = load(session_id)
+        # Content that cannot be read cannot be preserved. Everywhere else a
+        # damaged ledger is kept verbatim and written back, but a file we could
+        # not decode has no recoverable form, so writing would simply destroy
+        # it.
+        if led.unreadable:
+            raise LedgerRefused(
+                f"The ledger for {session_id} exists but could not be read, so "
+                "recording would overwrite it. Move or repair the file first: "
+                f"{wwm_session.ledger_path(session_id)}"
+            )
+        today = _today()
+
+        if kind == "decision":
+            led = replace(
+                led,
+                decisions=[*led.decisions, Decision(today, text, why, rejected)],
+            )
+        elif kind == "thread":
+            led = replace(led, threads=[*led.threads, Thread(False, text)])
+        elif kind == "blocker":
+            led = replace(led, blockers=[*led.blockers, text])
+        elif kind == "state":
+            led = replace(led, state=text)
+        elif kind == "next":
+            led = replace(led, next=text)
+        else:
+            # Replacing the goal is correct: a session's purpose genuinely
+            # changes. Forgetting the goal it replaced is not, because months
+            # later that is the only thing that explains why the work looks the
+            # way it does. So the old goal moves into history automatically
+            # rather than requiring the user to remember to write it down,
+            # which is precisely the memory this skill exists to not depend on.
+            history = led.goal_history
+            if led.goal and led.goal != text:
+                history = [*history, Decision(today, led.goal)]
+            led = replace(led, goal=text, goal_history=history)
+
         led = replace(
             led,
-            decisions=[*led.decisions, Decision(today, text, why, rejected)],
+            started=led.started or today,
+            updated=today,
+            last_synced_turn=_max_turn_index(session_id),
         )
-    elif kind == "thread":
-        led = replace(led, threads=[*led.threads, Thread(False, text)])
-    elif kind == "blocker":
-        led = replace(led, blockers=[*led.blockers, text])
-    elif kind == "state":
-        led = replace(led, state=text)
-    elif kind == "next":
-        led = replace(led, next=text)
-    elif kind == "goal":
-        # Replacing the goal is correct: a session's purpose genuinely
-        # changes. Forgetting the goal it replaced is not, because months
-        # later that is the only thing that explains why the work looks the
-        # way it does. So the old goal moves into history automatically
-        # rather than requiring the user to remember to write it down, which
-        # is precisely the memory this skill exists to not depend on.
-        history = led.goal_history
-        if led.goal and led.goal != text:
-            history = [*history, Decision(today, led.goal)]
-        led = replace(led, goal=text, goal_history=history)
-    else:
-        raise ValueError(f"unknown kind: {kind}")
-
-    led = replace(
-        led,
-        started=led.started or today,
-        updated=today,
-        last_synced_turn=_max_turn_index(session_id),
-    )
-    _atomic_write(wwm_session.ledger_path(session_id), serialize(led))
+        _atomic_write(wwm_session.ledger_path(session_id), serialize(led))
     return led
 
 
@@ -541,22 +601,26 @@ def adopt(source: str, target: str) -> Ledger:
             f"No ledger content found for session '{source}'. Nothing was "
             "changed. Check the session id with `wwm.py sessions`."
         )
-    existing = load(target)
-    if _has_content(existing) or existing.unreadable:
-        raise LedgerRefused(
-            f"Session {target} already has its own ledger. Adopting would "
-            "replace it. Move or clear it first if that is really intended."
+    # Same critical section as record(): the target is read to decide whether
+    # adoption is safe, then written. Without the lock a record() landing
+    # between those two steps is overwritten and lost.
+    with _locked(target):
+        existing = load(target)
+        if _has_content(existing) or existing.unreadable:
+            raise LedgerRefused(
+                f"Session {target} already has its own ledger. Adopting would "
+                "replace it. Move or clear it first if that is really intended."
+            )
+        adopted = replace(
+            src,
+            adopted_from=source,
+            # Turn indexes are 0-based and reconciliation asks for turn_index >
+            # after, so 0 would silently exclude the target's own first turn.
+            # -1 is the only value that means "nothing here is synced yet".
+            last_synced_turn=-1,
+            updated=_today(),
         )
-    adopted = replace(
-        src,
-        adopted_from=source,
-        # Turn indexes are 0-based and reconciliation asks for turn_index >
-        # after, so 0 would silently exclude the target's own first turn. -1
-        # is the only value that means "nothing here is synced yet".
-        last_synced_turn=-1,
-        updated=_today(),
-    )
-    _atomic_write(wwm_session.ledger_path(target), serialize(adopted))
+        _atomic_write(wwm_session.ledger_path(target), serialize(adopted))
     return adopted
 
 

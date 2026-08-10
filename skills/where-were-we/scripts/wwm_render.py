@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 import textwrap
+import unicodedata
 
 TOTAL = 72
 INDENT = 2
@@ -21,6 +22,36 @@ TIGHT_W = TEXT_W - TAG_W - 1
 MENU = "more? [decisions] [threads] [timeline] [files] [full]"
 
 
+def display_width(text: str) -> int:
+    """Columns a terminal will actually use to draw `text`.
+
+    len() counts codepoints, not columns. CJK and emoji are drawn two columns
+    wide, and combining marks are drawn in zero, so a "72-character" line of
+    Japanese occupied 132 terminal columns and wrapped into an unreadable
+    ragged block. The whole layout guarantee is about columns, so every width
+    decision has to be measured in columns.
+    """
+    total = 0
+    for char in text:
+        if unicodedata.combining(char):
+            continue
+        total += 2 if unicodedata.east_asian_width(char) in ("W", "F") else 1
+    return total
+
+
+def _truncate_to_width(text: str, width: int) -> str:
+    """Cut `text` down to at most `width` columns."""
+    out: list[str] = []
+    used = 0
+    for char in text:
+        step = 0 if unicodedata.combining(char) else display_width(char)
+        if used + step > width:
+            break
+        out.append(char)
+        used += step
+    return "".join(out)
+
+
 def _wrap(text: str, width: int) -> list[str]:
     wrapped = textwrap.wrap(
         text,
@@ -28,7 +59,23 @@ def _wrap(text: str, width: int) -> list[str]:
         break_long_words=True,
         break_on_hyphens=False,
     )
-    return wrapped or [""]
+    # textwrap measures in codepoints, so a wide-character line it believes is
+    # `width` long can be up to twice that on screen. Re-break anything that
+    # overflows in real columns; ASCII is untouched, since for ASCII
+    # display_width equals len and this loop never fires.
+    out: list[str] = []
+    for line in wrapped:
+        while display_width(line) > width:
+            head = _truncate_to_width(line, width)
+            if not head:
+                # A single character wider than the entire column. Emit it
+                # whole rather than dropping it or looping forever; one
+                # over-wide line beats a hang or a silent deletion.
+                break
+            out.append(head)
+            line = line[len(head) :]
+        out.append(line)
+    return out or [""]
 
 
 def _clean(text: str) -> str:
@@ -61,7 +108,7 @@ def row(label: str, text: str, tag: str) -> list[str]:
     text = _clean(text)
 
     lines = _wrap(text, TEXT_W)
-    if len(lines[-1]) + 1 + TAG_W > TEXT_W:
+    if display_width(lines[-1]) + 1 + TAG_W > TEXT_W:
         lines = _wrap(text, TIGHT_W)
 
     out: list[str] = []
@@ -71,8 +118,11 @@ def row(label: str, text: str, tag: str) -> list[str]:
         out.append(prefix + line)
 
     last = out[-1]
-    if len(last) + 1 + TAG_W <= TOTAL:
-        out[-1] = last.ljust(TOTAL - TAG_W) + marker
+    # Padded by columns, not codepoints. ljust() counts codepoints, so a line
+    # of wide characters was padded as though it were half its drawn width and
+    # pushed the tag past column 72.
+    if display_width(last) + 1 + TAG_W <= TOTAL:
+        out[-1] = last + " " * (TOTAL - TAG_W - display_width(last)) + marker
     else:  # pragma: no cover - unreachable with the current widths
         # Structurally dead today: TIGHT_W is TOTAL - TEXT_COL - TAG_W - 1, so
         # the re-wrap above always leaves room for the tag. Kept because the
@@ -235,6 +285,11 @@ def render(
     if bundle.get("ledger_damaged"):
         damaged = ", ".join(bundle["ledger_damaged"])
         notes.append(f"  (unreadable in ledger: {damaged})")
+    if bundle.get("ledger_omitted"):
+        notes.append(
+            f"  ({bundle['ledger_omitted']} older recorded items omitted; "
+            "the ledger is larger than one answer can carry)"
+        )
 
     # Notes carry hand-typed heading and key names straight from the user's
     # ledger, so they are not bounded by anything upstream. Emitting them raw
@@ -342,11 +397,16 @@ def sessions_table(rows: list[dict], total: int, days: int) -> str:
         summary = _clean(r["summary"] or "") or "(no summary)"
         repo = _clean(r["repository"] or "") or "?"
         updated = _clean(r["updated_at"] or "")[:SESSION_DATE_W]
+        # Padded by columns, not codepoints, for the same reason as row().
+        cell_summary = _ellipsize(summary, SESSION_SUMMARY_W)
+        cell_repo = _ellipsize(repo, SESSION_REPO_W)
         lines.append(
             "  "
-            f"{_ellipsize(summary, SESSION_SUMMARY_W):<{SESSION_SUMMARY_W}} "
-            f"{_ellipsize(repo, SESSION_REPO_W):<{SESSION_REPO_W}} "
-            f"{updated}".rstrip()
+            + cell_summary
+            + " " * (SESSION_SUMMARY_W - display_width(cell_summary) + 1)
+            + cell_repo
+            + " " * (SESSION_REPO_W - display_width(cell_repo) + 1)
+            + f"{updated}".rstrip()
         )
     if not lines:
         lines.append(f"  No sessions in the last {days} days.")
@@ -357,9 +417,9 @@ def sessions_table(rows: list[dict], total: int, days: int) -> str:
 
 
 def _ellipsize(text: str, width: int) -> str:
-    """Truncate to `width`, spending three of those characters saying so."""
-    if len(text) <= width:
+    """Truncate to `width` columns, spending three of them saying so."""
+    if display_width(text) <= width:
         return text
     if width <= 3:
-        return text[:width]
-    return text[: width - 3].rstrip() + "..."
+        return _truncate_to_width(text, width)
+    return _truncate_to_width(text, width - 3).rstrip() + "..."

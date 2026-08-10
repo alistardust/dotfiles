@@ -1,4 +1,6 @@
 # tests/where-were-we/test_ledger.py
+import os
+
 import pytest
 import wwm_ledger
 import wwm_session
@@ -558,3 +560,147 @@ def test_a_ledger_with_no_history_gains_no_empty_section(fake_home, seeded):
     assert "## goal history" not in wwm_session.ledger_path("s1").read_text()
     wwm_ledger.record("s1", kind="goal", text="Ship it differently")
     assert "## goal history" in wwm_session.ledger_path("s1").read_text()
+
+
+# --- session id containment ------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "../../../etc",
+        "a/b",
+        "..",
+        "s1/../../x",
+        "",
+        "with space",
+    ],
+)
+def test_a_traversing_session_id_is_refused(fake_home, bad):
+    """The session id reaches the path builder from the environment and from
+    --session. Interpolating it unchecked let a caller write a ledger anywhere
+    the process could reach."""
+    with pytest.raises(wwm_session.InvalidSessionId):
+        wwm_session.ledger_path(bad)
+
+
+def test_a_normal_session_id_is_still_accepted(fake_home):
+    """Paired with the refusal cases so those cannot pass by everything being
+    rejected."""
+    path = wwm_session.ledger_path("0198f2a1-4c3b-7000-8000-abcdef012345")
+    assert path.name == "ledger.md"
+    assert wwm_session.ledger_path("s1").name == "ledger.md"
+
+
+def test_the_resolved_path_stays_under_the_session_root(fake_home):
+    path = wwm_session.ledger_path("s1").resolve()
+    root = (fake_home / ".copilot" / "session-state").resolve()
+    assert root in path.parents
+
+
+# --- recorded text stays one line ------------------------------------------
+
+
+def test_a_newline_in_recorded_text_is_refused(fake_home, seeded):
+    """The ledger format is line-oriented. A newline inside a value silently
+    forged new list items and new sections on the next read."""
+    seeded("s1", 3)
+    with pytest.raises(wwm_ledger.LedgerRefused):
+        wwm_ledger.record("s1", kind="decision", text="a\n## blockers\n- forged")
+
+
+def test_a_newline_in_why_or_rejected_is_refused(fake_home, seeded):
+    seeded("s1", 3)
+    with pytest.raises(wwm_ledger.LedgerRefused):
+        wwm_ledger.record("s1", kind="decision", text="ok", why="a\nb")
+    with pytest.raises(wwm_ledger.LedgerRefused):
+        wwm_ledger.record("s1", kind="decision", text="ok", rejected="a\nb")
+
+
+def test_a_refused_record_writes_nothing(fake_home, seeded):
+    """A refusal that had already half-written the ledger would be worse than
+    the newline it was rejecting."""
+    seeded("s1", 3)
+    wwm_ledger.record("s1", kind="decision", text="keep me")
+    before = wwm_session.ledger_path("s1").read_text()
+    with pytest.raises(wwm_ledger.LedgerRefused):
+        wwm_ledger.record("s1", kind="decision", text="a\nb")
+    assert wwm_session.ledger_path("s1").read_text() == before
+
+
+def test_ordinary_text_is_still_recorded(fake_home, seeded):
+    """Paired with the refusals above so they cannot pass vacuously."""
+    seeded("s1", 3)
+    wwm_ledger.record("s1", kind="decision", text="Chose option A")
+    assert wwm_ledger.load("s1").decisions[0].text == "Chose option A"
+
+
+def test_an_unknown_kind_is_refused(fake_home, seeded):
+    seeded("s1", 3)
+    with pytest.raises(ValueError):
+        wwm_ledger.record("s1", kind="nonsense", text="x")
+
+
+# --- concurrent writes -----------------------------------------------------
+
+
+def test_concurrent_records_do_not_lose_milestones(fake_home, seeded):
+    """record() is load-modify-write. Two turns recording at once read the same
+    ledger and the second write erased the first. Milestones are the one thing
+    in this system that cannot be reconstructed, so this uses real concurrent
+    processes rather than a simulated interleaving."""
+    import subprocess
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    seeded("s1", 3)
+    wwm_ledger.record("s1", kind="decision", text="seed")
+
+    cli = _Path(wwm_ledger.__file__).with_name("wwm.py")
+    env = {"HOME": str(fake_home), "PATH": os.environ.get("PATH", "")}
+
+    procs = [
+        subprocess.Popen(
+            [
+                _sys.executable,
+                str(cli),
+                "record",
+                "--session",
+                "s1",
+                "--kind",
+                "decision",
+                "--text",
+                f"concurrent-{i}",
+            ],
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+        )
+        for i in range(8)
+    ]
+    for p in procs:
+        _, err = p.communicate(timeout=60)
+        assert p.returncode == 0, err.decode()
+
+    texts = [d.text for d in wwm_ledger.load("s1").decisions]
+    missing = [f"concurrent-{i}" for i in range(8) if f"concurrent-{i}" not in texts]
+    assert not missing, f"lost milestones: {missing}"
+
+
+def test_a_symlinked_session_dir_that_escapes_is_refused(fake_home):
+    """The pattern check cannot see through a symlink. If session-state holds a
+    link pointing elsewhere, a perfectly well-formed id still resolves outside
+    the tree, so the resolved path is confirmed as well as the name."""
+    root = fake_home / ".copilot" / "session-state"
+    root.mkdir(parents=True, exist_ok=True)
+    outside = fake_home / "outside"
+    outside.mkdir()
+    (root / "escapee").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(wwm_session.InvalidSessionId):
+        wwm_session.ledger_path("escapee")
+
+    # Paired: an ordinary directory under the same root is still fine, so this
+    # cannot pass by the containment check rejecting everything.
+    (root / "normal").mkdir()
+    assert wwm_session.ledger_path("normal").name == "ledger.md"
