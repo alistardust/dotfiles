@@ -2,6 +2,93 @@
 
 # >>> dotfiles-managed (do not edit; setup.sh overwrites this block) <<<
 
+## Communication
+
+Lead with the answer. No preamble, no restatement of the request, no
+narration of what you are about to do.
+
+Wrap prose to 80 columns using hard line breaks. Short paragraphs with a
+blank line between them. Structure over long prose. Code, diffs, tables,
+file paths, command output, and quoted logs are exempt and are never
+broken to fit.
+
+Restate an earlier decision in one line when you rely on it, rather than
+assuming it is still in mind.
+
+Explain a change before showing it: one or two sentences on what it does
+and why, then the code. Show diffs, not whole files.
+
+Do not invent estimates. No fabricated percentages, durations,
+confidence scores, or counts. Measure it or leave it out.
+
+## Decision ritual
+
+Ceremony only. Does not decide whether to ask, and never authorises an
+action. Action confirmation rules win.
+
+Heavy if any: destructive or externally visible; undo needs a migration,
+rebuild, or another person; scope crosses more than one file or system;
+the question compares two or more competing constraints; Ali hesitated,
+self-corrected, asked back, or wants to discuss.
+
+Heavy: ask one question, stop generating. She answers. Restate her
+choice, stop generating. Ask if she is ready before the next.
+
+Light, meaning no heavy condition met: ask, accept, continue. No
+restate, no readiness check.
+
+Heavy wins ties. Topic and yes/no format prove nothing. Uncertainty is
+not heavy. If one fact would settle it, ask one light scoping question.
+
+Ask with the question prompt rather than plain text, so a pending
+question is unmistakable.
+
+## Options and findings
+
+Do not equate accessibility with brevity. Depth Ali asked for survives.
+Never drop a viable option or truncate findings to hit a number.
+
+Cap what must be compared, not what is read. Aim for four or fewer
+options in a question, since each is weighed against every other. More
+than four usually means the question is not yet well formed: narrow it
+or split it.
+
+Lists that are read in order, such as findings, steps, files, and
+results, are not capped.
+
+## Model Authority
+
+Absolute. Not traded against cost, speed, or convenience.
+
+**Non-Anthropic models never write.** OpenAI (GPT), Google (Gemini), and
+Microsoft (MAI) models hold review seats only. They may read code, report
+findings, propose a severity, and argue a position. They may never author
+or edit a file, run an implementation subagent, apply a fix, or act as
+sole adjudicator. This holds in every seat on every machine, including
+subagents dispatched by another model.
+
+**The primary interface model is always Anthropic.** If "auto" would
+select otherwise, override it explicitly.
+
+**Substantive code is written by Opus or heavier.** Substantive means the
+change involves logic, control flow, data handling, security,
+architecture, interfaces, or any judgment about tradeoffs. A personal
+machine may relax this in local overrides. Absent that, assume the floor
+applies.
+
+Haiku and Sonnet may perform mechanical edits. Mechanical is a closed
+list, not a judgment: formatting and whitespace, import sorting, renaming
+a symbol already agreed, applying a lint autofix, mechanical find and
+replace, moving code without altering it, and updating a version string
+or dependency pin. Anything not on that list is substantive.
+
+A task that starts mechanical and turns out to need a decision stops
+being mechanical. Hand it up rather than deciding in the cheap tier.
+
+Ecosystem spread applies to review passes only. Reporters across
+ecosystems raise recall because lineages differ in their blind spots.
+That reasoning does not extend to writing.
+
 ## Coding Rules
 
 - Follow the naming conventions of the language and repository in use (e.g.,
@@ -158,8 +245,8 @@ reject everything else. Never trust client-supplied role or permission data.
 
 ## Testing and Linting
 
-Use the testing and linting tools appropriate to the language and stack. **Linting
-is always required**: run it before declaring any task complete.
+Use the testing and linting tools appropriate to the language and stack. **Linting is
+required wherever it is configured**: run it before declaring any task complete.
 
 | Stack      | Linting                                         | Testing                                               |
 |------------|-------------------------------------------------|-------------------------------------------------------|

@@ -34,7 +34,7 @@ Use `--dry-run --only <section>` to preview changes and `--verify --only <sectio
 
 Section logic lives in `sections/<name>.sh` (18 files, ~1800 lines total). Each file defines `section_<name>()` and `verify_<name>()` plus any private helpers. Section files use `# shellcheck shell=bash` (sourced, no shebang).
 
-The package list files (`brew_packages.txt`, `apt-packages.txt`, `dnf-packages.txt`, `pacman-packages.txt`) are pure data — `setup.sh` selects the right file for the detected platform.
+The package list files (`brew_packages.txt`, `apt-packages.txt`, `dnf-packages.txt`, `pacman-packages.txt`) are pure data; `setup.sh` selects the right file for the detected platform.
 
 Most other tracked files are artifacts consumed by setup: `terminal_configs/` for appearance, `vscode/` and `idea_ides/` for editor exports, `configs/keyd.conf` for the key remapping daemon, and `wslconfig.template` plus `terminal_configs/windows-terminal-settings.json` for Windows-side WSL setup.
 
@@ -42,7 +42,7 @@ Most other tracked files are artifacts consumed by setup: `terminal_configs/` fo
 
 **Idempotency:** Every section checks before acting. Setup is safe to re-run; add similar guards when extending sections.
 
-**Config file strategy:** The script appends guarded blocks (e.g., `# >>> dotfiles customizations <<<`) to `~/.zshrc`, `~/.tmux.conf.local`, and `~/.vimrc.local` — it never replaces these files wholesale. `verify_*` functions check for the presence of these markers. Preserve this pattern.
+**Config file strategy:** The script appends guarded blocks (e.g., `# >>> dotfiles customizations <<<`) to `~/.zshrc`, `~/.tmux.conf.local`, and `~/.vimrc.local`; it never replaces these files wholesale. `verify_*` functions check for the presence of these markers. Preserve this pattern.
 
 **Shared vs. machine-local:** Shared artifacts like `terminal_configs/alacritty.toml` are symlinked into place. Machine-local files like `~/.vimrc.local` are copied then patched. Don't collapse this distinction.
 
@@ -50,7 +50,7 @@ Most other tracked files are artifacts consumed by setup: `terminal_configs/` fo
 
 **Adding a section:** Create `sections/<name>.sh` with `section_<name>()` and `verify_<name>()` functions. Add the name to `ALL_SECTIONS` in `setup.sh`, set a default in the `RUN[]` block, and use SSH remotes (`git@github.com:...`) for any new cloned dependencies.
 
-**Terminal appearance:** Keep `terminal_configs/alacritty.toml` (macOS, font size 13.5), `terminal_configs/alacritty-linux.toml` (Linux/WSL, font size 10.5), and `terminal_configs/windows-terminal-settings.json` in sync for color scheme and font family. The two alacritty files are identical except for font size — color/font family changes must be applied to both.
+**Terminal appearance:** Keep `terminal_configs/alacritty.toml` (macOS, font size 13.5), `terminal_configs/alacritty-linux.toml` (Linux/WSL, font size 10.5), and `terminal_configs/windows-terminal-settings.json` in sync for color scheme and font family. The two alacritty files are identical except for font size; color and font family changes must be applied to both.
 
 ## Delivery Integrity
 
@@ -101,13 +101,22 @@ go-ahead, then act. No exceptions.
 
 ## Bash Conventions (this repo)
 
-- Use `run()` for all state-changing commands — it no-ops in `--dry-run` mode.
+- Use `run()` for all state-changing commands; it no-ops in `--dry-run` mode.
 - Output: `log()` for section headers, `ok()` for success, `warn()` for non-fatal issues. In `--verify` mode: `pass()`, `fail()`, `skip_check()`.
-- Use `command_exists()` to check for a tool — never bare `which` or `hash`.
+- Use `command_exists()` to check for a tool, never bare `which` or `hash`.
 - Guard every install with an existence check first (all sections must be idempotent).
 - Always quote variable expansions: `"$var"`, `"${array[@]}"`. Use `[[ ]]` not `[ ]`.
 - SSH remotes for all `git clone` calls: `git@github.com:...`.
 
 ## Commit Style
 
-Conventional Commits: `<type>[scope]: <description>` (imperative mood, ≤72 chars). One logical change per commit; every commit must leave the repo in a working state. Branch naming: `feature/description`, `fix/description`, `chore/description`.
+Conventional Commits: `<type>[scope]: <description>` (imperative mood, 72 chars or fewer). One logical change per commit; every commit must leave the repo in a working state. Branch naming: `feature/description`, `fix/description`, `chore/description`.
+
+## Reference
+
+Hardware and machine-specific procedures live under `docs/` and are read on
+demand, not loaded into every session:
+
+- `docs/monitor-setup.md` covers the two shared external monitors, DDC/CI
+  input switching, the `mon-*` and `top-*` shell aliases, and the one-time
+  macOS `m1ddc`/`displayplacer` setup.

@@ -30,6 +30,25 @@ section_copilot() {
     local instructions_src="${SCRIPT_DIR}/configs/copilot-instructions.md"
     install_instructions "$instructions_dir" "$instructions_file" "$instructions_src" "Copilot"
 
+    # Hooks -- sessionStart orientation card. Symlinked so edits in the repo
+    # take effect without re-running setup.
+    local hooks_src="${SCRIPT_DIR}/configs/hooks"
+    local hooks_dest="${instructions_dir}/hooks"
+    if [[ -d "$hooks_src" ]]; then
+        run mkdir -p "$hooks_dest"
+        local hook_path hook_name
+        for hook_path in "$hooks_src"/*; do
+            [[ -f "$hook_path" ]] || continue
+            hook_name="$(basename "$hook_path")"
+            if [[ -L "${hooks_dest}/${hook_name}" ]]; then
+                ok "Hook '${hook_name}' already linked."
+            else
+                run ln -sf "$hook_path" "${hooks_dest}/${hook_name}"
+                ok "Hook '${hook_name}' installed."
+            fi
+        done
+    fi
+
     local settings_file="${instructions_dir}/settings.json"
     if [[ -f "$settings_file" ]]; then
         # Deliberately a no-op. This file holds deliberate per-machine choices
@@ -41,7 +60,7 @@ section_copilot() {
         if [[ "$DRY_RUN" == "true" ]]; then
             printf '\e[2;37m  [dry] write Copilot settings to %s\e[0m\n' "$settings_file"
         else
-            printf '{"model":"claude-opus-5","memory":{"enabled":true}}\n' > "$settings_file"
+            printf '{"model":"claude-opus-5","memory":true}\n' > "$settings_file"
         fi
         ok "Copilot settings written to ${settings_file}."
     fi
@@ -129,6 +148,8 @@ verify_copilot() {
                                         && pass "Copilot instructions written"                 || fail "Copilot instructions missing"
     [[ -f "$HOME/.copilot/settings.json" ]] \
                                         && pass "Copilot settings written"                     || fail "Copilot settings missing"
+    [[ -L "$HOME/.copilot/hooks/session-start-orient.json" && -L "$HOME/.copilot/hooks/orient.py" ]] \
+                                        && pass "Copilot sessionStart hook installed"          || fail "Copilot sessionStart hook missing"
     # Probe a superpowers-only skill. brainstorming is unusable here: this repo
     # ships its own skills/brainstorming/, and _install_local_skills replaces
     # the superpowers symlink with the repo copy, so the check always failed.

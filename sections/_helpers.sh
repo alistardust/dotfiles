@@ -51,6 +51,26 @@ _markers_well_formed() {
     ' "$file"
 }
 
+# Print the path a symlink ultimately points at, following chains and resolving
+# relative targets against each link's own directory. Hand-rolled rather than
+# `readlink -f` because that flag is GNU-only; bare `readlink` is portable to
+# BSD. The counter breaks symlink cycles instead of spinning forever.
+_resolve_symlink() {
+    local path="$1" target dir base count=0
+    while [[ -L "$path" ]]; do
+        if (( ++count > 40 )); then return 1; fi
+        target="$(readlink "$path")" || return 1
+        if [[ "$target" == /* ]]; then
+            path="$target"
+        else
+            path="$(dirname "$path")/$target"
+        fi
+    done
+    dir="$(cd -P "$(dirname "$path")" 2>/dev/null && pwd)" || return 1
+    base="$(basename "$path")"
+    printf '%s/%s' "$dir" "$base"
+}
+
 # Print the octal permission bits of a file, or nothing (return 1) if neither
 # stat dialect yields a clean octal value. Tries GNU (-c %a) then BSD (-f %Lp);
 # each result is validated as octal so a wrong-dialect stat that "succeeds" with
@@ -70,6 +90,18 @@ _file_perms() {
 _sync_managed_block() {
     local src_file="$1" dest_file="$2"
     local head tail block out perms
+    # A symlinked dest (e.g. the instructions file synced to cloud storage) must
+    # be followed to its target first. The mv below is an atomic replace, which
+    # would otherwise swap the symlink itself for a regular file and silently
+    # detach the file from whatever the link pointed at.
+    if [[ -L "$dest_file" ]]; then
+        local resolved
+        if ! resolved="$(_resolve_symlink "$dest_file")" || [[ ! -f "$resolved" ]]; then
+            warn "${dest_file} is a symlink that does not resolve to a regular file; leaving it untouched."
+            return 1
+        fi
+        dest_file="$resolved"
+    fi
     # head/tail/block are scratch; out MUST live in dest's directory so the final
     # mv is a same-filesystem atomic rename (a cross-fs mv degrades to a
     # copy-then-unlink that can truncate dest and destroy local overrides).
