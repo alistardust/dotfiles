@@ -1,5 +1,7 @@
 # Global Claude Code Instructions
 
+# >>> dotfiles-managed (do not edit; setup.sh overwrites this block) <<<
+
 ## User Preference
 
 - The user's name is Alice (Ali). Use she/her pronouns when referring to her.
@@ -236,6 +238,33 @@ When proposing edits for approval:
 
 ---
 
+## Output Directories
+
+Agent-authored output goes under `~/Documents/copilot-output/`:
+
+    work/<project-slug>/             work with no ticket
+    work/tickets/<id>-<descriptor>/  ticket work (ops-8520-census)
+    personal/<project-slug>/         personal-life work
+
+Invariants that apply even without the skill loaded:
+
+- Never write a loose file at a domain root. Always a project directory,
+  even for a one-off.
+- Directory names are lowercase and hyphen-separated, ticket IDs included
+  (`ops-8520`, never `OPS-8520`).
+- Reuse an existing project directory before creating a new one.
+- Filenames are short and specific, and never repeat the directory name. In
+  `work/kafka-retention-tuning/` write `followup-analysis.md`, never
+  `kafka-retention-tuning-followup-analysis.md`. Never `notes.md`,
+  `output.md`, `final.md`.
+- The first version of a document is unsuffixed. Add `-vN` only when a second
+  draft is written: at that point `mv` the original to `-v1` and write `-v2`.
+  Never `cp`, and never start at `-v1`.
+- Ask before writing when the work is not clearly work or personal.
+
+See the `output-filing` skill for the rest: dates, extensions, and ticket
+description handling.
+
 ## AI Instruction File Best Practices
 
 - Put hard constraints (security, never-do-this) **first** — they must be seen before context limits cut in.
@@ -285,3 +314,18 @@ printf '\033]2;%s\033\\' "claude" 2>/dev/null
 - Do not rename if a manual override is set: check
   `tmux show-environment -g "@manual_name_$(tmux display-message -p '#{window_id}')" 2>/dev/null`
   and skip if it returns a value ending in `=1`
+
+# <<< dotfiles-managed >>>
+
+# >>> local overrides (setup.sh never touches below) <<<
+
+# Machine-local and personal instructions live below this line. setup.sh never
+# reads or overwrites anything here; the managed block above is the only part
+# this repo owns. Add your personal sections below, for example:
+#
+#   ## Identity and Preferences
+#   ## Context
+#   ## Safety and Security     (work-specific rules)
+#   ## Commit and Branch Rules
+#
+# Populate these per machine.

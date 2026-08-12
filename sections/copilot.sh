@@ -53,8 +53,11 @@ section_copilot() {
     # symlink and create one symlink per skill directly in ~/.copilot/skills/.
     local superpowers_cache="$HOME/.copilot/marketplace-cache/dwaintr-superpowers-copilot/plugins/superpowers/skills"
     local skills_dir="$HOME/.copilot/skills"
-    # Check for the brainstorming skill as a proxy for whether skills are already flat-linked
-    if [[ -L "${skills_dir}/brainstorming" ]]; then
+    # Probe test-driven-development, not brainstorming: this repo ships its own
+    # skills/brainstorming/, and _install_local_skills replaces the superpowers
+    # symlink with the repo copy, so a brainstorming probe never matched and
+    # Superpowers was reinstalled on every run.
+    if [[ -L "${skills_dir}/test-driven-development" ]]; then
         ok "Superpowers for Copilot already installed."
     else
         log "Installing Superpowers for GitHub Copilot CLI..."
@@ -90,6 +93,11 @@ section_copilot() {
             "--branch add-copilot-cli-support"
     fi
 
+    # Install local skills from this repo. Mirrors section_claude; without this,
+    # repo skills only reach Copilot via the opt-in copilot_skills section.
+    _install_local_skills "$skills_dir"
+    ok "All local skills installed to ~/.copilot/skills/"
+
     log "To authenticate, run: copilot /login"
 
     # Extensions -- user-level Copilot CLI extensions
@@ -121,7 +129,10 @@ verify_copilot() {
                                         && pass "Copilot instructions written"                 || fail "Copilot instructions missing"
     [[ -f "$HOME/.copilot/settings.json" ]] \
                                         && pass "Copilot settings written"                     || fail "Copilot settings missing"
-    [[ -L "$HOME/.copilot/skills/brainstorming" ]] \
+    # Probe a superpowers-only skill. brainstorming is unusable here: this repo
+    # ships its own skills/brainstorming/, and _install_local_skills replaces
+    # the superpowers symlink with the repo copy, so the check always failed.
+    [[ -L "$HOME/.copilot/skills/test-driven-development" ]] \
                                         && pass "Superpowers for Copilot installed (flat symlinks)" || fail "Superpowers for Copilot not installed"
     { command_exists bun || [[ -x "$HOME/.bun/bin/bun" ]]; } \
                                         && pass "bun installed (gstack dependency)"             || fail "bun not installed (required by gstack)"
@@ -129,4 +140,18 @@ verify_copilot() {
                                         && pass "gstack installed for Copilot"                  || fail "gstack not installed for Copilot"
     [[ -e "$HOME/.copilot/extensions/prompt-injection-guard/extension.mjs" ]] \
                                         && pass "prompt-injection-guard extension installed"    || fail "prompt-injection-guard extension missing"
+
+    # Check local skills installed. Mirrors verify_claude: assert every skill
+    # this repo ships, rather than probing one name as a proxy.
+    local skill src skills_dir="$HOME/.copilot/skills"
+    [[ -d "$skills_dir" ]] \
+        && pass "Copilot skills directory exists" \
+        || fail "Copilot skills directory missing (~/.copilot/skills/)"
+    for src in "${SCRIPT_DIR}/skills"/*/; do
+        [[ -d "$src" ]] || continue
+        skill="$(basename "$src")"
+        [[ -f "${skills_dir}/${skill}/SKILL.md" ]] \
+            && pass "Copilot skill installed: ${skill}" \
+            || fail "Copilot skill missing: ${skill}"
+    done
 }

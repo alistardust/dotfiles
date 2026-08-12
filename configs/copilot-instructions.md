@@ -214,6 +214,33 @@ do not block the current task on it.
   that could be difficult or impossible to reverse, explicitly surface the risks,
   blast radius, and rollback options before proceeding.
 
+## Output Directories
+
+Agent-authored output goes under `~/Documents/copilot-output/`:
+
+    work/<project-slug>/             work with no ticket
+    work/tickets/<id>-<descriptor>/  ticket work (ops-8520-census)
+    personal/<project-slug>/         personal-life work
+
+Invariants that apply even without the skill loaded:
+
+- Never write a loose file at a domain root. Always a project directory,
+  even for a one-off.
+- Directory names are lowercase and hyphen-separated, ticket IDs included
+  (`ops-8520`, never `OPS-8520`).
+- Reuse an existing project directory before creating a new one.
+- Filenames are short and specific, and never repeat the directory name. In
+  `work/kafka-retention-tuning/` write `followup-analysis.md`, never
+  `kafka-retention-tuning-followup-analysis.md`. Never `notes.md`,
+  `output.md`, `final.md`.
+- The first version of a document is unsuffixed. Add `-vN` only when a second
+  draft is written: at that point `mv` the original to `-v1` and write `-v2`.
+  Never `cp`, and never start at `-v1`.
+- Ask before writing when the work is not clearly work or personal.
+
+See the `output-filing` skill for the rest: dates, extensions, and ticket
+description handling.
+
 ## Superpowers Skills
 
 You have Superpowers skills installed. Before any task, check if a relevant skill applies.
@@ -244,6 +271,5 @@ Priority order:
 #   ## Context
 #   ## Safety and Security     (work-specific rules)
 #   ## Commit and Branch Rules
-#   ## Output Directories
 #
 # Populate these per machine.
