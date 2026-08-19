@@ -31,6 +31,41 @@ SKILLS_SHARED=(
 # All directories in skills/ are installed automatically. No manual list needed.
 # To add a new skill: create skills/<name>/SKILL.md and re-run setup.
 
+# gstack ships a telemetry client that syncs skill usage, including repository
+# names, to a third-party Supabase endpoint. It defaults to off, but the flag
+# lives in gstack's own state directory where a package update can reset it.
+# Reassert it here and clear any usage log that accumulated between runs.
+_copilot_skills_harden_gstack() {
+    local state_dir="${HOME}/.gstack"
+    local config="${state_dir}/config.yaml"
+    local analytics="${state_dir}/analytics"
+
+    [[ -d "$state_dir" ]] || return 0
+
+    if [[ ! -f "$config" ]]; then
+        run tee "$config" <<< 'telemetry: off'
+        ok "gstack telemetry set to off"
+    elif grep -qE '^telemetry:[[:space:]]*off[[:space:]]*$' "$config"; then
+        ok "gstack telemetry already off"
+    elif grep -qE '^telemetry:' "$config"; then
+        run sed -i.dotbak -E 's/^telemetry:.*/telemetry: off/' "$config"
+        run rm -f "${config}.dotbak"
+        warn "gstack telemetry was re-enabled; reset to off"
+    else
+        run tee -a "$config" <<< 'telemetry: off'
+        ok "gstack telemetry set to off"
+    fi
+
+    # The skill preamble recreates these on every invocation, so clear them
+    # rather than trying to prevent the write.
+    local logs
+    logs=$(find "$analytics" -maxdepth 1 -name '*.jsonl' 2>/dev/null | wc -l | tr -d ' ')
+    if [[ "$logs" -gt 0 ]]; then
+        run find "$analytics" -maxdepth 1 -name '*.jsonl' -delete
+        ok "Cleared ${logs} gstack usage log(s)"
+    fi
+}
+
 section_copilot_skills() {
     log "Installing Copilot skills (profiles: work=${SKILLS_PROFILE[work]}, home=${SKILLS_PROFILE[home]})..."
 
@@ -69,6 +104,8 @@ sys.exit(1)
     _install_local_skills "$HOME/.copilot/skills"
     ok "All local skills installed to ~/.copilot/skills/"
 
+    _copilot_skills_harden_gstack
+
     if ! command_exists gh && [[ "$DRY_RUN" != "true" ]]; then
         warn "gh CLI not found. Install GitHub CLI first: https://cli.github.com/"
         return 1
@@ -99,33 +136,6 @@ sys.exit(1)
     done
 
     ok "Copilot skills installation complete."
-
-    # Install GSD (Get Shit Done) context engineering skills
-    _copilot_skills_install_gsd
-}
-
-_copilot_skills_install_gsd() {
-    if [[ -f "${HOME}/.copilot/skills/gsd-new-project/SKILL.md" ]]; then
-        ok "GSD skills already installed (Copilot)"
-    else
-        if command_exists npx; then
-            run npx get-shit-done-cc@latest --copilot --global --profile=full
-            ok "Installed GSD skills (Copilot)"
-        else
-            warn "npx not found; skipping GSD installation. Install Node.js first."
-        fi
-    fi
-
-    if [[ -f "${HOME}/.claude/skills/gsd-new-project/SKILL.md" ]]; then
-        ok "GSD skills already installed (Claude Code)"
-    else
-        if command_exists npx; then
-            run npx get-shit-done-cc@latest --claude --global --profile=full
-            ok "Installed GSD skills (Claude Code)"
-        else
-            warn "npx not found; skipping GSD installation for Claude Code."
-        fi
-    fi
 }
 
 # -- Verification (--verify mode) ---------------------------------------------
@@ -199,13 +209,18 @@ verify_copilot_skills() {
         done
     fi
 
-    # Verify GSD core skills are installed
-    local gsd_core_skills=(gsd-new-project gsd-plan-phase gsd-discuss-phase gsd-execute-phase gsd-map-codebase)
-    for skill in "${gsd_core_skills[@]}"; do
-        [[ -f "${skills_dir}/${skill}/SKILL.md" ]] \
-            && pass "GSD skill installed: ${skill}" \
-            || fail "GSD skill missing: ${skill} (run: npx get-shit-done-cc@latest --copilot --global --profile=full)"
-    done
+    # gstack telemetry syncs usage to a third-party endpoint; it must stay off
+    if [[ -d "${HOME}/.gstack" ]]; then
+        grep -qE '^telemetry:[[:space:]]*off[[:space:]]*$' "${HOME}/.gstack/config.yaml" 2>/dev/null \
+            && pass "gstack telemetry is off" \
+            || fail "gstack telemetry is not off"
+
+        local stale_logs
+        stale_logs=$(find "${HOME}/.gstack/analytics" -maxdepth 1 -name '*.jsonl' 2>/dev/null | wc -l | tr -d ' ')
+        [[ "$stale_logs" -eq 0 ]] \
+            && pass "No gstack usage logs on disk" \
+            || warn "${stale_logs} gstack usage log(s) present; re-run setup to clear"
+    fi
 
     # Verify conductor registry is not stale (warn if installed skills exist outside registry)
     if [[ -f "${skills_dir}/skill-conductor/SKILL.md" ]]; then
