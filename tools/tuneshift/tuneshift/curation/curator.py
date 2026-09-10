@@ -7,6 +7,15 @@ from tuneshift.curation.scoring import score_track_contribution
 from tuneshift.sequencer.metadata import TrackMetadata
 
 
+class CurationConstraintError(RuntimeError):
+    """The constraints cannot be met without cutting a protected track.
+
+    Raised instead of silently discarding a pin (BUG-22). A pin is the one
+    explicit instruction the user has given, so trim stops and reports rather
+    than resolving the conflict on its own.
+    """
+
+
 @dataclass
 class CurationResult:
     keep: list[TrackMetadata]
@@ -18,9 +27,19 @@ def curate_trim(
     tracks: list[TrackMetadata],
     ctx: PlaylistContext,
     constraints: dict,
+    protected_ids: frozenset[int] | set[int] | None = None,
 ) -> CurationResult:
-    """Trim playlist to meet constraints, cutting lowest-scoring tracks first."""
-    # Score all tracks
+    """Trim playlist to meet constraints, cutting lowest-scoring tracks first.
+
+    ``protected_ids`` are never cut, regardless of score or duration pressure
+    (BUG-22). When the count target is lower than the number of protected
+    tracks, :class:`CurationConstraintError` is raised rather than cutting one.
+
+    A ``track_count`` target is exact (BUG-23): it is never padded by a
+    tolerance. ``hard_limit`` remains a separate, lower ceiling when supplied.
+    """
+    protected = frozenset(protected_ids or ())
+
     scored = []
     for track in tracks:
         scores = score_track_contribution(track, ctx, tracks)
@@ -36,35 +55,52 @@ def curate_trim(
 
     if "track_count" in constraints:
         tc = constraints["track_count"]
-        target_count = tc.get("target", len(tracks))
+        target_count = tc.get("target")
         hard_limit_count = tc.get("hard_limit", len(tracks)) or len(tracks)
 
+    eligible = scored
     if "duration" in constraints:
         dc = constraints["duration"]
         hard_limit_ms = (dc.get("hard_limit_minutes") or 999) * 60 * 1000
-        # Greedily add tracks until duration exceeded
+        # Protected tracks claim their runtime first; only optional tracks are
+        # dropped to fit the ceiling.
+        total_ms = sum(t.duration_ms or 0 for t, _ in scored if t.track_id in protected)
         duration_limited = []
-        total_ms = 0
         for track, score in scored:
+            if track.track_id in protected:
+                duration_limited.append((track, score))
+                continue
             track_ms = track.duration_ms or 0
             if total_ms + track_ms > hard_limit_ms:
                 continue
             duration_limited.append((track, score))
             total_ms += track_ms
-        scored = duration_limited
-        hard_limit_count = min(hard_limit_count, len(scored))
+        eligible = duration_limited
+        hard_limit_count = min(hard_limit_count, len(eligible))
 
-    # Apply track count limit
-    keep_count = min(hard_limit_count, len(scored))
-    if target_count:
-        keep_count = min(
-            keep_count,
-            target_count + (constraints.get("track_count", {}).get("tolerance", 0)),
+    keep_count = min(hard_limit_count, len(eligible))
+    if target_count is not None:
+        keep_count = min(keep_count, target_count)
+
+    protected_present = [t for t, _ in eligible if t.track_id in protected]
+    if keep_count < len(protected_present):
+        raise CurationConstraintError(
+            f"cannot trim to {keep_count} track(s) without cutting "
+            f"{len(protected_present)} pinned track(s); "
+            "raise the target or remove a pin"
         )
 
-    keep = [t for t, _ in scored[:keep_count]]
-    cut = [t for t in tracks if t not in keep]
-    reasoning = {t.track_id: f"score={s:.2f}" for t, s in scored[:keep_count]}
+    keep_ids = {t.track_id for t in protected_present}
+    for track, _score in eligible:
+        if len(keep_ids) >= keep_count:
+            break
+        keep_ids.add(track.track_id)
+
+    keep = [t for t, _ in eligible if t.track_id in keep_ids]
+    cut = [t for t in tracks if t.track_id not in keep_ids]
+    reasoning = {
+        t.track_id: f"score={s:.2f}" for t, s in eligible if t.track_id in keep_ids
+    }
 
     return CurationResult(keep=keep, cut=cut, reasoning=reasoning)
 

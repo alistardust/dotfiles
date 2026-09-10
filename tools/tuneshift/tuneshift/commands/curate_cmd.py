@@ -1,7 +1,13 @@
 """Curate command: trim, analyze, or fill playlists."""
 
+import sys
+
 from tuneshift.curation.context import PlaylistContext
-from tuneshift.curation.curator import curate_analyze, curate_trim
+from tuneshift.curation.curator import (
+    CurationConstraintError,
+    curate_analyze,
+    curate_trim,
+)
 from tuneshift.db import Database
 from tuneshift.sequencer.metadata import get_track_metadata_map
 
@@ -48,17 +54,51 @@ def handle_curate(args, db: Database) -> int:
     if args.mode == "trim":
         constraints = {}
         if hasattr(args, "target_tracks") and args.target_tracks:
+            # BUG-23: the target is exact. No tolerance padding, and no
+            # inflated hard limit; --hard-limit is honoured only when given.
             constraints["track_count"] = {
                 "target": args.target_tracks,
-                "tolerance": 2,
-                "hard_limit": getattr(args, "hard_limit", None)
-                or args.target_tracks + 2,
+                "hard_limit": getattr(args, "hard_limit", None),
             }
         stored_constraints = db.get_constraints(pid)
         if stored_constraints:
-            constraints.update(stored_constraints)
+            # An explicit --target-tracks is the user speaking now; a stored
+            # constraint is what they said earlier. The CLI wins per key
+            # rather than being silently replaced wholesale. Keys the CLI did
+            # not set (a stored hard_limit, say) are still honoured.
+            merged = dict(stored_constraints)
+            for key, value in constraints.items():
+                if isinstance(value, dict) and isinstance(merged.get(key), dict):
+                    combined = dict(merged[key])
+                    combined.update({k: v for k, v in value.items() if v is not None})
+                    merged[key] = combined
+                else:
+                    merged[key] = value
+            constraints = merged
 
-        result = curate_trim(tracks, ctx, constraints)
+        # BUG-22: pins are protected instructions, not suggestions.
+        protected_ids = frozenset(pin.track_id for pin in db.get_pins(pid))
+
+        try:
+            result = curate_trim(tracks, ctx, constraints, protected_ids=protected_ids)
+        except CurationConstraintError as exc:
+            print(f"Trim aborted: {exc}", file=sys.stderr)
+            return 1
+
+        target = constraints.get("track_count", {}).get("target")
+        # Only a genuinely binding constraint is worth reporting: if the
+        # playlist was simply shorter than the target, nothing was cut and
+        # there is nothing to explain.
+        if (
+            target is not None
+            and len(result.keep) != target
+            and len(tracks) > len(result.keep)
+        ):
+            print(
+                f"Note: kept {len(result.keep)} tracks, not the requested "
+                f"{target}; another constraint is binding.",
+                file=sys.stderr,
+            )
 
         if args.dry_run:
             print(
@@ -66,6 +106,8 @@ def handle_curate(args, db: Database) -> int:
             )
             for track in result.cut:
                 print(f"  CUT: {track.title} - {track.artist}")
+            if protected_ids:
+                print(f"  ({len(protected_ids)} pinned track(s) protected)")
         else:
             # Apply the trim
             new_order = [t.track_id for t in result.keep]
