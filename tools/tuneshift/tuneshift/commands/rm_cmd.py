@@ -1,8 +1,96 @@
 """Remove command: remove a track from a playlist and sync to platforms."""
 
 import sys
+from pathlib import Path
 
 from tuneshift.db import Database
+
+
+def _primary_db_path() -> Path | None:
+    """Return the recorded primary database path, or None if unregistered."""
+    from tuneshift.persistence.primary import get_primary_db
+
+    return get_primary_db()
+
+
+def _is_primary_db(active: Path) -> bool:
+    """Whether ``active`` is the recorded primary database."""
+    from tuneshift.persistence.primary import is_primary_db
+
+    return is_primary_db(active)
+
+
+def _resolve_target(args, tracks):
+    """Resolve the CLI target to a ``(position, track)`` pair, or an exit code.
+
+    BUG-25: a bare number used to be matched against titles first, so a
+    positional intent could silently hit a track whose title merely contained
+    that digit. An ambiguous bare number is now refused.
+    """
+    target = args.target
+    want_position = getattr(args, "position", False)
+    want_title = getattr(args, "title", False)
+
+    title_matches = [
+        (i + 1, t) for i, t in enumerate(tracks) if target.lower() in t.title.lower()
+    ]
+
+    try:
+        position = int(target)
+    except ValueError:
+        position = None
+
+    if want_position and position is None:
+        print(f'"{target}" is not a position.', file=sys.stderr)
+        return 1
+
+    if position is not None and not want_title:
+        if title_matches and not want_position:
+            print(
+                f'Ambiguous target "{target}": it is a valid position and also '
+                f"matches {len(title_matches)} title(s). "
+                "Re-run with --position or --title.",
+                file=sys.stderr,
+            )
+            return 1
+        if position < 1 or position > len(tracks):
+            print(
+                f"Position {position} out of range (1-{len(tracks)})",
+                file=sys.stderr,
+            )
+            return 1
+        return position, tracks[position - 1]
+
+    if not title_matches:
+        print(f'No track matching "{target}"', file=sys.stderr)
+        return 1
+
+    if len(title_matches) == 1:
+        return title_matches[0]
+
+    print(f'Multiple matches for "{target}":')
+    offered = dict(title_matches)
+    for pos, track in title_matches:
+        print(f"  {pos}. {track.title} - {track.artist}")
+    choice = input("Remove which position? ").strip()
+    try:
+        pos = int(choice)
+    except ValueError:
+        print("Cancelled.", file=sys.stderr)
+        return 1
+    # Only an offered position is accepted. Indexing the full track list here
+    # meant "0" selected tracks[-1], the LAST track, and "-1" selected another
+    # bystander: negative indices wrap instead of raising IndexError. That is
+    # the same class of failure as BUG-25, a number quietly selecting a track
+    # the user never named, and this path then pushes the removal live.
+    if pos not in offered:
+        print(
+            f"{pos} is not one of the offered positions "
+            f"({', '.join(str(p) for p in offered)}).",
+            file=sys.stderr,
+        )
+        return 1
+    return pos, offered[pos]
 
 
 def handle_rm(args, db: Database) -> int:
@@ -12,50 +100,59 @@ def handle_rm(args, db: Database) -> int:
         print(f"Playlist not found: {args.playlist}", file=sys.stderr)
         return 1
 
-    target = args.target
     tracks = db.get_playlist_tracks(playlist.id)
+    resolved = _resolve_target(args, tracks)
+    if isinstance(resolved, int):
+        return resolved
+    position, track = resolved
 
-    # Try title match first (even if target looks numeric, e.g., "360")
-    target_lower = target.lower()
-    matches = [
-        (i + 1, t) for i, t in enumerate(tracks) if target_lower in t.title.lower()
-    ]
+    platforms = db.get_linked_platforms(playlist.id)
+    label = f'"{track.title} - {track.artist}" (position {position})'
 
-    # If no title match and target is numeric, treat as position
-    if not matches:
-        try:
-            position = int(target)
-            if position < 1 or position > len(tracks):
+    if getattr(args, "dry_run", False):
+        print(f'Dry run: would remove {label} from "{playlist.name}"')
+        for platform_name in platforms:
+            print(f"  would push removal to {platform_name}")
+        if not platforms:
+            print("  no linked platforms; local removal only")
+        return 0
+
+    # BUG-24: a copied database is not a sandbox. platform_playlists travels
+    # with the copy, so a push from it reaches the same live playlist.
+    if platforms and not getattr(args, "allow_nonprimary_push", False):
+        active = Path(db.path).resolve()
+        if not _is_primary_db(active):
+            if _primary_db_path() is None:
+                # Unregistered is not the same as "this is a copy", and the
+                # remedy must not be the push override: a guard that answers
+                # every refusal with --allow-nonprimary-push teaches people to
+                # leave it on, which is precisely when BUG-24 bites.
                 print(
-                    f"Position {position} out of range (1-{len(tracks)})",
+                    "Refusing to push: no primary database is registered, so "
+                    "there is no way to tell this from a copy. Register the "
+                    "real one once with: tuneshift primary --set <path>",
                     file=sys.stderr,
                 )
-                return 1
-            track = tracks[position - 1]
-            had_failure = _remove_and_sync(db, playlist, track, position)
-            return 1 if had_failure else 0
-        except ValueError:
-            print(f'No track matching "{target}" in "{playlist.name}"', file=sys.stderr)
+            else:
+                print(
+                    f"Refusing to push: {active} is not the primary database "
+                    f"({_primary_db_path()}). Platform IDs travel with a "
+                    "copied database, so this would mutate the live playlist. "
+                    "Re-run with --allow-nonprimary-push if that is genuinely "
+                    "what you want.",
+                    file=sys.stderr,
+                )
             return 1
 
-    if len(matches) == 1:
-        pos, track = matches[0]
-        had_failure = _remove_and_sync(db, playlist, track, pos)
-        return 1 if had_failure else 0
+    if platforms and not getattr(args, "yes", False):
+        print(f'About to remove {label} from "{playlist.name}"')
+        print(f"  and push that removal live to: {', '.join(platforms)}")
+        if input("Proceed? [y/N] ").strip().lower() not in {"y", "yes"}:
+            print("Cancelled.", file=sys.stderr)
+            return 1
 
-    # Multiple matches: show and ask
-    print(f'Multiple matches for "{target}":')
-    for pos, track in matches:
-        print(f"  {pos}. {track.title} - {track.artist}")
-    choice = input("Remove which position? ").strip()
-    try:
-        pos = int(choice)
-        track = tracks[pos - 1]
-        had_failure = _remove_and_sync(db, playlist, track, pos)
-        return 1 if had_failure else 0
-    except (ValueError, IndexError):
-        print("Cancelled.", file=sys.stderr)
-        return 1
+    had_failure = _remove_and_sync(db, playlist, track, position)
+    return 1 if had_failure else 0
 
 
 def _remove_and_sync(db: Database, playlist, track, position: int) -> bool:

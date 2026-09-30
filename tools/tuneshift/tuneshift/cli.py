@@ -91,6 +91,33 @@ def build_parser() -> argparse.ArgumentParser:
     p_rm = sub.add_parser("rm", help="Remove a track from a playlist")
     p_rm.add_argument("playlist", help="Playlist name")
     p_rm.add_argument("target", help="Position number or title substring")
+    p_rm_how = p_rm.add_mutually_exclusive_group()
+    p_rm_how.add_argument(
+        "--position",
+        action="store_true",
+        help="Treat target strictly as a 1-based position",
+    )
+    p_rm_how.add_argument(
+        "--title",
+        action="store_true",
+        help="Treat target strictly as a title substring",
+    )
+    p_rm.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would be removed locally and pushed remotely",
+    )
+    p_rm.add_argument(
+        "-y",
+        "--yes",
+        action="store_true",
+        help="Skip the confirmation prompt before pushing to platforms",
+    )
+    p_rm.add_argument(
+        "--allow-nonprimary-push",
+        action="store_true",
+        help="Permit pushing even when the active DB is not the primary",
+    )
 
     # login
     p_login = sub.add_parser("login", help="Authenticate with a platform")
@@ -99,6 +126,16 @@ def build_parser() -> argparse.ArgumentParser:
     # status
     p_status = sub.add_parser("status", help="Show playlist status")
     p_status.add_argument("playlist", nargs="?", help="Playlist name (all if omitted)")
+
+    # primary
+    p_primary = sub.add_parser(
+        "primary", help="Show or set the primary (pushable) database"
+    )
+    p_primary.add_argument(
+        "--set",
+        metavar="PATH",
+        help="Record PATH as the primary database",
+    )
 
     # list
     sub.add_parser("list", help="List all playlists")
@@ -1233,6 +1270,7 @@ _SIMPLE_COMMANDS: dict[str, tuple[str, str]] = {
     "rm": ("tuneshift.commands.rm_cmd", "handle_rm"),
     "login": ("tuneshift.commands.login_cmd", "handle_login"),
     "status": ("tuneshift.commands.status_cmd", "handle_status"),
+    "primary": ("tuneshift.commands.primary_cmd", "handle_primary"),
     "list": ("tuneshift.commands.status_cmd", "handle_list"),
     "order": ("tuneshift.commands.order_cmd", "handle_order"),
     "pin": ("tuneshift.commands.pin_cmd", "handle_pin"),

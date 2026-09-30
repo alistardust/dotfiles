@@ -17,12 +17,14 @@ def _guard_production_db(
 ) -> Iterator[None]:
     """Prevent any test from opening the committed production ``tuneshift.db``.
 
-    Two layers of protection:
+    Three layers of protection:
 
     1. Point the default DB path (``TUNESHIFT_DB``) at a session-scoped temp file
        so a bare ``Database()`` never resolves the tracked artifact.
     2. Wrap ``Database.__init__`` to fail loudly if any code still resolves the
        tracked path (belt-and-suspenders against an explicit path argument).
+    3. Repoint the primary-database marker at a temp file so no test can read
+       or overwrite the real registration.
     """
     mp = pytest.MonkeyPatch()
     session_db = tmp_path_factory.mktemp("tuneshift-db") / "session.db"
@@ -43,6 +45,16 @@ def _guard_production_db(
         original_init(self, db_path)
 
     mp.setattr(_db.Database, "__init__", guarded_init)
+
+    # 3. Point the primary-database marker at a temp file so no test can read
+    #    or overwrite the real one in ~/.local/share/tuneshift/. Without this a
+    #    test that registers a primary would silently repoint the user's own
+    #    installation at a temp path that no longer exists.
+    import tuneshift.persistence.primary as _primary
+
+    session_marker = session_db.parent / "primary_db"
+    mp.setattr(_primary, "marker_path", lambda: session_marker)
+
     try:
         yield
     finally:
