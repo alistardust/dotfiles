@@ -22,6 +22,23 @@ from tuneshift.library.enrichment import capture_tidal_catalog
 from tuneshift.models import PlatformMapping, Track, TrackResult
 
 
+@pytest.fixture(autouse=True)
+def _no_llm_energy_estimate():
+    """Keep these tests offline.
+
+    BUG-17 made `enrich` populate energy/valence by default, which reaches the
+    LLM estimator. These tests are about Atmos/catalog capture, not energy, so
+    the estimator is stubbed out: without this a reachable local Ollama turns
+    the `enrich --platform tidal` case into a real network call.
+    """
+    with patch(
+        "tuneshift.enrichment.audio_features.estimate_energy_valence",
+        return_value=None,
+    ):
+        yield
+
+
+
 class _FakeAtmosTrack:
     name = "Levitating"
     duration = 203

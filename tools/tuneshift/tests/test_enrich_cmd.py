@@ -4,10 +4,29 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 
 from tuneshift.commands.enrich_cmd import handle_enrich
 from tuneshift.db import Database
 from tuneshift.models import PlatformMapping, Track
+
+
+
+@pytest.fixture(autouse=True)
+def _no_llm_energy_estimate():
+    """Keep these tests offline.
+
+    BUG-17 made `enrich` populate energy/valence by default, which reaches the
+    LLM estimator. These tests are about platform metadata, not energy, so the
+    estimator is stubbed out: without this a reachable local Ollama turns each
+    of them into a real network call.
+    """
+    with patch(
+        "tuneshift.enrichment.audio_features.estimate_energy_valence",
+        return_value=None,
+    ):
+        yield
 
 
 def _setup_playlist_with_mapping(db: Database) -> tuple[int, int]:

@@ -280,6 +280,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--refresh", action="store_true", help="Re-fetch even if metadata is cached"
     )
     p_enrich.add_argument(
+        "--no-energy",
+        action="store_true",
+        help="Skip energy/valence estimation (on by default)",
+    )
+    p_enrich.add_argument(
         "--dry-run",
         action="store_true",
         help="With --all: show what would be enriched without making API calls",

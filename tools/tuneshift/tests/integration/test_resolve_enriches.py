@@ -95,7 +95,7 @@ def test_resolve_runs_enricher_and_classifies(tmp_path: Path) -> None:
         patch("tuneshift.enrichment.pipeline.classify_track_grounded", return_value=classification),
         patch("tuneshift.library.enrichment._enrich_artist_via_llm"),
         patch(
-            "tuneshift.library.enrichment._ensure_energy_valence",
+            "tuneshift.library.enrichment.ensure_energy_valence",
             side_effect=lambda db, tid, **kw: db.set_track_fields(
                 tid, {"energy": 0.8, "valence": 0.9}, source="test"
             ),

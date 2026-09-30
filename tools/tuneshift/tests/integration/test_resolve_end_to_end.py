@@ -135,7 +135,7 @@ def test_add_then_resolve_hydrates_queue_metadata_and_candidates(tmp_path: Path)
         # exercised for real in test_resolve_enriches.py.
         patch("tuneshift.library.enrichment._enrich_artist_via_llm"),
         patch("tuneshift.enrichment.pipeline.classify_track_grounded", return_value=None),
-        patch("tuneshift.library.enrichment._ensure_energy_valence"),
+        patch("tuneshift.library.enrichment.ensure_energy_valence"),
     ):
         run_resolve(_resolve_args(), db)
 
@@ -172,7 +172,7 @@ def test_resolve_quarantines_when_no_candidate(tmp_path: Path) -> None:
         patch("tuneshift.commands.resolve._load_client", return_value=fake),
         patch("tuneshift.library.enrichment._enrich_artist_via_llm"),
         patch("tuneshift.enrichment.pipeline.classify_track_grounded", return_value=None),
-        patch("tuneshift.library.enrichment._ensure_energy_valence"),
+        patch("tuneshift.library.enrichment.ensure_energy_valence"),
     ):
         run_resolve(_resolve_args(), db)
 

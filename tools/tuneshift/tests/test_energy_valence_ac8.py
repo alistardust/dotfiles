@@ -90,11 +90,11 @@ def test_estimate_none_when_classifier_unavailable() -> None:
 def test_enrichment_preserves_partial_manual_energy(tmp_path: Path) -> None:
     """A hand-set energy (valence still null) must survive a later enrich pass.
 
-    Regression: _ensure_energy_valence gated only on both-fields-null, so a
+    Regression: ensure_energy_valence gated only on both-fields-null, so a
     partial manual edit triggered estimation that overwrote the manual value and
     flipped its provenance from "manual" to "enrichment".
     """
-    from tuneshift.library.enrichment import _ensure_energy_valence
+    from tuneshift.library.enrichment import ensure_energy_valence
 
     db = Database(tmp_path / "prov.db")
     track_id = db.add_track(Track(title="Levitating", artist="Dua Lipa"))
@@ -109,7 +109,7 @@ def test_enrichment_preserves_partial_manual_energy(tmp_path: Path) -> None:
             def complete(*_a, **_k):
                 return '{"energy": 0.99, "valence": 0.99}'
 
-    _ensure_energy_valence(db, track_id, classifier=_Classifier())
+    ensure_energy_valence(db, track_id, classifier=_Classifier())
 
     track = db.get_track(track_id)
     assert track.energy == 0.42  # manual value untouched

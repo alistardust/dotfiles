@@ -80,7 +80,9 @@ def enrich_track(
 
     # Energy/valence (AC8): estimate when absent so the wave sequencer is not
     # ordering blind. Uses the injected classifier for the LLM estimate.
-    _ensure_energy_valence(db, track_id, classifier=classifier, refresh=refresh)
+    # Public (not underscore-prefixed) because the enrich command calls it
+    # directly too: resolve is no longer the only route to it (BUG-17).
+    ensure_energy_valence(db, track_id, classifier=classifier, refresh=refresh)
 
 
 def make_enricher(
@@ -252,7 +254,7 @@ def _capture_tidal_catalog(
     )
 
 
-def _ensure_energy_valence(
+def ensure_energy_valence(
     db: Database, track_id: int, *, classifier=None, refresh: bool = False
 ) -> None:
     """Populate energy/valence when absent so the wave sequencer isn't blind (AC8).

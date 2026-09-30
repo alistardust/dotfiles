@@ -8,6 +8,42 @@ from tuneshift.db import Database
 logger = logging.getLogger(__name__)
 
 
+def _run_energy_pass(
+    db: Database,
+    tracks: list,
+    *,
+    refresh: bool = False,
+    model: str | None = None,
+) -> int:
+    """Populate energy/valence for tracks that lack it. Returns tracks changed.
+
+    BUG-17: the only route to :func:`ensure_energy_valence` used to be
+    ``enrich_track`` -> ``make_enricher`` -> ``resolve``, so ``enrich`` -- the
+    command named after enrichment -- could never write ``tracks.energy``, and
+    the documented workaround was the far heavier ``resolve --force``.
+
+    The classifier is built ONCE for the batch, mirroring ``make_enricher``, so
+    a long playlist does not re-detect the LLM backend per track. The fallback
+    chain inside ``ensure_energy_valence`` is Spotify-then-LLM: no platform
+    client is loaded and no Tidal call is made.
+    """
+    from tuneshift.library.enrichment import ensure_energy_valence
+    from tuneshift.sequencer.classifier import TrackClassifier
+
+    classifier = TrackClassifier(model=model)
+    changed = 0
+    for track in tracks:
+        before = db.get_track(track.id)
+        if before is None:
+            continue
+        previous = (before.energy, before.valence)
+        ensure_energy_valence(db, track.id, classifier=classifier, refresh=refresh)
+        after = db.get_track(track.id)
+        if after is not None and (after.energy, after.valence) != previous:
+            changed += 1
+    return changed
+
+
 def handle_enrich(args, db: Database) -> int:
     """Fetch BPM, key, and other audio metadata for tracks in a playlist."""
     from tuneshift.commands.ingest_cmd import _load_client
@@ -24,12 +60,36 @@ def handle_enrich(args, db: Database) -> int:
                 file=sys.stderr,
             )
             return 1
-        return enrich_all_playlists(
+        code = enrich_all_playlists(
             db,
             refresh=getattr(args, "refresh", False),
             max_retries=getattr(args, "max_retries", 3),
             dry_run=getattr(args, "dry_run", False),
         )
+        # BUG-17: --all is the whole-library sweep, so it must fill energy too.
+        # Collected across playlists and de-duplicated first, so a track on
+        # three playlists is estimated once, not three times.
+        if (
+            code == 0
+            and not getattr(args, "no_energy", False)
+            and not getattr(args, "dry_run", False)
+        ):
+            seen: set[int] = set()
+            every_track = []
+            for pl in db.list_playlists():
+                for track in db.get_playlist_tracks(pl.id):
+                    if track.id not in seen:
+                        seen.add(track.id)
+                        every_track.append(track)
+            changed = _run_energy_pass(
+                db,
+                every_track,
+                refresh=getattr(args, "refresh", False),
+                model=getattr(args, "model", None),
+            )
+            if changed:
+                print(f"Energy/valence: {changed} tracks estimated")
+        return code
 
     playlist = db.find_playlist_by_name(args.playlist)
     if not playlist:
@@ -130,6 +190,19 @@ def handle_enrich(args, db: Database) -> int:
         )
         if classified < 0:
             return 1
+
+    # BUG-17: energy/valence, the reason `enrich` existed but could not enrich.
+    # Runs by default (fill-only-if-null, so re-runs are cheap); --no-energy
+    # opts out. Contacts Spotify then the local LLM, never Tidal.
+    if not getattr(args, "no_energy", False):
+        changed = _run_energy_pass(
+            db,
+            tracks,
+            refresh=getattr(args, "refresh", False),
+            model=getattr(args, "model", None),
+        )
+        if changed:
+            print(f'Energy/valence for "{playlist.name}": {changed} tracks estimated')
 
     return 0
 
