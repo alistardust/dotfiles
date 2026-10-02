@@ -55,22 +55,26 @@ class TestRealRepositoryLayout:
 
         ``get_default_db_path()`` computes its path from
         ``persistence/base.py``, which is one directory deeper than the
-        package root, so in a source checkout it points at a file that does
-        not exist. Copying that arithmetic is what inverted the guard.
+        package root, so in a source checkout it points somewhere other than
+        the real database. Copying that arithmetic is what inverted the guard.
 
         If this ever starts failing, the layout changed and the recorded-path
         approach should be re-examined, but it must not be replaced by
         arithmetic again: the correct arithmetic differs between a source
         checkout and an installed wheel, so no single expression is right.
+
+        This asserts only the relationship between two computed paths. An
+        earlier version also asserted that nothing exists at the derived path,
+        which is a fact about the machine rather than about the code: it held
+        in a fresh worktree and failed in a checkout where a stray database
+        had been created, so the same commit passed or failed depending on
+        which directory it ran in. Detecting a stray on disk is an environment
+        check and now lives in ``doctor``.
         """
         from tuneshift.persistence import base
 
         derived = (Path(base.__file__).parent.parent / "tuneshift.db").resolve()
         assert derived != REPO_DB
-        assert not derived.exists(), (
-            f"a stray database exists at {derived}; a bare `tuneshift` "
-            "invocation would silently use it instead of the real library"
-        )
 
 
 class TestRegistration:

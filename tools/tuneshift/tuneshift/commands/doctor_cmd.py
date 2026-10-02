@@ -35,11 +35,26 @@ _ISSUE_LABELS = {
 
 
 def handle_doctor(args, db: Database) -> int:
+    _warn_about_environment(db)
     if getattr(args, "orphans", False) or getattr(args, "enqueue_orphans", False):
         return _handle_orphans(args, db)
     if getattr(args, "apply", False):
         return _handle_apply(args, db)
     return _handle_scan(args, db)
+
+
+def _warn_about_environment(db: Database) -> None:
+    """Report which database is in use, before anything that needs a login.
+
+    Advisory: these never change the exit code. An unusual layout is not a
+    broken one, and doctor's documented codes describe the scan result, not
+    the environment it ran in. Printed first because a scan against the wrong
+    database fails in ways that look like a platform problem (BUG-28).
+    """
+    from tuneshift.doctor.environment import check_database_environment
+
+    for warning in check_database_environment(db):
+        print(f"warning: {warning}", file=sys.stderr)
 
 
 def _handle_orphans(args, db: Database) -> int:
