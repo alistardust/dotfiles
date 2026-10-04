@@ -40,11 +40,25 @@ def marker_path() -> Path:
 
 
 def get_primary_db() -> Path | None:
-    """Return the recorded primary database path, or None if unregistered."""
+    """Return the recorded primary database path, or None if unregistered.
+
+    Only an absent marker means unregistered. Any other failure to read it is
+    raised, because a guard that cannot read its own registration must refuse
+    rather than assume the permissive answer.
+    """
+    from tuneshift import PrimaryMarkerError
+
+    marker = marker_path()
     try:
-        recorded = marker_path().read_text(encoding="utf-8").strip()
-    except OSError:
+        recorded = marker.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
         return None
+    except OSError as exc:
+        raise PrimaryMarkerError(
+            f"Cannot read the primary-database marker at {marker}: {exc}\n"
+            "  Fix its permissions, or re-register with:\n"
+            "    tuneshift primary --set <path>"
+        ) from exc
     return Path(recorded) if recorded else None
 
 

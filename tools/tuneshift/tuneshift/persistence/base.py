@@ -11,6 +11,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from tuneshift import DatabaseNotFoundError
 from tuneshift.matching.normalize import _WHITESPACE_RE
 from tuneshift.models import (
     Album,
@@ -18,6 +19,7 @@ from tuneshift.models import (
     Playlist,
     Track,
 )
+from tuneshift.persistence.primary import get_primary_db
 
 _SCHEMA_VERSION = 22
 
@@ -471,12 +473,119 @@ def normalize_ban_name(value: str) -> str:
     return cleaned.strip()
 
 
+SQLITE_FILE_HEADER = b"SQLite format 3\x00"
+
+
+def _read_file_header(path: Path) -> bytes:
+    """Return the leading bytes of ``path``, propagating any read failure.
+
+    Separated from :func:`is_sqlite_database` so that callers who can act on
+    the difference between "not a database" and "could not look" are able to,
+    while callers who only need a verdict keep a plain boolean.
+    """
+    with path.open("rb") as handle:
+        return handle.read(len(SQLITE_FILE_HEADER))
+
+
+def is_sqlite_database(path: Path) -> bool:
+    """Whether ``path`` holds a SQLite database, judged by its file header.
+
+    Existence is not evidence. BUG-28 left a zero-byte file at a path the old
+    resolution derived, so accepting anything that exists would reselect the
+    exact artifact this check was added to avoid.
+
+    The header is read directly rather than the file opened through SQLite,
+    because opening a database runs migrations against it: probing a suspect
+    file that way would modify the thing being judged, and would create it if
+    it were absent.
+    """
+    try:
+        return _read_file_header(path) == SQLITE_FILE_HEADER
+    except OSError:
+        return False
+
+
+def derived_db_candidates() -> tuple[Path, ...]:
+    """Database locations implied by the install layout, nearest first.
+
+    The two layouts disagree, so no single expression is correct: an editable
+    checkout puts the database beside the package, an installed wheel puts it
+    inside. Checkout order comes first, because a file inside the package of a
+    checkout is the BUG-28 stray rather than a library.
+    """
+    package_dir = Path(__file__).parent.parent
+    return (package_dir.parent / "tuneshift.db", package_dir / "tuneshift.db")
+
+
 def get_default_db_path() -> Path:
-    """Return DB path, respecting TUNESHIFT_DB env var."""
+    """Resolve the database to use when none was named on the command line.
+
+    Nearest intent wins: ``TUNESHIFT_DB``, then the registered primary, then a
+    database actually present where the install layout would put one.
+
+    A path the user named may be created, because naming it is the intent. A
+    path derived here is a guess, and creating a guess yields an empty database
+    indistinguishable from a lost collection (BUG-28), so a derived path is
+    taken only when a real database is already there.
+    """
     env_path = os.environ.get("TUNESHIFT_DB")
     if env_path:
         return Path(env_path)
-    return Path(__file__).parent.parent / "tuneshift.db"
+
+    recorded = get_primary_db()
+    if recorded is not None:
+        if not recorded.exists():
+            raise DatabaseNotFoundError(
+                f"The registered primary database is missing: {recorded}\n"
+                "  Restore it, or point the registration at its new location with:\n"
+                "    tuneshift primary --set <path>"
+            )
+        try:
+            header = _read_file_header(recorded)
+        except OSError as exc:
+            raise DatabaseNotFoundError(
+                f"The registered primary database cannot be read: {recorded}\n"
+                f"  {exc}\n"
+                "  The registration is fine; the file is not reachable. Fix its\n"
+                "  permissions, or re-register with:\n"
+                "    tuneshift primary --set <path>"
+            ) from exc
+        if header != SQLITE_FILE_HEADER:
+            raise DatabaseNotFoundError(
+                f"The registered primary database is not a database: {recorded}\n"
+                "  Something replaced or truncated it. Falling through to another\n"
+                "  library would silently swap collections, so this stops here.\n"
+                "  Restore it, or re-register the real one with:\n"
+                "    tuneshift primary --set <path>"
+            )
+        return recorded
+    candidates = derived_db_candidates()
+    present_but_unusable = []
+    for candidate in candidates:
+        if is_sqlite_database(candidate):
+            return candidate
+        if candidate.exists():
+            present_but_unusable.append(candidate)
+
+    looked = "\n".join(f"    {candidate}" for candidate in candidates)
+    message = (
+        "No database found, and refusing to create one at a guessed path.\n"
+        f"  Looked in:\n{looked}\n"
+    )
+    if present_but_unusable:
+        strays = "\n".join(f"    {path}" for path in present_but_unusable)
+        message += (
+            f"  Present, but not a database:\n{strays}\n"
+            "  A leftover empty file is the residue of an older bug; nothing here\n"
+            "  opened it, so confirm it holds nothing you need before deleting it.\n"
+        )
+    message += (
+        "  Open or create one explicitly with:\n"
+        "    tuneshift --db <path> ...\n"
+        "  Or register your library once with:\n"
+        "    tuneshift primary --set <path>"
+    )
+    raise DatabaseNotFoundError(message)
 
 
 class PersistenceBase:

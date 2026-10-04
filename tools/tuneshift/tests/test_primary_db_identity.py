@@ -50,31 +50,49 @@ class TestRealRepositoryLayout:
         primary.set_primary_db(REPO_DB)
         assert primary.is_primary_db(REPO_DB) is True
 
-    def test_file_arithmetic_from_persistence_does_not_find_it(self) -> None:
+    def test_the_inner_package_expression_does_not_find_it(self) -> None:
         """Documents WHY identity is recorded rather than derived.
 
-        ``get_default_db_path()`` computes its path from
-        ``persistence/base.py``, which is one directory deeper than the
-        package root, so in a source checkout it points somewhere other than
-        the real database. Copying that arithmetic is what inverted the guard.
+        The expression that caused the trouble computed from
+        ``persistence/base.py`` and stopped one directory short, landing
+        inside the package where no library exists in a checkout. Copying
+        that arithmetic is what inverted the primary guard.
 
-        If this ever starts failing, the layout changed and the recorded-path
-        approach should be re-examined, but it must not be replaced by
-        arithmetic again: the correct arithmetic differs between a source
-        checkout and an installed wheel, so no single expression is right.
+        Resolution no longer relies on a single expression: it checks both
+        layouts and takes whichever is really there. This test keeps the
+        cautionary fact anyway, because the inner position must never again
+        be treated as the only answer.
 
-        This asserts only the relationship between two computed paths. An
-        earlier version also asserted that nothing exists at the derived path,
+        An earlier version also asserted that nothing exists at that path,
         which is a fact about the machine rather than about the code: it held
         in a fresh worktree and failed in a checkout where a stray database
         had been created, so the same commit passed or failed depending on
-        which directory it ran in. Detecting a stray on disk is an environment
-        check and now lives in ``doctor``.
+        which directory it ran in. Detecting a stray on disk is an
+        environment check and now lives in ``doctor``.
         """
         from tuneshift.persistence import base
 
-        derived = (Path(base.__file__).parent.parent / "tuneshift.db").resolve()
-        assert derived != REPO_DB
+        inner = (Path(base.__file__).parent.parent / "tuneshift.db").resolve()
+        assert inner != REPO_DB
+
+    def test_resolution_finds_the_repo_database_in_this_layout(
+        self, marker: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A bare invocation in this checkout now reaches the real library.
+
+        This is the user-visible change BUG-28 brought: before the fix the
+        same invocation resolved to the inner path, created an empty file
+        there, and the collection appeared to be gone.
+
+        Asserting against the real repository layout on purpose. The hermetic
+        tests in ``test_default_db_path`` prove the rule; this proves the rule
+        lands correctly here.
+        """
+        from tuneshift.persistence.base import get_default_db_path
+
+        monkeypatch.delenv("TUNESHIFT_DB", raising=False)
+
+        assert get_default_db_path().resolve() == REPO_DB
 
 
 class TestRegistration:

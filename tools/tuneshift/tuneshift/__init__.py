@@ -20,6 +20,25 @@ class PlatformAuthError(TuneShiftError):
     """Platform authentication failed or session expired."""
 
 
+class DatabaseNotFoundError(TuneShiftError):
+    """No database could be resolved, and guessing one would be destructive.
+
+    Creating a database at a guessed path yields an empty library that is
+    indistinguishable from a lost collection, so resolution stops here instead.
+    """
+
+
+class PrimaryMarkerError(TuneShiftError):
+    """The primary-database marker exists but could not be read.
+
+    Distinct from "unregistered". Unregistered is an answer; this is a failure
+    to learn the answer. Collapsing the two would let a permissions problem or
+    a half-mounted home directory read as "no primary is registered", and the
+    push guard treats that state as a refusal with a named remedy, so a silent
+    demotion would route around the guard rather than trip it.
+    """
+
+
 class SequenceIntegrityError(TuneShiftError):
     """A sequencer returned a track set that differs from its input.
 

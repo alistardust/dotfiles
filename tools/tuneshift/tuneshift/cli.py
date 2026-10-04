@@ -6,10 +6,12 @@ import logging
 import os
 import sys
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
-from tuneshift import TuneShiftError, __version__
+from tuneshift import DatabaseNotFoundError, TuneShiftError, __version__
 from tuneshift.db import Database
+from tuneshift.persistence.base import get_default_db_path
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1358,6 +1360,69 @@ def _dispatch_command(args: Any, db: Database) -> int | None:
     return handler(args, db)
 
 
+_COMMANDS_WITHOUT_DATABASE = frozenset({"login", "config", "primary"})
+"""Commands that repair the environment itself.
+
+Requiring a working database here would put the remedy behind the condition
+it remedies: ``login`` stores credentials before a library exists, ``config``
+edits settings on disk, and ``primary`` is the documented way out of an
+unresolvable or unusable database.
+"""
+
+
+def _open_database(
+    db_path: Path | None,
+) -> tuple[Database | None, TuneShiftError | None]:
+    """Open the database, returning any failure instead of raising it.
+
+    Opening happens before the dispatch error boundary, so every failure here
+    used to escape as a traceback. Returning the error lets the caller decide
+    whether it is fatal, which depends on the command.
+    """
+    import sqlite3
+
+    try:
+        resolved = db_path if db_path is not None else get_default_db_path()
+    except TuneShiftError as exc:
+        return None, exc
+
+    try:
+        return Database(resolved), None
+    except TuneShiftError as exc:
+        return None, exc
+    except sqlite3.DatabaseError as exc:
+        return None, DatabaseNotFoundError(
+            f"Not a usable database: {resolved}\n"
+            f"  SQLite reported: {exc}\n"
+            "  Open a different one with:\n"
+            "    tuneshift --db <path> ...\n"
+            "  Or register your library with:\n"
+            "    tuneshift primary --set <path>"
+        )
+    except ValueError as exc:
+        return None, DatabaseNotFoundError(f"Cannot open {resolved}: {exc}")
+    except OSError as exc:
+        return None, DatabaseNotFoundError(
+            f"Cannot open {resolved}: {exc}\n"
+            "  The path itself is unusable, so no library was opened. Name a\n"
+            "  different one with:\n"
+            "    tuneshift --db <path> ..."
+        )
+
+
+def _dispatch_without_database(args: Any) -> int:
+    """Run the environment-repair commands when no database could be opened."""
+    if args.command == "primary":
+        from tuneshift.commands.primary_cmd import handle_primary
+
+        return handle_primary(args, None)
+    if args.command == "login":
+        from tuneshift.commands.login_cmd import handle_login
+
+        return handle_login(args, None)
+    return _handle_config(args)
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run the tuneshift CLI."""
     parser = build_parser()
@@ -1369,13 +1434,18 @@ def main(argv: list[str] | None = None) -> int:
 
     _configure_logging(args)
 
-    from pathlib import Path
-
     db_path = Path(args.db) if args.db else None
-    db = Database(db_path)
+    db, db_error = _open_database(db_path)
+    if db is None and args.command not in _COMMANDS_WITHOUT_DATABASE:
+        print(f"Error: {db_error}", file=sys.stderr)
+        return 1
 
     try:
-        result = _dispatch_command(args, db)
+        result = (
+            _dispatch_without_database(args)
+            if db is None
+            else _dispatch_command(args, db)
+        )
         if result is None:
             parser.print_help()
             return 1
@@ -1395,7 +1465,8 @@ def main(argv: list[str] | None = None) -> int:
             traceback.print_exc()
         return 2
     finally:
-        db.close()
+        if db is not None:
+            db.close()
 
 
 if __name__ == "__main__":
