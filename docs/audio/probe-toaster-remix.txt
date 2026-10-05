@@ -1,5 +1,5 @@
 audio-probe output
-generated: 2026-10-05T20:23:08Z
+generated: 2026-10-05T23:15:13Z
 
 
 ========== HOST AND KERNEL ==========
@@ -135,8 +135,8 @@ crw-rw---- 1 root audio 238, 1 Oct  5 16:09 /dev/fw1
 total 0
 --w------- 1 root root 4096 Oct  5 16:23 bind
 lrwxrwxrwx 1 root root    0 Oct  5 16:23 fw1.0 -> ../../../../devices/pci0000:00/0000:00:01.3/0000:02:00.2/0000:03:00.0/0000:04:00.0/0000:05:00.0/fw1/fw1.0
-lrwxrwxrwx 1 root root    0 Oct  5 16:09 module -> ../../../../module/snd_dice
---w------- 1 root root 4096 Oct  5 16:08 uevent
+lrwxrwxrwx 1 root root    0 Oct  5 16:23 module -> ../../../../module/snd_dice
+--w------- 1 root root 4096 Oct  5 16:23 uevent
 --w------- 1 root root 4096 Oct  5 16:23 unbind
 
 
@@ -196,6 +196,8 @@ alias:          ieee1394:ven00000166mo00000021sp*ver*
                       Focusrite SAFFIRE_PRO_40 (serial 57642) at fw1.0, S400
  1 [USB            ]: USB-Audio - Scarlett Solo USB
                       Focusrite Scarlett Solo USB at usb-0000:10:00.3-3, high speed
+ 2 [V49            ]: USB-Audio - V49
+                      Alesis V49 at usb-0000:02:00.0-4, full speed
  4 [Audio          ]: USB-Audio - iFi (by AMR) HD USB Audio
                       iFi (by AMR) iFi (by AMR) HD USB Audio at usb-0000:10:00.3-4, high speed
  5 [C615           ]: USB-Audio - HD Webcam C615
@@ -241,6 +243,7 @@ card 5: C615 [HD Webcam C615], device 0: USB Audio [USB Audio]
 --- card ids ---
 /proc/asound/card0/id: Pro4000e12a
 /proc/asound/card1/id: USB
+/proc/asound/card2/id: V49
 /proc/asound/card4/id: Audio
 /proc/asound/card5/id: C615
 
@@ -260,6 +263,8 @@ numid=10,iface=MIXER,name='Direct Monitor Playback Switch'
 numid=9,iface=MIXER,name='Phantom Power Persistence Capture Switch'
 numid=2,iface=PCM,name='Capture Channel Map'
 numid=1,iface=PCM,name='Playback Channel Map'
+
+--- controls on card 2 ---
 
 --- controls on card 4 ---
 numid=6,iface=CARD,name='iFi (by AMR) Internal Clock Validity'
@@ -283,17 +288,18 @@ Bus 001 Device 002: ID 0b05:190e ASUSTek Computer, Inc. ASUS USB-BT500
 Bus 001 Device 003: ID 046d:082c Logitech, Inc. HD Webcam C615
 Bus 001 Device 004: ID 0b05:1872 ASUSTek Computer, Inc. AURA LED Controller
 Bus 001 Device 005: ID 0cf2:a102 ENE Technology, Inc. LianLi-SL-infinity-v1.4
+Bus 001 Device 006: ID 13b2:0087 Alesis V49
 Bus 002 Device 001: ID 1d6b:0003 Linux Foundation 3.0 root hub
 Bus 003 Device 001: ID 1d6b:0002 Linux Foundation 2.0 root hub
 Bus 004 Device 001: ID 1d6b:0003 Linux Foundation 3.0 root hub
 Bus 005 Device 001: ID 1d6b:0002 Linux Foundation 2.0 root hub
 Bus 005 Device 002: ID 1235:8211 Focusrite-Novation Scarlett Solo (3rd Gen.)
 Bus 005 Device 003: ID 20b1:3008 XMOS Ltd iFi (by AMR) HD USB Audio
-Bus 005 Device 010: ID 05e3:0610 Genesys Logic, Inc. Hub
-Bus 005 Device 011: ID 3297:1969 ZSA Technology Labs Moonlander Mark I
-Bus 005 Device 012: ID 046d:c08b Logitech, Inc. G502 SE HERO Gaming Mouse
+Bus 005 Device 097: ID 05e3:0610 Genesys Logic, Inc. Hub
+Bus 005 Device 098: ID 3297:1969 ZSA Technology Labs Moonlander Mark I
+Bus 005 Device 099: ID 046d:c08b Logitech, Inc. G502 SE HERO Gaming Mouse
 Bus 006 Device 001: ID 1d6b:0003 Linux Foundation 3.0 root hub
-Bus 006 Device 004: ID 05e3:0626 Genesys Logic, Inc. Hub
+Bus 006 Device 033: ID 05e3:0626 Genesys Logic, Inc. Hub
 
 --- usb audio stream info ---
 /proc/asound/card1/stream0: Focusrite Scarlett Solo USB at usb-0000:10:00.3-3, high speed : USB Audio
@@ -421,8 +427,41 @@ Capture:
 
 --- usb ids ---
 /proc/asound/card1/usbid: 1235:8211
+/proc/asound/card2/usbid: 13b2:0087
 /proc/asound/card4/usbid: 20b1:3008
 /proc/asound/card5/usbid: 046d:082c
+
+
+========== MIDI DEVICES ==========
+
+--- alsa sequencer clients ---
+client 0: 'System' [type=kernel]
+    0 'Timer           '
+	Connecting To: 144:0
+    1 'Announce        '
+	Connecting To: 144:0
+client 14: 'Midi Through' [type=kernel]
+    0 'Midi Through Port-0'
+client 16: 'Pro40-00e12a' [type=kernel,card=0]
+    0 'Pro40-00e12a MIDI 1'
+client 24: 'V49' [type=kernel,card=2]
+    0 'V49 In          '
+    1 'V49 EDITOR In   '
+client 144: 'PipeWire-System' [type=user,pid=10412]
+    0 'input           '
+	Connected From: 0:1, 0:0
+client 145: 'PipeWire-RT-Event' [type=user,pid=10412]
+    0 'input           '
+
+--- alsa rawmidi devices ---
+Dir Device    Name
+IO  hw:0,0,0  Pro40-00e12a MIDI 1
+IO  hw:2,0,0  V49 Out
+IO  hw:2,0,1  V49 EDITOR Out
+
+--- midi device nodes ---
+crw-rw----+ 1 root audio 116, 6 Oct  5 16:16 /dev/snd/midiC0D0
+crw-rw----+ 1 root audio 116, 9 Oct  5 19:13 /dev/snd/midiC2D0
 
 
 ========== AUDIO STACK PACKAGES ==========
@@ -432,7 +471,6 @@ error: package 'libffado' was not found
 error: package 'ffado-mixer' was not found
 error: package 'jack2' was not found
 error: package 'reaper' was not found
-error: package 'ardour' was not found
 pipewire 1:1.6.9-1
 pipewire-alsa 1:1.6.9-1
 pipewire-jack 1:1.6.9-1
@@ -442,7 +480,203 @@ qjackctl 1.0.6-1.1
 alsa-utils 1.2.16-1.1
 realtime-privileges 5-1
 rtkit 0.14-1.1
+ardour 9.8-1.1
 (exit 1)
+
+--- installed daw, plugin and bridge packages ---
+error: package 'setbfree' was not found
+error: package 'x42-plugins' was not found
+error: package 'zita-rev1' was not found
+error: package 'calf' was not found
+error: package 'lsp-plugins' was not found
+ardour 9.8-1.1
+drumgizmo 0.9.20-4.1
+sfizz 1.2.3-15
+hydrogen 1.2.6-4.1
+carla 2.5.10-4.1
+guitarix 0.47.0-5.1
+gxplugins.lv2 1.0-3.1
+yabridge 5.1.1-10
+wine-staging 11.19-1.1
+(exit 1)
+
+
+========== PLUGIN INVENTORY ==========
+
+--- lv2 (system) ---
+/usr/lib/lv2:
+atom.lv2
+buf-size.lv2
+carla.lv2
+core.lv2
+data-access.lv2
+drumgizmo.lv2
+dynmanifest.lv2
+event.lv2
+gx_aclipper.lv2
+gx_alembic.lv2
+gx_ampegsvt.lv2
+gx_amp.lv2
+gx_amp_stereo.lv2
+gxautowah.lv2
+gx_AxisFace.lv2
+gx_bajatubedriver.lv2
+gx_barkgraphiceq.lv2
+gx_blueamp.lv2
+gx_bmp.lv2
+gx_boobtube.lv2
+gxbooster.lv2
+gx_bossds1.lv2
+gx_bottlerocket.lv2
+gx_cabinet.lv2
+gx_chorus.lv2
+gx_clubdrive.lv2
+gx_colwah.lv2
+gx_compressor.lv2
+gx_CreamMachine.lv2
+gx_cstb.lv2
+gx_delay.lv2
+gx_detune.lv2
+gx_digital_delay.lv2
+gx_digital_delay_st.lv2
+gx_DOP250.lv2
+gx_duck_delay.lv2
+gx_duck_delay_st.lv2
+gxechocat.lv2
+gx_echo.lv2
+gx_epic.lv2
+gx_eternity.lv2
+gx_expander.lv2
+gx_flanger.lv2
+gx_fumaster.lv2
+gx_fuzzfacefm.lv2
+gx_fuzzface.lv2
+gx_fuzz.lv2
+gx_gcb_95.lv2
+gx_graphiceq.lv2
+gx_guvnor.lv2
+gx_Heathkit.lv2
+gx_hfb.lv2
+gx_hogsfoot.lv2
+gx_hornet.lv2
+gx_hotbox.lv2
+gx_hyperion.lv2
+gx_jcm800pre.lv2
+gx_jcm800pre_st.lv2
+gx_KnightFuzz.lv2
+gx_liquiddrive.lv2
+gx_livelooper.lv2
+gx_luna.lv2
+gx_maestro_fz1b.lv2
+gx_maestro_fz1s.lv2
+gx_mbcompressor.lv2
+gx_mbdelay.lv2
+gx_mbdistortion.lv2
+gx_mbecho.lv2
+gx_mbreverb.lv2
+gxmetal_amp.lv2
+gxmetal_head.lv2
+gx_MicroAmp.lv2
+gx_mole.lv2
+gx_muff.lv2
+gx_mxrdist.lv2
+gx_oc_2.lv2
+gx_phaser.lv2
+gx_plexi.lv2
+gx_quack.lv2
+gx_rangem.lv2
+gx_redeye.lv2
+gx_reverb.lv2
+gx_room_simulator.lv2
+gx_saturate.lv2
+gx_scream.lv2
+gx_sd1sim.lv2
+gx_sd2lead.lv2
+gx_sfp.lv2
+gx_shakatube.lv2
+gx_shimmizita.lv2
+gx_sloopyblue.lv2
+gx_slowgear.lv2
+gx_studiopre.lv2
+gx_studiopre_st.lv2
+gx_SunFace.lv2
+gx_supersonic.lv2
+gx_susta.lv2
+gx_switched_tremolo.lv2
+gxtape.lv2
+gxtape_st.lv2
+gxtilttone.lv2
+gx_timray.lv2
+gx_tonemachine.lv2
+gx_tremolo.lv2
+gxts9.lv2
+gxtubedelay.lv2
+gx_TubeDistortion.lv2
+gxtubetremelo.lv2
+gxtubevibrato.lv2
+gxtuner.lv2
+gx_ultracab.lv2
+gx_uvox.lv2
+gx_valvecaster.lv2
+gx_vfm.lv2
+gx_vmk2d.lv2
+gx_voodoo.lv2
+gx_voxbass.lv2
+gx_vstb.lv2
+gx_w20.lv2
+gx_zita_rev1.lv2
+instance-access.lv2
+log.lv2
+midi.lv2
+morph.lv2
+options.lv2
+parameters.lv2
+patch.lv2
+port-groups.lv2
+port-props.lv2
+presets.lv2
+resize-port.lv2
+schemas.lv2
+sfizz.lv2
+state.lv2
+time.lv2
+ui.lv2
+units.lv2
+urid.lv2
+uri-map.lv2
+worker.lv2
+
+--- lv2 (local) ---
+(no such directory: /usr/local/lib/lv2)
+
+--- lv2 (user) ---
+(no such directory: /home/alice/.lv2)
+
+--- vst2 (system) ---
+/usr/lib/vst:
+carla.vst
+
+--- vst2 (user) ---
+(no such directory: /home/alice/.vst)
+
+--- vst3 (system) ---
+/usr/lib/vst3:
+sfizz.vst3
+
+--- vst3 (user) ---
+(no such directory: /home/alice/.vst3)
+
+--- clap (system) ---
+(no such directory: /usr/lib/clap)
+
+--- clap (user) ---
+(no such directory: /home/alice/.clap)
+
+--- plugin path overrides ---
+LV2_PATH=(unset)
+VST_PATH=(unset)
+VST3_PATH=(unset)
+CLAP_PATH=(unset)
 
 
 ========== PIPEWIRE RUNTIME ==========
@@ -457,7 +691,7 @@ Server String: /run/user/1000/pulse/native
 Library Protocol Version: 35
 Server Protocol Version: 35
 Is Local: yes
-Client Index: 178
+Client Index: 354
 Tile Size: 65472
 User Name: alice
 Host Name: toaster-remix
@@ -482,6 +716,17 @@ Cookie: 6008:42be
 76	alsa_input.usb-Focusrite_Scarlett_Solo_USB_Y73UHXX13BCDC0-00.HiFi__Mic1__source	PipeWire	float32le 1ch 48000Hz	SUSPENDED
 80	alsa_output.usb-iFi__by_AMR__iFi__by_AMR__HD_USB_Audio_0003-00.analog-stereo.monitor	PipeWire	s32le 2ch 48000Hz	SUSPENDED
 
+--- clock and quantum settings ---
+Found "settings" metadata 31
+update: id:0 key:'log.level' value:'2' type:''
+update: id:0 key:'clock.rate' value:'48000' type:''
+update: id:0 key:'clock.allowed-rates' value:'[ 48000 ]' type:''
+update: id:0 key:'clock.quantum' value:'256' type:''
+update: id:0 key:'clock.min-quantum' value:'128' type:''
+update: id:0 key:'clock.max-quantum' value:'256' type:''
+update: id:0 key:'clock.force-quantum' value:'0' type:''
+update: id:0 key:'clock.force-rate' value:'0' type:''
+
 --- pw-top snapshot ---
 S   ID  QUANT   RATE    WAIT    BUSY   W/Q   B/Q  ERR FORMAT           NAME 
 C   29      0      0    ---     ---   ---   ---     0                  Dummy-Driver
@@ -498,8 +743,8 @@ C   67      0      0    ---     ---   ---   ---     0                  alsa_inpu
 C   68      0      0    ---     ---   ---   ---     0                  alsa_input.usb-Focusrite_Scarlett_Solo_USB_Y73UHXX13BCDC0-00.HiFi__Mic1__source.split
 C   71      0      0    ---     ---   ---   ---     0                  alsa_output.usb-iFi__by_AMR__iFi__by_AMR__HD_USB_Audio_0003-00.analog-stereo
 C  127      0      0    ---     ---   ---   ---     0                  v4l2_input.pci-0000_02_00.0-usb-0_6_1.2
-C  139      0      0    ---     ---   ---   ---     0                  kwin_wayland
-C  142      0      0    ---     ---   ---   ---     0                  plasmashell
+C  155      0      0    ---     ---   ---   ---     0                  kwin_wayland
+C  135      0      0    ---     ---   ---   ---     0                  plasmashell
 
 
 ========== REALTIME CONFIGURATION ==========
