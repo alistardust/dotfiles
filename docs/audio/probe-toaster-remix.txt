@@ -1,0 +1,536 @@
+audio-probe output
+generated: 2026-10-05T20:23:08Z
+
+
+========== HOST AND KERNEL ==========
+
+--- kernel release ---
+7.2.9-1-cachyos
+
+--- distro ---
+NAME="CachyOS Linux"
+PRETTY_NAME="CachyOS"
+ID=cachyos
+ID_LIKE=arch
+BUILD_ID=rolling
+ANSI_COLOR="38;2;23;147;209"
+HOME_URL="https://cachyos.org/"
+DOCUMENTATION_URL="https://wiki.cachyos.org/"
+SUPPORT_URL="https://discuss.cachyos.org/"
+BUG_REPORT_URL="https://github.com/cachyos"
+PRIVACY_POLICY_URL="https://terms.archlinux.org/docs/privacy-policy/"
+LOGO=cachyos
+
+--- cachyos kernel packages ---
+local/linux-cachyos 7.2.9-1
+    The Linux EEVDF + LTO + AutoFDO + Propeller Cachy Sauce Kernel by CachyOS with other patches and improvements. kernel and modules
+local/linux-cachyos-dbg 7.2.9-1
+    Non-stripped vmlinux file for the Linux EEVDF + LTO + AutoFDO + Propeller Cachy Sauce Kernel by CachyOS with other patches and improvements. kernel
+local/linux-cachyos-headers 7.2.9-1
+    Headers and scripts for building modules for the Linux EEVDF + LTO + AutoFDO + Propeller Cachy Sauce Kernel by CachyOS with other patches and improvements. kernel
+local/linux-cachyos-lts 6.18.55-1
+    The Linux EEVDF + Cachy Sauce Kernel by CachyOS with other patches and improvements - Long Term Service kernel and modules
+local/linux-cachyos-lts-headers 6.18.55-1
+    Headers and scripts for building modules for the Linux EEVDF + Cachy Sauce Kernel by CachyOS with other patches and improvements - Long Term Service kernel
+
+--- cpu ---
+Architecture:                            x86_64
+CPU op-mode(s):                          32-bit, 64-bit
+Address sizes:                           48 bits physical, 48 bits virtual
+Byte Order:                              Little Endian
+CPU(s):                                  12
+On-line CPU(s) list:                     0-11
+Vendor ID:                               AuthenticAMD
+Model name:                              AMD Ryzen 5 5600X 6-Core Processor
+CPU family:                              25
+Model:                                   33
+Thread(s) per core:                      2
+Core(s) per socket:                      6
+Socket(s):                               1
+Stepping:                                0
+Microcode version:                       0xa20102e
+Frequency boost:                         disabled
+CPU(s) scaling MHz:                      99%
+CPU max MHz:                             3701.0000
+CPU min MHz:                             560.7580
+BogoMIPS:                                7399.84
+Flags:                                   fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl xtopology nonstop_tsc cpuid extd_apicid aperfmperf rapl pni pclmulqdq monitor ssse3 fma cx16 sse4_1 sse4_2 movbe popcnt aes xsave avx f16c rdrand lahf_lm cmp_legacy svm extapic cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw ibs skinit wdt tce topoext perfctr_core perfctr_nb bpext perfctr_llc mwaitx cpb cat_l3 cdp_l3 hw_pstate ssbd mba ibrs ibpb stibp vmmcall fsgsbase bmi1 avx2 smep bmi2 erms invpcid cqm rdt_a rdseed adx smap clflushopt clwb sha_ni xsaveopt xsavec xgetbv1 xsaves cqm_llc cqm_occup_llc cqm_mbm_total cqm_mbm_local user_shstk clzero irperf xsaveerptr rdpru wbnoinvd arat npt lbrv svm_lock nrip_save tsc_scale vmcb_clean flushbyasid decodeassists pausefilter pfthreshold avic v_vmsave_vmload vgif v_spec_ctrl umip pku ospke vaes vpclmulqdq rdpid overflow_recov succor smca fsrm debug_swap
+Virtualization:                          AMD-V
+L1d cache:                               192 KiB (6 instances)
+L1i cache:                               192 KiB (6 instances)
+L2 cache:                                3 MiB (6 instances)
+L3 cache:                                32 MiB (1 instance)
+NUMA node(s):                            1
+NUMA node0 CPU(s):                       0-11
+Vulnerability Gather data sampling:      Not affected
+Vulnerability Ghostwrite:                Not affected
+Vulnerability Indirect target selection: Not affected
+Vulnerability Itlb multihit:             Not affected
+Vulnerability L1tf:                      Not affected
+Vulnerability Mds:                       Not affected
+Vulnerability Meltdown:                  Not affected
+Vulnerability Mmio stale data:           Not affected
+Vulnerability Old microcode:             Not affected
+Vulnerability Reg file data sampling:    Not affected
+Vulnerability Retbleed:                  Not affected
+Vulnerability Spec rstack overflow:      Mitigation; Safe RET
+Vulnerability Spec store bypass:         Mitigation; Speculative Store Bypass disabled via prctl
+Vulnerability Spectre v1:                Mitigation; usercopy/swapgs barriers and __user pointer sanitization
+Vulnerability Spectre v2:                Mitigation; Retpolines; IBPB conditional; IBRS_FW; STIBP always-on; RSB filling; PBRSB-eIBRS Not affected; BHI Not affected
+Vulnerability Srbds:                     Not affected
+Vulnerability Tsa:                       Mitigation; Clear CPU buffers
+Vulnerability Tsx async abort:           Not affected
+Vulnerability Vmscape:                   Mitigation; IBPB before exit to userspace
+
+
+========== FIREWIRE CONTROLLER ==========
+
+--- pci 1394 controllers ---
+05:00.0 FireWire (IEEE 1394) [0c00]: Texas Instruments XIO2213A/B/XIO2221 IEEE-1394b OHCI Controller [Cheetah Express] [104c:823f] (rev 01)
+	Subsystem: Device [3412:7856]
+	Kernel driver in use: firewire_ohci
+	Kernel modules: firewire_ohci
+
+--- pci audio and 1394 by name ---
+05:00.0 FireWire (IEEE 1394) [0c00]: Texas Instruments XIO2213A/B/XIO2221 IEEE-1394b OHCI Controller [Cheetah Express] [104c:823f] (rev 01)
+0d:00.1 Audio device [0403]: Advanced Micro Devices, Inc. [AMD/ATI] Navi 31 HDMI/DP Audio [1002:ab30]
+10:00.4 Audio device [0403]: Advanced Micro Devices, Inc. [AMD] Starship/Matisse HD Audio Controller [1022:1487]
+
+
+========== FIREWIRE BUS DEVICES ==========
+
+--- vendor_name ---
+/sys/bus/firewire/devices/fw0/vendor_name: Linux Firewire
+/sys/bus/firewire/devices/fw1/vendor_name: Focusrite
+
+--- model_name ---
+/sys/bus/firewire/devices/fw0/model_name: Juju
+/sys/bus/firewire/devices/fw1.0/model_name: SAFFIRE_PRO_40
+/sys/bus/firewire/devices/fw1/model_name: SAFFIRE_PRO_40
+
+--- vendor id ---
+/sys/bus/firewire/devices/fw0/vendor: 0x001f11
+/sys/bus/firewire/devices/fw1/vendor: 0x00130e
+
+--- model id ---
+/sys/bus/firewire/devices/fw0/model: 0x023901
+/sys/bus/firewire/devices/fw1.0/model: 0x000005
+/sys/bus/firewire/devices/fw1/model: 0x000005
+
+--- guid ---
+/sys/bus/firewire/devices/fw0/guid: 0x7856341200001eeb
+/sys/bus/firewire/devices/fw1/guid: 0x00130e040140e12a
+
+--- unit specifier_id ---
+/sys/bus/firewire/devices/fw1.0/specifier_id: 0x00130e
+
+--- unit version ---
+/sys/bus/firewire/devices/fw1.0/version: 0x000001
+
+--- device nodes ---
+crw------- 1 root root  238, 0 Oct  5 16:08 /dev/fw0
+crw-rw---- 1 root audio 238, 1 Oct  5 16:09 /dev/fw1
+
+--- driver bindings ---
+total 0
+--w------- 1 root root 4096 Oct  5 16:23 bind
+lrwxrwxrwx 1 root root    0 Oct  5 16:23 fw1.0 -> ../../../../devices/pci0000:00/0000:00:01.3/0000:02:00.2/0000:03:00.0/0000:04:00.0/0000:05:00.0/fw1/fw1.0
+lrwxrwxrwx 1 root root    0 Oct  5 16:09 module -> ../../../../module/snd_dice
+--w------- 1 root root 4096 Oct  5 16:08 uevent
+--w------- 1 root root 4096 Oct  5 16:23 unbind
+
+
+========== KERNEL MODULES ==========
+
+--- loaded firewire and sound modules ---
+snd_seq_dummy          16384  0
+snd_seq_midi           24576  0
+snd_hrtimer            16384  1
+snd_seq_midi_event     16384  1 snd_seq_midi
+snd_seq               139264  9 snd_seq_midi,snd_seq_midi_event,snd_seq_dummy
+snd_ctl_led            24576  0
+snd_hda_codec_alc882    20480  0
+snd_hda_codec_realtek_lib    73728  1 snd_hda_codec_alc882
+snd_hda_codec_generic   126976  2 snd_hda_codec_realtek_lib,snd_hda_codec_alc882
+snd_hda_codec_atihdmi    20480  0
+snd_hda_codec_hdmi     61440  1 snd_hda_codec_atihdmi
+snd_hda_intel          69632  0
+snd_dice               61440  0
+snd_firewire_lib       77824  1 snd_dice
+snd_hda_codec         241664  6 snd_hda_codec_generic,snd_hda_codec_hdmi,snd_hda_intel,snd_hda_codec_realtek_lib,snd_hda_codec_alc882,snd_hda_codec_atihdmi
+snd_usb_audio         655360  5
+snd_usbmidi_lib        57344  1 snd_usb_audio
+snd_hda_core          159744  6 snd_hda_codec_generic,snd_hda_codec_hdmi,snd_hda_intel,snd_hda_codec,snd_hda_codec_realtek_lib,snd_hda_codec_atihdmi
+snd_ump                40960  1 snd_usb_audio
+snd_intel_dspcfg       49152  1 snd_hda_intel
+snd_rawmidi            53248  5 snd_seq_midi,snd_firewire_lib,snd_usbmidi_lib,snd_ump,snd_dice
+snd_intel_sdw_acpi     16384  1 snd_intel_dspcfg
+snd_seq_device         16384  4 snd_seq,snd_seq_midi,snd_ump,snd_rawmidi
+snd_hwdep              24576  3 snd_usb_audio,snd_hda_codec,snd_dice
+snd_pcm               233472  7 snd_hda_codec_hdmi,snd_hda_intel,snd_firewire_lib,snd_usb_audio,snd_hda_codec,snd_hda_core,snd_dice
+snd_timer              57344  3 snd_seq,snd_hrtimer,snd_pcm
+snd                   163840  28 snd_ctl_led,snd_hda_codec_generic,snd_seq,snd_seq_device,snd_hda_codec_hdmi,snd_hwdep,snd_hda_intel,snd_usb_audio,snd_usbmidi_lib,snd_hda_codec,snd_timer,snd_hda_codec_realtek_lib,snd_ump,snd_pcm,snd_dice,snd_rawmidi
+firewire_ohci          73728  0
+firewire_core         270336  3 snd_firewire_lib,firewire_ohci,snd_dice
+crc_itu_t              12288  1 firewire_core
+
+--- snd-dice available in this kernel build ---
+filename:       /lib/modules/7.2.9-1-cachyos/kernel/sound/firewire/dice/snd-dice.ko.zst
+description:    DICE driver
+author:         Clemens Ladisch <clemens@ladisch.de>
+license:        GPL
+name:           snd_dice
+intree:         Y
+depends:        snd-firewire-lib,snd,snd-rawmidi,snd-pcm,snd-hwdep,firewire-core
+alias:          ieee1394:ven0000A07Emo00000004sp0000A07Ever00000001*
+alias:          ieee1394:ven00000D6Cmo00000010sp*ver*
+alias:          ieee1394:ven00000D6Cmo00000011sp*ver*
+alias:          ieee1394:ven00000166mo00000020sp*ver*
+alias:          ieee1394:ven00000166mo00000021sp*ver*
+
+
+========== ALSA CARDS ==========
+
+--- cards ---
+ 0 [Pro4000e12a    ]: DICE - Pro40-00e12a
+                      Focusrite SAFFIRE_PRO_40 (serial 57642) at fw1.0, S400
+ 1 [USB            ]: USB-Audio - Scarlett Solo USB
+                      Focusrite Scarlett Solo USB at usb-0000:10:00.3-3, high speed
+ 4 [Audio          ]: USB-Audio - iFi (by AMR) HD USB Audio
+                      iFi (by AMR) iFi (by AMR) HD USB Audio at usb-0000:10:00.3-4, high speed
+ 5 [C615           ]: USB-Audio - HD Webcam C615
+                      HD Webcam C615 at usb-0000:02:00.0-6, high speed
+
+--- playback devices ---
+**** List of PLAYBACK Hardware Devices ****
+card 0: Pro4000e12a [Pro40-00e12a], device 0: DICE [Pro40-00e12a]
+  Subdevices: 1/1
+  Subdevice #0: subdevice #0
+card 0: Pro4000e12a [Pro40-00e12a], device 1: DICE [Pro40-00e12a]
+  Subdevices: 1/1
+  Subdevice #0: subdevice #0
+card 1: USB [Scarlett Solo USB], device 0: USB Audio [USB Audio]
+  Subdevices: 1/1
+  Subdevice #0: subdevice #0
+card 4: Audio [iFi (by AMR) HD USB Audio], device 0: USB Audio [USB Audio]
+  Subdevices: 1/1
+  Subdevice #0: subdevice #0
+
+--- capture devices ---
+**** List of CAPTURE Hardware Devices ****
+card 0: Pro4000e12a [Pro40-00e12a], device 0: DICE [Pro40-00e12a]
+  Subdevices: 1/1
+  Subdevice #0: subdevice #0
+card 0: Pro4000e12a [Pro40-00e12a], device 1: DICE [Pro40-00e12a]
+  Subdevices: 1/1
+  Subdevice #0: subdevice #0
+card 1: USB [Scarlett Solo USB], device 0: USB Audio [USB Audio]
+  Subdevices: 1/1
+  Subdevice #0: subdevice #0
+card 5: C615 [HD Webcam C615], device 0: USB Audio [USB Audio]
+  Subdevices: 1/1
+  Subdevice #0: subdevice #0
+
+--- pcm list ---
+00-00: DICE : Pro40-00e12a : playback 1 : capture 1
+00-01: DICE : Pro40-00e12a : playback 1 : capture 1
+01-00: USB Audio : USB Audio : playback 1 : capture 1
+04-00: USB Audio : USB Audio : playback 1
+05-00: USB Audio : USB Audio : capture 1
+
+--- card ids ---
+/proc/asound/card0/id: Pro4000e12a
+/proc/asound/card1/id: USB
+/proc/asound/card4/id: Audio
+/proc/asound/card5/id: C615
+
+
+========== ALSA MIXER CONTROLS PER CARD ==========
+
+--- controls on card 0 ---
+
+--- controls on card 1 ---
+numid=4,iface=CARD,name='Firmware Version'
+numid=5,iface=CARD,name='Minimum Firmware Version'
+numid=3,iface=CARD,name='USB Internal Validity'
+numid=7,iface=MIXER,name='Line In 1 Air Capture Switch'
+numid=8,iface=MIXER,name='Line In 1 Phantom Power Capture Switch'
+numid=6,iface=MIXER,name='Line In 2 Level Capture Enum'
+numid=10,iface=MIXER,name='Direct Monitor Playback Switch'
+numid=9,iface=MIXER,name='Phantom Power Persistence Capture Switch'
+numid=2,iface=PCM,name='Capture Channel Map'
+numid=1,iface=PCM,name='Playback Channel Map'
+
+--- controls on card 4 ---
+numid=6,iface=CARD,name='iFi (by AMR) Internal Clock Validity'
+numid=2,iface=MIXER,name='iFi (by AMR) HD USB Audio  Playback Switch'
+numid=3,iface=MIXER,name='iFi (by AMR) HD USB Audio  Playback Switch',index=1
+numid=4,iface=MIXER,name='iFi (by AMR) HD USB Audio  Playback Volume'
+numid=5,iface=MIXER,name='iFi (by AMR) HD USB Audio  Playback Volume',index=1
+numid=1,iface=PCM,name='Playback Channel Map'
+
+--- controls on card 5 ---
+numid=2,iface=MIXER,name='Mic Capture Switch'
+numid=3,iface=MIXER,name='Mic Capture Volume'
+numid=1,iface=PCM,name='Capture Channel Map'
+
+
+========== USB AUDIO ==========
+
+--- usb devices ---
+Bus 001 Device 001: ID 1d6b:0002 Linux Foundation 2.0 root hub
+Bus 001 Device 002: ID 0b05:190e ASUSTek Computer, Inc. ASUS USB-BT500
+Bus 001 Device 003: ID 046d:082c Logitech, Inc. HD Webcam C615
+Bus 001 Device 004: ID 0b05:1872 ASUSTek Computer, Inc. AURA LED Controller
+Bus 001 Device 005: ID 0cf2:a102 ENE Technology, Inc. LianLi-SL-infinity-v1.4
+Bus 002 Device 001: ID 1d6b:0003 Linux Foundation 3.0 root hub
+Bus 003 Device 001: ID 1d6b:0002 Linux Foundation 2.0 root hub
+Bus 004 Device 001: ID 1d6b:0003 Linux Foundation 3.0 root hub
+Bus 005 Device 001: ID 1d6b:0002 Linux Foundation 2.0 root hub
+Bus 005 Device 002: ID 1235:8211 Focusrite-Novation Scarlett Solo (3rd Gen.)
+Bus 005 Device 003: ID 20b1:3008 XMOS Ltd iFi (by AMR) HD USB Audio
+Bus 005 Device 010: ID 05e3:0610 Genesys Logic, Inc. Hub
+Bus 005 Device 011: ID 3297:1969 ZSA Technology Labs Moonlander Mark I
+Bus 005 Device 012: ID 046d:c08b Logitech, Inc. G502 SE HERO Gaming Mouse
+Bus 006 Device 001: ID 1d6b:0003 Linux Foundation 3.0 root hub
+Bus 006 Device 004: ID 05e3:0626 Genesys Logic, Inc. Hub
+
+--- usb audio stream info ---
+/proc/asound/card1/stream0: Focusrite Scarlett Solo USB at usb-0000:10:00.3-3, high speed : USB Audio
+
+Playback:
+  Status: Stop
+  Interface 1
+    Altset 1
+    Format: S32_LE
+    Channels: 2
+    Endpoint: 0x01 (1 OUT) (SYNC)
+    Rates: 44100, 48000, 88200, 96000, 176400, 192000
+    Data packet interval: 125 us
+    Bits: 24
+    Channel map: FL FR
+
+Capture:
+  Status: Stop
+  Interface 2
+    Altset 1
+    Format: S32_LE
+    Channels: 2
+    Endpoint: 0x81 (1 IN) (SYNC)
+    Rates: 44100, 48000, 88200, 96000, 176400, 192000
+    Data packet interval: 125 us
+    Bits: 24
+    Channel map: FL FR
+/proc/asound/card4/stream0: iFi (by AMR) iFi (by AMR) HD USB Audio at usb-0000:10:00.3-4, high speed : USB Audio
+
+Playback:
+  Status: Stop
+  Interface 1
+    Altset 1
+    Format: S32_LE
+    Channels: 2
+    Endpoint: 0x01 (1 OUT) (ASYNC)
+    Rates: 44100, 48000, 88200, 96000, 176400, 192000, 352800, 384000
+    Data packet interval: 125 us
+    Bits: 32
+    Channel map: FL FR
+    Sync Endpoint: 0x81 (1 IN)
+    Sync EP Interface: 1
+    Sync EP Altset: 1
+    Implicit Feedback Mode: No
+  Interface 1
+    Altset 2
+    Format: S24_3LE
+    Channels: 2
+    Endpoint: 0x01 (1 OUT) (ASYNC)
+    Rates: 44100, 48000, 88200, 96000, 176400, 192000, 352800, 384000
+    Data packet interval: 125 us
+    Bits: 24
+    Channel map: FL FR
+    Sync Endpoint: 0x81 (1 IN)
+    Sync EP Interface: 1
+    Sync EP Altset: 2
+    Implicit Feedback Mode: No
+  Interface 1
+    Altset 3
+    Format: S16_LE
+    Channels: 2
+    Endpoint: 0x01 (1 OUT) (ASYNC)
+    Rates: 44100, 48000, 88200, 96000, 176400, 192000, 352800, 384000
+    Data packet interval: 125 us
+    Bits: 16
+    Channel map: FL FR
+    Sync Endpoint: 0x81 (1 IN)
+    Sync EP Interface: 1
+    Sync EP Altset: 3
+    Implicit Feedback Mode: No
+  Interface 1
+    Altset 4
+    Format: DSD_U32_BE
+    Channels: 2
+    Endpoint: 0x01 (1 OUT) (ASYNC)
+    Rates: 44100, 48000, 88200, 96000, 176400, 192000, 352800, 384000
+    Data packet interval: 125 us
+    Bits: 32
+    DSD raw: DOP=0, bitrev=0
+    Channel map: FL FR
+    Sync Endpoint: 0x81 (1 IN)
+    Sync EP Interface: 1
+    Sync EP Altset: 4
+    Implicit Feedback Mode: No
+/proc/asound/card5/stream0: HD Webcam C615 at usb-0000:02:00.0-6, high speed : USB Audio
+
+Capture:
+  Status: Stop
+  Interface 1
+    Altset 1
+    Format: S16_LE
+    Channels: 1
+    Endpoint: 0x86 (6 IN) (ASYNC)
+    Rates: 16000
+    Data packet interval: 1000 us
+    Bits: 16
+    Channel map: MONO
+  Interface 1
+    Altset 2
+    Format: S16_LE
+    Channels: 1
+    Endpoint: 0x86 (6 IN) (ASYNC)
+    Rates: 24000
+    Data packet interval: 1000 us
+    Bits: 16
+    Channel map: MONO
+  Interface 1
+    Altset 3
+    Format: S16_LE
+    Channels: 1
+    Endpoint: 0x86 (6 IN) (ASYNC)
+    Rates: 32000
+    Data packet interval: 1000 us
+    Bits: 16
+    Channel map: MONO
+  Interface 1
+    Altset 4
+    Format: S16_LE
+    Channels: 1
+    Endpoint: 0x86 (6 IN) (ASYNC)
+    Rates: 48000
+    Data packet interval: 1000 us
+    Bits: 16
+    Channel map: MONO
+
+--- usb ids ---
+/proc/asound/card1/usbid: 1235:8211
+/proc/asound/card4/usbid: 20b1:3008
+/proc/asound/card5/usbid: 046d:082c
+
+
+========== AUDIO STACK PACKAGES ==========
+
+--- installed audio packages ---
+error: package 'libffado' was not found
+error: package 'ffado-mixer' was not found
+error: package 'jack2' was not found
+error: package 'reaper' was not found
+error: package 'ardour' was not found
+pipewire 1:1.6.9-1
+pipewire-alsa 1:1.6.9-1
+pipewire-jack 1:1.6.9-1
+pipewire-pulse 1:1.6.9-1
+wireplumber 0.5.18-1.1
+qjackctl 1.0.6-1.1
+alsa-utils 1.2.16-1.1
+realtime-privileges 5-1
+rtkit 0.14-1.1
+(exit 1)
+
+
+========== PIPEWIRE RUNTIME ==========
+
+--- pipewire version ---
+pipewire
+Compiled with libpipewire 1.6.9
+Linked with libpipewire 1.6.9
+
+--- server info ---
+Server String: /run/user/1000/pulse/native
+Library Protocol Version: 35
+Server Protocol Version: 35
+Is Local: yes
+Client Index: 178
+Tile Size: 65472
+User Name: alice
+Host Name: toaster-remix
+Server Name: PulseAudio (on PipeWire 1.6.9)
+Server Version: 15.0.0
+Default Sample Specification: float32le 2ch 48000Hz
+Default Channel Map: front-left,front-right
+Default Sink: alsa_output.usb-iFi__by_AMR__iFi__by_AMR__HD_USB_Audio_0003-00.analog-stereo
+Default Source: alsa_input.usb-Focusrite_Scarlett_Solo_USB_Y73UHXX13BCDC0-00.HiFi__Mic1__source
+Cookie: 6008:42be
+
+--- sinks ---
+68	alsa_output.firewire-0x00130e040140e12a.multichannel-output	PipeWire	s32le 12ch 48000Hz	SUSPENDED
+72	alsa_output.usb-Focusrite_Scarlett_Solo_USB_Y73UHXX13BCDC0-00.HiFi__Line__sink	PipeWire	s32le 2ch 48000Hz	SUSPENDED
+80	alsa_output.usb-iFi__by_AMR__iFi__by_AMR__HD_USB_Audio_0003-00.analog-stereo	PipeWire	s32le 2ch 48000Hz	SUSPENDED
+
+--- sources ---
+68	alsa_output.firewire-0x00130e040140e12a.multichannel-output.monitor	PipeWire	s32le 12ch 48000Hz	SUSPENDED
+69	alsa_input.firewire-0x00130e040140e12a.multichannel-input	PipeWire	s32le 10ch 48000Hz	SUSPENDED
+72	alsa_output.usb-Focusrite_Scarlett_Solo_USB_Y73UHXX13BCDC0-00.HiFi__Line__sink.monitor	PipeWire	s32le 2ch 48000Hz	SUSPENDED
+74	alsa_input.usb-Focusrite_Scarlett_Solo_USB_Y73UHXX13BCDC0-00.HiFi__Mic2__source	PipeWire	float32le 1ch 48000Hz	SUSPENDED
+76	alsa_input.usb-Focusrite_Scarlett_Solo_USB_Y73UHXX13BCDC0-00.HiFi__Mic1__source	PipeWire	float32le 1ch 48000Hz	SUSPENDED
+80	alsa_output.usb-iFi__by_AMR__iFi__by_AMR__HD_USB_Audio_0003-00.analog-stereo.monitor	PipeWire	s32le 2ch 48000Hz	SUSPENDED
+
+--- pw-top snapshot ---
+S   ID  QUANT   RATE    WAIT    BUSY   W/Q   B/Q  ERR FORMAT           NAME 
+C   29      0      0    ---     ---   ---   ---     0                  Dummy-Driver
+C   30      0      0    ---     ---   ---   ---     0                  Freewheel-Driver
+C   53      0      0    ---     ---   ---   ---     0                  Midi-Bridge
+C   49      0      0    ---     ---   ---   ---     0                  bluez_midi.server
+C   64      0      0    ---     ---   ---   ---     0                  alsa_output.firewire-0x00130e040140e12a.multichannel-output
+C   65      0      0    ---     ---   ---   ---     0                  alsa_input.firewire-0x00130e040140e12a.multichannel-input
+C   45      0      0    ---     ---   ---   ---     0                  alsa_output.usb-Focusrite_Scarlett_Solo_USB_Y73UHXX13BCDC0-00.HiFi__Line__sink
+C   44      0      0    ---     ---   ---   ---     0                  alsa_input.hw_USB_0
+C   43      0      0    ---     ---   ---   ---     0                  alsa_input.usb-Focusrite_Scarlett_Solo_USB_Y73UHXX13BCDC0-00.HiFi__Mic2__source
+C   66      0      0    ---     ---   ---   ---     0                  alsa_input.usb-Focusrite_Scarlett_Solo_USB_Y73UHXX13BCDC0-00.HiFi__Mic2__source.split
+C   67      0      0    ---     ---   ---   ---     0                  alsa_input.usb-Focusrite_Scarlett_Solo_USB_Y73UHXX13BCDC0-00.HiFi__Mic1__source
+C   68      0      0    ---     ---   ---   ---     0                  alsa_input.usb-Focusrite_Scarlett_Solo_USB_Y73UHXX13BCDC0-00.HiFi__Mic1__source.split
+C   71      0      0    ---     ---   ---   ---     0                  alsa_output.usb-iFi__by_AMR__iFi__by_AMR__HD_USB_Audio_0003-00.analog-stereo
+C  127      0      0    ---     ---   ---   ---     0                  v4l2_input.pci-0000_02_00.0-usb-0_6_1.2
+C  139      0      0    ---     ---   ---   ---     0                  kwin_wayland
+C  142      0      0    ---     ---   ---   ---     0                  plasmashell
+
+
+========== REALTIME CONFIGURATION ==========
+
+--- current user groups ---
+uid=1000(alice) gid=1000(alice) groups=1000(alice),3(sys),90(network),950(keyd),951(docker),953(realtime),955(openrazer),957(nopasswdlogin),967(i2c),979(rfkill),982(users),983(video),985(storage),989(lp),995(audio),998(wheel),1001(plugdev)
+
+--- rtprio limit ---
+98
+
+--- memlock limit ---
+unlimited
+
+--- limits.d ---
+/etc/security/limits.d/10-gamemode.conf: @gamemode - nice -10
+/etc/security/limits.d/20-audio.conf: @audio - rtprio 99
+@audio - nice  -11
+/etc/security/limits.d/99-realtime-privileges.conf: @realtime - rtprio 98
+@realtime - memlock unlimited
+@realtime - nice -11
+
+--- rtkit service ---
+active
+
+--- cpu governor ---
+/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor: performance
+
+
+========== KERNEL MESSAGES ==========
+
+--- firewire and sound messages ---
+
+
+========== END ==========
