@@ -1,0 +1,178 @@
+#!/usr/bin/env bash
+#
+# audio-probe: collect audio hardware and stack state from a Linux
+# machine so a recording setup can be diagnosed from somewhere else.
+#
+# Collects only. Every command it runs is non-mutating with respect to
+# the system and the audio hardware. The only thing it writes is its
+# own output file, and the directory to hold it.
+#
+# Usage:
+#   scripts/audio-probe [output-file]
+#
+# With no argument, writes to docs/audio/probe-<hostname>.txt relative
+# to the repository root. Pass - to write to stdout instead.
+#
+# Connect and power on any audio interface you want detected BEFORE
+# running this. A FireWire or USB device that is powered off is
+# indistinguishable from one that is broken.
+
+set -u
+
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+section() {
+    printf '\n\n========== %s ==========\n' "$1"
+}
+
+# Run a command if it exists, capturing both streams. A missing tool
+# is recorded rather than skipped, because its absence is itself a
+# finding.
+probe() {
+    local label="$1"
+    shift
+    printf '\n--- %s ---\n' "$label"
+    if ! command_exists "$1"; then
+        printf '(not installed: %s)\n' "$1"
+        return 0
+    fi
+    "$@" 2>&1 || printf '(exit %d)\n' "$?"
+}
+
+# Print files matched by a glob, one labelled block each. Globs are
+# passed unquoted by the caller so the shell expands them here.
+probe_glob() {
+    local label="$1"
+    shift
+    printf '\n--- %s ---\n' "$label"
+    local found=0 path
+    for path in "$@"; do
+        [[ -r "$path" ]] || continue
+        found=1
+        printf '%s: %s\n' "$path" "$(cat "$path" 2>/dev/null)"
+    done
+    [[ "$found" -eq 1 ]] || printf '(no readable matches)\n'
+}
+
+collect() {
+    printf 'audio-probe output\n'
+    printf 'generated: %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+
+    section "HOST AND KERNEL"
+    probe "kernel release" uname -r
+    probe "distro" cat /etc/os-release
+    probe "cachyos kernel packages" \
+        pacman -Qs 'linux-cachyos|linux-zen|linux-rt'
+    probe "cpu" lscpu
+
+    section "FIREWIRE CONTROLLER"
+    probe "pci 1394 controllers" lspci -nnk -d ::0c00
+    probe "pci audio and 1394 by name" \
+        bash -c "lspci -nn | grep -iE '1394|firewire|audio'"
+
+    section "FIREWIRE BUS DEVICES"
+    # model is the decisive field for a Saffire PRO 40. A value of
+    # 0000de is the TCD3070-CH variant, which only auto-detects
+    # correctly on Linux 6.2 and newer. Anything else is TCD2220.
+    probe_glob "vendor_name" /sys/bus/firewire/devices/fw*/vendor_name
+    probe_glob "model_name" /sys/bus/firewire/devices/fw*/model_name
+    probe_glob "vendor id" /sys/bus/firewire/devices/fw*/vendor
+    probe_glob "model id" /sys/bus/firewire/devices/fw*/model
+    probe_glob "guid" /sys/bus/firewire/devices/fw*/guid
+    probe_glob "unit specifier_id" \
+        /sys/bus/firewire/devices/fw*.*/specifier_id
+    probe_glob "unit version" /sys/bus/firewire/devices/fw*.*/version
+    probe "device nodes" bash -c "ls -l /dev/fw* 2>&1"
+    probe "driver bindings" \
+        bash -c "ls -l /sys/bus/firewire/drivers/*/ 2>&1"
+
+    section "KERNEL MODULES"
+    probe "loaded firewire and sound modules" \
+        bash -c "lsmod | grep -iE 'firewire|^snd|dice|bebob|oxfw' \
+        || echo '(none loaded)'"
+    probe "snd-dice available in this kernel build" \
+        bash -c "modinfo snd-dice 2>&1 | head -12"
+
+    section "ALSA CARDS"
+    probe "cards" cat /proc/asound/cards
+    probe "playback devices" aplay -l
+    probe "capture devices" arecord -l
+    probe "pcm list" cat /proc/asound/pcm
+    probe_glob "card ids" /proc/asound/card*/id
+
+    section "ALSA MIXER CONTROLS PER CARD"
+    # snd-dice exposes no mixer controls at all, so an empty result
+    # for the FireWire card is expected, not a fault. The Scarlett
+    # should show scarlett2 controls.
+    local card
+    for card in /proc/asound/card[0-9]*; do
+        [[ -d "$card" ]] || continue
+        local num="${card##*card}"
+        probe "controls on card $num" amixer -c "$num" controls
+    done
+
+    section "USB AUDIO"
+    probe "usb devices" lsusb
+    probe_glob "usb audio stream info" /proc/asound/card*/stream0
+    probe_glob "usb ids" /proc/asound/card*/usbid
+
+    section "AUDIO STACK PACKAGES"
+    probe "installed audio packages" \
+        pacman -Q pipewire pipewire-alsa pipewire-jack pipewire-pulse \
+        wireplumber libffado ffado-mixer jack2 qjackctl alsa-utils \
+        realtime-privileges rtkit reaper ardour
+
+    section "PIPEWIRE RUNTIME"
+    probe "pipewire version" pipewire --version
+    probe "server info" pactl info
+    probe "sinks" pactl list short sinks
+    probe "sources" pactl list short sources
+    probe "pw-top snapshot" timeout 3 pw-top -b -n 1
+
+    section "REALTIME CONFIGURATION"
+    probe "current user groups" id
+    probe "rtprio limit" bash -c 'ulimit -r'
+    probe "memlock limit" bash -c 'ulimit -l'
+    probe_glob "limits.d" /etc/security/limits.d/*.conf
+    probe "rtkit service" systemctl is-active rtkit-daemon
+    probe_glob "cpu governor" \
+        /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
+
+    section "KERNEL MESSAGES"
+    probe "firewire and sound messages" \
+        bash -c "dmesg 2>/dev/null | grep -iE \
+        'firewire|fw-ohci|1394|dice|snd|audio|usb.*focusrite' \
+        | tail -80"
+
+    section "END"
+}
+
+main() {
+    local target="${1:-}"
+
+    if [[ "$target" == "-" ]]; then
+        collect
+        return 0
+    fi
+
+    if [[ -z "$target" ]]; then
+        local root
+        root="$(git rev-parse --show-toplevel 2>/dev/null)" || {
+            printf 'error: not in a git repo, pass an output path\n' >&2
+            return 1
+        }
+        mkdir -p "$root/docs/audio"
+        target="$root/docs/audio/probe-$(uname -n).txt"
+    fi
+
+    collect >"$target"
+    printf 'wrote %s\n' "$target"
+    printf '\nReview it before committing, then:\n'
+    printf '  git add %s\n' "$target"
+    printf '  git commit -m "chore(audio): add probe output"\n'
+    printf '  git push\n'
+}
+
+main "$@"
