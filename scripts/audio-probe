@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# audio-probe: collect audio hardware and stack state from a Linux
-# machine so a recording setup can be diagnosed from somewhere else.
+# audio-probe: collect audio hardware, stack and plugin state from a
+# Linux machine so a recording setup can be diagnosed from elsewhere.
 #
 # Collects only. Every command it runs is non-mutating with respect to
 # the system and the audio hardware. The only thing it writes is its
@@ -13,9 +13,9 @@
 # With no argument, writes to docs/audio/probe-<hostname>.txt relative
 # to the repository root. Pass - to write to stdout instead.
 #
-# Connect and power on any audio interface you want detected BEFORE
-# running this. A FireWire or USB device that is powered off is
-# indistinguishable from one that is broken.
+# Connect and power on any audio interface or MIDI controller you want
+# detected BEFORE running this. A FireWire or USB device that is
+# powered off is indistinguishable from one that is broken.
 
 set -u
 
@@ -54,6 +54,25 @@ probe_glob() {
         printf '%s: %s\n' "$path" "$(cat "$path" 2>/dev/null)"
     done
     [[ "$found" -eq 1 ]] || printf '(no readable matches)\n'
+}
+
+# List a directory's entries, distinguishing absent from empty. Plugin
+# directories are frequently missing rather than empty, and the two
+# mean different things when deciding whether a scan path is wrong.
+probe_dir() {
+    local label="$1" dir="$2"
+    printf '\n--- %s ---\n' "$label"
+    if [[ ! -d "$dir" ]]; then
+        printf '(no such directory: %s)\n' "$dir"
+        return 0
+    fi
+    local entries
+    entries="$(ls -1 "$dir" 2>&1)"
+    if [[ -z "$entries" ]]; then
+        printf '(empty: %s)\n' "$dir"
+        return 0
+    fi
+    printf '%s:\n%s\n' "$dir" "$entries"
 }
 
 collect() {
@@ -118,17 +137,50 @@ collect() {
     probe_glob "usb audio stream info" /proc/asound/card*/stream0
     probe_glob "usb ids" /proc/asound/card*/usbid
 
+    section "MIDI DEVICES"
+    # No MIDI controller was connected during the first probe run, so
+    # an empty result here means it is still unplugged, not unsupported.
+    probe "alsa sequencer clients" aconnect -l
+    probe "alsa rawmidi devices" amidi -l
+    probe "midi device nodes" bash -c "ls -l /dev/snd/midi* 2>&1"
+
     section "AUDIO STACK PACKAGES"
     probe "installed audio packages" \
         pacman -Q pipewire pipewire-alsa pipewire-jack pipewire-pulse \
         wireplumber libffado ffado-mixer jack2 qjackctl alsa-utils \
         realtime-privileges rtkit reaper ardour
+    probe "installed daw, plugin and bridge packages" \
+        pacman -Q ardour drumgizmo sfizz hydrogen carla guitarix \
+        gxplugins.lv2 setbfree x42-plugins zita-rev1 calf lsp-plugins \
+        yabridge wine
+
+    section "PLUGIN INVENTORY"
+    # Plugin formats are discovered by directory convention, not by a
+    # registry. Anything installed outside these paths is invisible to
+    # every host until the scan path is widened to include it.
+    probe_dir "lv2 (system)" /usr/lib/lv2
+    probe_dir "lv2 (local)" /usr/local/lib/lv2
+    probe_dir "lv2 (user)" "$HOME/.lv2"
+    probe_dir "vst2 (system)" /usr/lib/vst
+    probe_dir "vst2 (user)" "$HOME/.vst"
+    probe_dir "vst3 (system)" /usr/lib/vst3
+    probe_dir "vst3 (user)" "$HOME/.vst3"
+    probe_dir "clap (system)" /usr/lib/clap
+    probe_dir "clap (user)" "$HOME/.clap"
+    printf '\n--- plugin path overrides ---\n'
+    printf 'LV2_PATH=%s\n' "${LV2_PATH:-(unset)}"
+    printf 'VST_PATH=%s\n' "${VST_PATH:-(unset)}"
+    printf 'VST3_PATH=%s\n' "${VST3_PATH:-(unset)}"
+    printf 'CLAP_PATH=%s\n' "${CLAP_PATH:-(unset)}"
 
     section "PIPEWIRE RUNTIME"
     probe "pipewire version" pipewire --version
     probe "server info" pactl info
     probe "sinks" pactl list short sinks
     probe "sources" pactl list short sources
+    # clock.quantum is the buffer size in frames, which is the single
+    # biggest determinant of round trip latency while tracking.
+    probe "clock and quantum settings" pw-metadata -n settings
     probe "pw-top snapshot" timeout 3 pw-top -b -n 1
 
     section "REALTIME CONFIGURATION"
