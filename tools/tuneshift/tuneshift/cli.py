@@ -12,6 +12,25 @@ from typing import Any
 from tuneshift import DatabaseNotFoundError, TuneShiftError, __version__
 from tuneshift.db import Database
 from tuneshift.persistence.base import get_default_db_path
+from tuneshift.platforms.write_guard import (
+    grant_push_authority,
+    revoke_push_authority,
+)
+
+
+def _add_push_override(parser: argparse.ArgumentParser) -> None:
+    """Give a pushing command the deliberate way past the primary-library guard.
+
+    Defined per command rather than once on the root parser: argparse copies a
+    subparser's defaults over the root namespace, so a root-level flag would be
+    silently reset by every subcommand that did not also declare it. A command
+    without this flag simply cannot override, which is the safe direction.
+    """
+    parser.add_argument(
+        "--allow-nonprimary-push",
+        action="store_true",
+        help="Permit pushing even when the active DB is not the primary",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -68,6 +87,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Build and apply the push in one step (default writes a plan and "
         "pushes nothing - AC-P1)",
     )
+    _add_push_override(p_sync)
     p_sync.add_argument(
         "--interactive",
         action="store_true",
@@ -115,11 +135,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip the confirmation prompt before pushing to platforms",
     )
-    p_rm.add_argument(
-        "--allow-nonprimary-push",
-        action="store_true",
-        help="Permit pushing even when the active DB is not the primary",
-    )
+    _add_push_override(p_rm)
 
     # login
     p_login = sub.add_parser("login", help="Authenticate with a platform")
@@ -159,6 +175,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_order.add_argument(
         "--auto-off", action="store_true", help="Disable auto-reorder on sync"
     )
+    _add_push_override(p_order)
 
     # pin
     p_pin = sub.add_parser(
@@ -1010,17 +1027,22 @@ def build_parser() -> argparse.ArgumentParser:
     p_folders_sub.add_parser("import", help="Import existing Tidal structure")
     p_fc = p_folders_sub.add_parser("create", help="Create folder on Tidal")
     p_fc.add_argument("name", help="Folder name")
+    _add_push_override(p_fc)
     p_fr = p_folders_sub.add_parser("rename", help="Rename folder on Tidal")
     p_fr.add_argument("old_name", help="Current name")
     p_fr.add_argument("new_name", help="New name")
+    _add_push_override(p_fr)
     p_fd = p_folders_sub.add_parser("delete", help="Delete folder on Tidal")
     p_fd.add_argument("name", help="Folder name")
+    _add_push_override(p_fd)
     p_fm = p_folders_sub.add_parser("move", help="Assign playlist to folder")
     p_fm.add_argument("playlist", help="Playlist name")
     p_fm.add_argument("--to", required=True, help="Target folder name")
     p_fu = p_folders_sub.add_parser("unassign", help="Remove folder assignment")
     p_fu.add_argument("playlist", help="Playlist name")
-    p_folders_sub.add_parser("sync", help="Push folder assignments to Tidal")
+    _add_push_override(
+        p_folders_sub.add_parser("sync", help="Push folder assignments to Tidal")
+    )
     p_folders_sub.add_parser("pull", help="Update local from Tidal state")
     p_folders_sub.add_parser("status", help="Show folder assignment status")
 
@@ -1440,6 +1462,15 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Error: {db_error}", file=sys.stderr)
         return 1
 
+    if db is not None:
+        # The only place that knows which library was actually opened. Deriving
+        # it anywhere downstream is how an earlier version of this guard came to
+        # refuse every legitimate push.
+        grant_push_authority(
+            Path(db.path).resolve(),
+            override=getattr(args, "allow_nonprimary_push", False),
+        )
+
     try:
         result = (
             _dispatch_without_database(args)
@@ -1465,6 +1496,7 @@ def main(argv: list[str] | None = None) -> int:
             traceback.print_exc()
         return 2
     finally:
+        revoke_push_authority()
         if db is not None:
             db.close()
 

@@ -34,17 +34,12 @@ def handle_ingest(args, db: Database) -> int:
 
 
 def _load_client(platform_name: str):
-    """Load a platform client by name."""
-    if platform_name == "tidal":
-        from tuneshift.platforms.tidal import TidalClient
+    """Load a platform client by name.
 
-        return TidalClient()
-    elif platform_name == "spotify":
-        from tuneshift.platforms.spotify import SpotifyClient
+    Delegates to the one construction point so every client arrives
+    wrapped in the push guard. Kept as a module-level name because tests
+    patch it here to inject fakes.
+    """
+    from tuneshift.platforms.factory import load_client
 
-        return SpotifyClient()
-    elif platform_name == "ytmusic":
-        from tuneshift.platforms.ytmusic import YTMusicClient
-
-        return YTMusicClient()
-    return None
+    return load_client(platform_name)

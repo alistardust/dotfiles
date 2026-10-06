@@ -68,11 +68,11 @@ def enrich_playlist_from_tidal(
 
     Returns (enriched_count, skipped_count, failed_count).
     """
-    from tuneshift.platforms.tidal import TidalClient
+    from tuneshift.platforms.factory import load_client
 
     if client is None:
-        client = TidalClient()
-        if not client.load_session():
+        client = load_client("tidal")
+        if client is None or not client.load_session():
             print("Not logged in to Tidal. Run: tuneshift login tidal", file=sys.stderr)
             return 0, 0, 0
 
@@ -170,7 +170,7 @@ def enrich_all_playlists(
 
     Returns a process exit code (0 on success).
     """
-    from tuneshift.platforms.tidal import TidalClient
+    from tuneshift.platforms.factory import load_client
 
     playlists = db.list_playlists()
 
@@ -193,8 +193,8 @@ def enrich_all_playlists(
         )
         return 0
 
-    client = TidalClient()
-    if not client.load_session():
+    client = load_client("tidal")
+    if client is None or not client.load_session():
         print("Not logged in to Tidal. Run: tuneshift login tidal", file=sys.stderr)
         return 1
 

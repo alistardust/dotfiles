@@ -18,16 +18,15 @@ logger = logging.getLogger(__name__)
 
 
 def _load_client(platform: str):
-    """Load a platform client by name."""
-    if platform == "tidal":
-        from tuneshift.platforms.tidal import TidalClient
+    """Load a platform client by name.
 
-        return TidalClient()
-    if platform == "ytmusic":
-        from tuneshift.platforms.ytmusic import YTMusicClient
+    Delegates to the one construction point so every client arrives
+    wrapped in the push guard. Kept as a module-level name because tests
+    patch it here to inject fakes.
+    """
+    from tuneshift.platforms.factory import load_client
 
-        return YTMusicClient()
-    return None
+    return load_client(platform)
 
 
 def handle_map(args, db: Database) -> int:

@@ -5,6 +5,7 @@ import logging
 import sys
 
 from tuneshift.db import Database
+from tuneshift.platforms.write_guard import NonPrimaryPushError
 from tuneshift.sequencer.weights import PRESETS
 
 logger = logging.getLogger(__name__)
@@ -121,10 +122,19 @@ def _push_order_to_platforms(db: Database, playlist) -> bool:
     Returns True if any platform push failed.
     """
     from tuneshift.commands.ingest_cmd import _load_client
+    from tuneshift.platforms.write_guard import push_authority_error
 
     platforms = db.get_linked_platforms(playlist.id)
     if not platforms:
         return False
+
+    # Refuse once, before the per-platform loop, so the remedy is stated plainly
+    # rather than repeated as a push failure for every linked platform. The
+    # client proxy refuses too; this is the readable half of the same decision.
+    refusal = push_authority_error()
+    if refusal is not None:
+        print(refusal, file=sys.stderr)
+        return True
 
     tracks = db.get_playlist_tracks(playlist.id)
     failures = False
@@ -152,6 +162,11 @@ def _push_order_to_platforms(db: Database, playlist) -> bool:
             try:
                 client.replace_playlist_tracks(platform_playlist_id, platform_ids)
                 print(f"  {platform_name}: synced ({len(platform_ids)} tracks)")
+            except NonPrimaryPushError:
+                # A refusal is not a platform failure. Degrading it to one would
+                # print "sync failed" and move on to the next platform, hiding
+                # both the reason and the remedy.
+                raise
             except Exception as exc:  # noqa: BLE001
                 # Per-platform boundary: platform SDKs raise heterogeneous
                 # exception types (tidalapi TidalAPIError, requests/urllib

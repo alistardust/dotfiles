@@ -29,6 +29,7 @@ from tuneshift.planapply.apply import (
 from tuneshift.planapply.models import Plan, PlanChange, row_key_for
 from tuneshift.planapply.plan import new_plan_id
 from tuneshift.platforms.protocol import MusicPlatformClient
+from tuneshift.platforms.write_guard import require_push_authority
 from tuneshift.reconcile import reconcile_track
 
 logger = logging.getLogger(__name__)
@@ -180,6 +181,10 @@ def make_sync_executor(
     """
 
     def _execute(change: PlanChange) -> dict | None:
+        # Refuse before the first remote call, read or write. Everything this
+        # executor does exists to push, so a refusal here is cheaper and
+        # clearer than one raised halfway through from the client proxy.
+        require_push_authority()
         proposed = change.proposed or {}
         platform_playlist_id = proposed.get("platform_playlist_id")
         local_playlist_id = proposed.get("local_playlist_id")

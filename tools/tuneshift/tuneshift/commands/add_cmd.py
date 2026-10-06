@@ -99,11 +99,17 @@ def _sync_add_to_platforms(
     code, it is awaiting that relocation.
     """
     from tuneshift.commands.ingest_cmd import _load_client
+    from tuneshift.platforms.write_guard import push_authority_error
     from tuneshift.reconcile import reconcile_track
 
     platforms = db.get_linked_platforms(playlist_id)
     if not platforms:
         return False
+
+    refusal = push_authority_error()
+    if refusal is not None:
+        print(refusal, file=sys.stderr)
+        return True
 
     failures = False
     for platform_name in platforms:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 
 from tuneshift.db import Database
+from tuneshift.platforms.write_guard import push_authority_error
 
 # Bound every Tidal folder API call so a hung connection cannot stall the CLI
 # indefinitely (B113/S113). Matches the timeout used by other platform clients.
@@ -120,6 +121,20 @@ def handle_folders(args, db: Database) -> int:
             file=sys.stderr,
         )
         return 1
+
+
+def _refuse_folder_write() -> int | None:
+    """Return 1 if this run may not write to Tidal, after saying why.
+
+    Folder operations reach Tidal through ``client._session`` and raw HTTP
+    rather than the client protocol, so the proxy that guards the protocol's
+    mutating methods cannot see them. These four sites ask directly.
+    """
+    refusal = push_authority_error()
+    if refusal is None:
+        return None
+    print(refusal, file=sys.stderr)
+    return 1
 
 
 def _get_tidal_client():
@@ -285,6 +300,9 @@ def _folders_import(db: Database) -> int:
 
 def _folders_create(db: Database, name: str) -> int:
     """Create a folder on Tidal."""
+    if (refused := _refuse_folder_write()) is not None:
+        return refused
+
     client = _get_tidal_client()
     if not client:
         return 1
@@ -332,6 +350,9 @@ def _folders_rename(db: Database, old_name: str, new_name: str) -> int:
         )
         return 1
 
+    if (refused := _refuse_folder_write()) is not None:
+        return refused
+
     client = _get_tidal_client()
     if not client:
         return 1
@@ -360,6 +381,11 @@ def _folders_delete(db: Database, name: str) -> int:
             file=sys.stderr,
         )
         return 1
+
+    # Asked before the confirmation prompt: there is no point making someone
+    # confirm a deletion that is already going to be refused.
+    if (refused := _refuse_folder_write()) is not None:
+        return refused
 
     # Show affected playlists
     affected = db.get_playlists_by_tidal_folder(folder["tidal_id"])
@@ -427,6 +453,9 @@ def _folders_unassign(db: Database, playlist_name: str) -> int:
 
 def _folders_sync(db: Database) -> int:
     """Push all folder assignments to Tidal."""
+    if (refused := _refuse_folder_write()) is not None:
+        return refused
+
     client = _get_tidal_client()
     if not client:
         return 1

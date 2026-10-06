@@ -65,3 +65,29 @@ def _guard_production_db(
 def tmp_db(tmp_path: Path) -> Path:
     """Provide a temporary DB path for tests."""
     return tmp_path / "test.db"
+
+
+@pytest.fixture(autouse=True)
+def _grant_push_authority() -> Iterator[None]:
+    """Let tests exercise push paths without each one registering a primary.
+
+    The push guard refuses by default, which is correct in production but would
+    silence every test written to verify a push. Nothing live sits behind these
+    pushes: every platform client in the suite is a fake.
+
+    The guard's own decisions, including each refusal and each distinct remedy,
+    are tested in ``test_push_guard.py``, which revokes this grant for its own
+    cases.
+    """
+    import os
+
+    from tuneshift.platforms.write_guard import (
+        grant_push_authority,
+        revoke_push_authority,
+    )
+
+    grant_push_authority(Path(os.environ["TUNESHIFT_DB"]), override=True)
+    try:
+        yield
+    finally:
+        revoke_push_authority()
