@@ -82,10 +82,17 @@ def test_rm_by_position_removes_track(tmp_db: Path, capsys) -> None:
 def test_rm_syncs_removal_to_platform(tmp_db: Path, capsys, monkeypatch) -> None:
     db = Database(tmp_db)
     _seed(db, platform="tidal")
-    client = _FakeClient(tracks=[SimpleNamespace(title="Alpha"), SimpleNamespace(title="Beta")])
+    # Identity comes from the platform id, falling back to exact title AND
+    # artist, so a remote track has to carry both fields.
+    client = _FakeClient(
+        tracks=[
+            SimpleNamespace(platform_id="t-1", title="Alpha", artist="A"),
+            SimpleNamespace(platform_id="t-2", title="Beta", artist="A"),
+        ]
+    )
     monkeypatch.setattr(ingest_cmd, "_load_client", lambda platform: client)
-    # BUG-24: pushing now requires the active DB to be the primary and an
-    # explicit confirmation. This test predates both gates and is about sync
+    # Pushing requires the active DB to be the primary and an explicit
+    # confirmation. This test predates both gates and is about sync
     # mechanics, so it opts through them rather than asserting on them.
     primary.set_primary_db(Path(tmp_db))
     args = SimpleNamespace(playlist="Mix", target="Alpha", yes=True)
@@ -99,8 +106,8 @@ def test_rm_platform_sync_failure_returns_1(tmp_db: Path, capsys, monkeypatch) -
     _seed(db, platform="tidal")
     client = _FakeClient(raise_on_get=True)
     monkeypatch.setattr(ingest_cmd, "_load_client", lambda platform: client)
-    # BUG-24: see the note above; this test asserts sync failure handling, not
-    # the primary-DB or confirmation gates.
+    # See the note above; this test asserts sync failure handling, not the
+    # primary-DB or confirmation gates.
     primary.set_primary_db(Path(tmp_db))
     args = SimpleNamespace(playlist="Mix", target="Alpha", yes=True)
     assert handle_rm(args, db) == 1

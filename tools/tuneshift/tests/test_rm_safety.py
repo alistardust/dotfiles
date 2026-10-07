@@ -1,12 +1,12 @@
 """Safety contract for the remove command.
 
-BUG-24: ``rm`` deleted locally and pushed the deletion to every linked
+``rm`` used to delete locally and push the deletion to every linked
 platform with no dry run, no confirmation, and no protection when the active
 database is a copy. The trap is that pointing ``TUNESHIFT_DB`` at a copy does
 NOT isolate the live playlist, because the platform IDs travel with the
 database. A copied database is not a sandbox.
 
-BUG-25: a numeric argument resolved as a title substring before it was tried
+A numeric argument used to resolve as a title substring before it was tried
 as a position, so ``rm <playlist> 3`` could silently remove a track whose
 title merely contains a 3, and then push that removal live.
 """
@@ -39,6 +39,18 @@ class _FakeClient:
 
     def remove_tracks_by_positions(self, platform_playlist_id, positions):
         self.removed = positions
+
+
+def _remote_tracks(titles=TITLES):
+    """Remote tracks as a platform reports them.
+
+    Identity comes from the platform id, falling back to exact title AND
+    artist, so a remote track has to carry both fields.
+    """
+    return [
+        SimpleNamespace(platform_id=f"t-{i}", title=t, artist="A")
+        for i, t in enumerate(titles)
+    ]
 
 
 def _seed(db: Database, *, titles=TITLES, platform=None) -> int:
@@ -75,7 +87,7 @@ def as_primary(monkeypatch, tmp_db: Path):
 
 
 class TestNumericTargetDisambiguation:
-    """BUG-25: a bare number must not silently resolve to a title."""
+    """A bare number must not silently resolve to a title."""
 
     def test_ambiguous_numeric_is_refused(self, tmp_db: Path, capsys) -> None:
         db = Database(tmp_db)
@@ -104,14 +116,14 @@ class TestNumericTargetDisambiguation:
 
 
 class TestRemoveIsGatedBeforePushing:
-    """BUG-24: no silent path from a local edit to a live platform mutation."""
+    """No silent path from a local edit to a live platform mutation."""
 
     def test_dry_run_changes_nothing_local_or_remote(
         self, tmp_db: Path, monkeypatch, as_primary, capsys
     ) -> None:
         db = Database(tmp_db)
         playlist_id = _seed(db, platform="tidal")
-        client = _FakeClient(tracks=[SimpleNamespace(title=t) for t in TITLES])
+        client = _FakeClient(tracks=_remote_tracks())
         monkeypatch.setattr(ingest_cmd, "_load_client", lambda platform: client)
 
         assert handle_rm(_args(target="Alpha", dry_run=True), db) == 0
@@ -124,7 +136,7 @@ class TestRemoveIsGatedBeforePushing:
     ) -> None:
         db = Database(tmp_db)
         playlist_id = _seed(db, platform="tidal")
-        client = _FakeClient(tracks=[SimpleNamespace(title=t) for t in TITLES])
+        client = _FakeClient(tracks=_remote_tracks())
         monkeypatch.setattr(ingest_cmd, "_load_client", lambda platform: client)
         monkeypatch.setattr("builtins.input", lambda *_: "n")
 
@@ -137,7 +149,7 @@ class TestRemoveIsGatedBeforePushing:
     ) -> None:
         db = Database(tmp_db)
         playlist_id = _seed(db, platform="tidal")
-        client = _FakeClient(tracks=[SimpleNamespace(title=t) for t in TITLES])
+        client = _FakeClient(tracks=_remote_tracks())
         monkeypatch.setattr(ingest_cmd, "_load_client", lambda platform: client)
 
         def _no_prompt(*_args, **_kwargs):
@@ -158,14 +170,14 @@ class TestRemoveIsGatedBeforePushing:
 
 
 class TestCopiedDatabaseIsNotASandbox:
-    """BUG-24's real finding: platform IDs travel with a copied database."""
+    """Platform IDs travel with a copied database, so it is not a sandbox."""
 
     def test_push_is_refused_when_db_is_not_the_primary(
         self, tmp_db: Path, monkeypatch, capsys
     ) -> None:
         db = Database(tmp_db)
         playlist_id = _seed(db, platform="tidal")
-        client = _FakeClient(tracks=[SimpleNamespace(title=t) for t in TITLES])
+        client = _FakeClient(tracks=_remote_tracks())
         monkeypatch.setattr(ingest_cmd, "_load_client", lambda platform: client)
         monkeypatch.setattr(
             primary, "get_primary_db", lambda: Path("/nowhere/primary.db")
@@ -182,7 +194,7 @@ class TestCopiedDatabaseIsNotASandbox:
     ) -> None:
         db = Database(tmp_db)
         _seed(db, platform="tidal")
-        client = _FakeClient(tracks=[SimpleNamespace(title=t) for t in TITLES])
+        client = _FakeClient(tracks=_remote_tracks())
         monkeypatch.setattr(ingest_cmd, "_load_client", lambda platform: client)
         monkeypatch.setattr(
             primary, "get_primary_db", lambda: Path("/nowhere/primary.db")
@@ -196,11 +208,11 @@ class TestCopiedDatabaseIsNotASandbox:
 class TestDisambiguationPromptIsBounded:
     """The multi-match prompt must only accept a position it offered.
 
-    Found by an adversarial review of the BUG-25 fix. The prompt indexed the
-    full track list, so a choice outside the offered set selected a bystander
-    and then pushed that removal live. Python's negative indexing made the
-    worst cases silent rather than an IndexError: "0" resolved to tracks[-1],
-    the LAST track, and "-1" resolved to tracks[-2].
+    Found by an adversarial review of the numeric-target fix. The prompt
+    indexed the full track list, so a choice outside the offered set selected
+    a bystander and then pushed that removal live. Python's negative indexing
+    made the worst cases silent rather than an IndexError: "0" resolved to
+    tracks[-1], the LAST track, and "-1" resolved to tracks[-2].
     """
 
     @pytest.mark.parametrize("choice", ["0", "-1", "3"])
@@ -243,7 +255,7 @@ class TestPrimaryIsComparedByIdentity:
     ) -> None:
         db = Database(tmp_db)
         _seed(db, platform="tidal")
-        client = _FakeClient(tracks=[SimpleNamespace(title=t) for t in TITLES])
+        client = _FakeClient(tracks=_remote_tracks())
         monkeypatch.setattr(ingest_cmd, "_load_client", lambda platform: client)
 
         link = tmp_path / "linked.db"
@@ -261,7 +273,7 @@ class TestPrimaryIsComparedByIdentity:
 
         db = Database(tmp_db)
         _seed(db, platform="tidal")
-        client = _FakeClient(tracks=[SimpleNamespace(title=t) for t in TITLES])
+        client = _FakeClient(tracks=_remote_tracks())
         monkeypatch.setattr(ingest_cmd, "_load_client", lambda platform: client)
 
         copy = tmp_path / "copy.db"
@@ -278,7 +290,7 @@ class TestUnregisteredIsNotMistakenForACopy:
 
     Ali's point when she caught the inverted guard: a check that fires on the
     only correct case teaches people to keep --allow-nonprimary-push switched
-    on, and once that lives in a script beside --yes, BUG-24 protection is
+    on, and once that lives in a script beside --yes, the protection is
     gone at exactly the moment it was supposed to apply. So the remedy offered
     for "unregistered" is registration, never the override.
     """
@@ -288,7 +300,7 @@ class TestUnregisteredIsNotMistakenForACopy:
     ) -> None:
         db = Database(tmp_db)
         _seed(db, platform="tidal")
-        client = _FakeClient(tracks=[SimpleNamespace(title=t) for t in TITLES])
+        client = _FakeClient(tracks=_remote_tracks())
         monkeypatch.setattr(ingest_cmd, "_load_client", lambda platform: client)
         monkeypatch.setattr(primary, "get_primary_db", lambda: None)
 
@@ -305,7 +317,7 @@ class TestUnregisteredIsNotMistakenForACopy:
         """The escape hatch remains available, just not advertised as the fix."""
         db = Database(tmp_db)
         _seed(db, platform="tidal")
-        client = _FakeClient(tracks=[SimpleNamespace(title=t) for t in TITLES])
+        client = _FakeClient(tracks=_remote_tracks())
         monkeypatch.setattr(ingest_cmd, "_load_client", lambda platform: client)
         monkeypatch.setattr(primary, "get_primary_db", lambda: None)
 
