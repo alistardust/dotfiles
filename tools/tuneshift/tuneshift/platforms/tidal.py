@@ -267,6 +267,39 @@ class TidalClient:
 
         return self._call_with_retry(_get_playlist)
 
+    def _playlist_entries(
+        self, playlist: Any, playlist_id: str
+    ) -> list[tuple[int, TrackResult]]:
+        """Usable playlist entries, each with its index in the raw listing.
+
+        The raw index is carried because removal addresses the raw listing
+        while every caller sees only the compacted list. Keeping the skip
+        rule here means the two cannot drift apart.
+        """
+        entries: list[tuple[int, TrackResult]] = []
+        skipped = 0
+        for raw_index, track in enumerate(playlist.tracks()):
+            try:
+                if track is None or getattr(track, "name", None) is None:
+                    skipped += 1
+                    continue
+                entries.append((raw_index, self._track_to_result(track)))
+            except Exception as exc:  # noqa: BLE001
+                track_id = getattr(track, "id", "unknown")
+                logger.warning(
+                    "skipping unavailable track track_id=%s error=%s",
+                    track_id,
+                    exc,
+                )
+                skipped += 1
+        if skipped:
+            logger.warning(
+                "unavailable tracks skipped playlist_id=%s count=%d",
+                playlist_id,
+                skipped,
+            )
+        return entries
+
     def get_playlist_tracks(self, playlist_id: str) -> list[TrackResult]:
         """Return all tracks for a playlist in order.
 
@@ -278,29 +311,9 @@ class TidalClient:
         def _get_tracks() -> list[TrackResult]:
             assert self._session is not None
             playlist = self._session.playlist(playlist_id)
-            results: list[TrackResult] = []
-            skipped = 0
-            for track in playlist.tracks():
-                try:
-                    if track is None or getattr(track, "name", None) is None:
-                        skipped += 1
-                        continue
-                    results.append(self._track_to_result(track))
-                except Exception as exc:  # noqa: BLE001
-                    track_id = getattr(track, "id", "unknown")
-                    logger.warning(
-                        "skipping unavailable track track_id=%s error=%s",
-                        track_id,
-                        exc,
-                    )
-                    skipped += 1
-            if skipped:
-                logger.warning(
-                    "unavailable tracks skipped playlist_id=%s count=%d",
-                    playlist_id,
-                    skipped,
-                )
-            return results
+            return [
+                result for _, result in self._playlist_entries(playlist, playlist_id)
+            ]
 
         return self._call_with_retry(_get_tracks)
 
@@ -332,7 +345,14 @@ class TidalClient:
         return self._call_with_retry(_add_tracks)
 
     def remove_tracks_by_positions(self, playlist_id: str, positions: list[int]) -> int:
-        """Remove tracks from a playlist by their zero-based positions."""
+        """Remove tracks from a playlist by their zero-based positions.
+
+        ``positions`` index the compacted list ``get_playlist_tracks``
+        returns. ``remove_by_indices`` addresses the raw listing, so the two
+        disagree by one for every entry skipped ahead of the target. Translate
+        before removing; an index that no longer resolves means the playlist
+        moved under us, which is reported rather than guessed at.
+        """
         self._ensure_session()
         if not positions:
             return 0
@@ -340,8 +360,17 @@ class TidalClient:
         def _remove_tracks() -> int:
             assert self._session is not None
             playlist = self._session.playlist(playlist_id)
-            playlist.remove_by_indices(sorted(positions, reverse=True))
-            return len(positions)
+            entries = self._playlist_entries(playlist, playlist_id)
+            raw_indices = []
+            for position in positions:
+                if not 0 <= position < len(entries):
+                    raise IndexError(
+                        f"position {position} is outside the {len(entries)} "
+                        f"tracks now in playlist {playlist_id}"
+                    )
+                raw_indices.append(entries[position][0])
+            playlist.remove_by_indices(sorted(raw_indices, reverse=True))
+            return len(raw_indices)
 
         return self._call_with_retry(_remove_tracks)
 

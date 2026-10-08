@@ -387,30 +387,41 @@ class YTMusicClient:
         return added
 
     def remove_tracks_by_positions(self, playlist_id: str, positions: list[int]) -> int:
-        """Remove playlist entries by zero-based positions via Data API v3."""
+        """Remove playlist entries by zero-based positions via Data API v3.
+
+        ``positions`` index the compacted list ``get_playlist_tracks``
+        returns, which drops entries carrying no videoId. The item listing
+        here has to drop the same ones, or a deleted or private entry ahead of
+        the target shifts the index and removes a bystander. Deletion is by
+        item id, so only the selection is position-sensitive.
+        """
         if not positions:
             return 0
-        # Fetch all playlist item IDs
         item_ids: list[str] = []
         params: dict[str, Any] = {
-            "part": "id",
+            "part": "id,snippet",
             "playlistId": playlist_id,
             "maxResults": 50,
         }
         while True:
             data = self._data_api("get", "playlistItems", params=params)
             for item in data.get("items", []):
-                item_ids.append(item["id"])
+                snippet = item.get("snippet", {})
+                if snippet.get("resourceId", {}).get("videoId", ""):
+                    item_ids.append(item["id"])
             next_page = data.get("nextPageToken")
             if not next_page:
                 break
             params["pageToken"] = next_page
-        # Delete by position (reverse order to preserve indices)
         removed = 0
         for pos in sorted(positions, reverse=True):
-            if 0 <= pos < len(item_ids):
-                self._data_api("delete", "playlistItems", params={"id": item_ids[pos]})
-                removed += 1
+            if not 0 <= pos < len(item_ids):
+                raise IndexError(
+                    f"position {pos} is outside the {len(item_ids)} "
+                    f"tracks now in playlist {playlist_id}"
+                )
+            self._data_api("delete", "playlistItems", params={"id": item_ids[pos]})
+            removed += 1
         return removed
 
     def replace_playlist_tracks(self, playlist_id: str, track_ids: list[str]) -> None:

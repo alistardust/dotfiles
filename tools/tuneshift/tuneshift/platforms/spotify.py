@@ -240,10 +240,16 @@ class SpotifyClient:
             num_tracks=int(playlist.get("tracks", {}).get("total", 0)),
         )
 
-    def get_playlist_tracks(self, playlist_id: str) -> list[TrackResult]:
-        """Return all tracks in a Spotify playlist."""
-        spotify = self._ensure_session()
-        results: list[TrackResult] = []
+    def _playlist_entries(
+        self, spotify: Any, playlist_id: str
+    ) -> list[tuple[int, TrackResult]]:
+        """Usable playlist entries, each with its index in the raw listing.
+
+        Spotify returns local-only and unavailable items with no id. They are
+        dropped from the track list but still occupy a position in the
+        playlist, which is the index space removal addresses.
+        """
+        entries: list[tuple[int, TrackResult]] = []
         offset = 0
         while True:
             page = self._call_api(
@@ -254,15 +260,20 @@ class SpotifyClient:
                     fields="items(track(id,name,artists,album,duration_ms,external_ids)),total",
                 )
             )
-            for item in page.get("items", []):
+            for index, item in enumerate(page.get("items", [])):
                 track = item.get("track")
                 if track and track.get("id"):
-                    results.append(self._track_to_result(track))
+                    entries.append((offset + index, self._track_to_result(track)))
             total = int(page.get("total", 0))
             offset += 100
             if offset >= total:
                 break
-        return results
+        return entries
+
+    def get_playlist_tracks(self, playlist_id: str) -> list[TrackResult]:
+        """Return all tracks in a Spotify playlist."""
+        spotify = self._ensure_session()
+        return [result for _, result in self._playlist_entries(spotify, playlist_id)]
 
     def create_playlist(self, name: str, description: str = "") -> PlaylistInfo:
         """Create a private Spotify playlist."""
@@ -294,18 +305,30 @@ class SpotifyClient:
         return len(track_ids)
 
     def remove_tracks_by_positions(self, playlist_id: str, positions: list[int]) -> int:
-        """Remove tracks from a playlist by their zero-based positions."""
+        """Remove tracks from a playlist by their zero-based positions.
+
+        ``positions`` index the compacted list ``get_playlist_tracks``
+        returns, while the ``positions`` field Spotify expects indexes the raw
+        playlist. Sending the compacted index pairs a uri with a position that
+        does not hold it; Spotify rejects the mismatch rather than removing
+        the wrong track, so this surfaced as a failure rather than damage.
+        """
         spotify = self._ensure_session()
-        tracks = self.get_playlist_tracks(playlist_id)
+        entries = self._playlist_entries(spotify, playlist_id)
         items_to_remove = []
         for position in sorted(positions):
-            if 0 <= position < len(tracks):
-                items_to_remove.append(
-                    {
-                        "uri": self._to_track_uri(tracks[position].platform_id),
-                        "positions": [position],
-                    }
+            if not 0 <= position < len(entries):
+                raise IndexError(
+                    f"position {position} is outside the {len(entries)} "
+                    f"tracks now in playlist {playlist_id}"
                 )
+            raw_index, track = entries[position]
+            items_to_remove.append(
+                {
+                    "uri": self._to_track_uri(track.platform_id),
+                    "positions": [raw_index],
+                }
+            )
         if items_to_remove:
             self._call_api(
                 lambda: spotify.playlist_remove_specific_occurrences_of_items(
