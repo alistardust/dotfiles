@@ -21,10 +21,10 @@ def test_ingest_creates_playlist_and_tracks(tmp_db: Path) -> None:
         TrackResult(platform_id="t2", title="Rebel Rebel", artist="David Bowie", album="Diamond Dogs"),
     ]
 
-    name, total, new, _skipped = ingest_from_platform(db, client, "pl_123")
-    assert name == "Diamond Dogs"
-    assert total == 2
-    assert new == 2
+    result = ingest_from_platform(db, client, "pl_123")
+    assert result.name == "Diamond Dogs"
+    assert result.total_remote == 2
+    assert result.new_tracks == 2
 
     # Verify playlist created
     pl = db.find_playlist_by_name("Diamond Dogs")
@@ -52,9 +52,9 @@ def test_ingest_deduplicates_existing_tracks(tmp_db: Path) -> None:
         TrackResult(platform_id="sp_t1", title="Diamond Dogs", artist="David Bowie", album="Diamond Dogs"),
     ]
 
-    name, total, new, _skipped = ingest_from_platform(db, client, "sp_pl1")
-    assert total == 1
-    assert new == 0
+    result = ingest_from_platform(db, client, "sp_pl1")
+    assert result.total_remote == 1
+    assert result.new_tracks == 0
 
 
 def test_ingest_stores_platform_mapping(tmp_db: Path) -> None:

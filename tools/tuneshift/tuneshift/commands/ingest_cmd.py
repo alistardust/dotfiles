@@ -21,15 +21,31 @@ def handle_ingest(args, db: Database) -> int:
         return 1
 
     try:
-        name, total, new, skipped = ingest_from_platform(db, client, args.playlist_id)
+        result = ingest_from_platform(
+            db, client, args.playlist_id, replace=getattr(args, "replace", False)
+        )
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
 
-    msg = f'Ingested "{name}" from {args.platform}: {total} tracks ({new} new)'
-    if skipped:
-        msg += f" ({skipped} unavailable, skipped)"
+    msg = (
+        f'Ingested "{result.name}" from {args.platform}: '
+        f"{result.total_remote} remote tracks, {result.added_to_playlist} added"
+    )
+    if result.new_tracks:
+        msg += f", {result.new_tracks} new to library"
+    if result.kept_local_only:
+        msg += f", {result.kept_local_only} local-only kept"
+    if result.skipped:
+        msg += f", {result.skipped} unavailable and skipped"
     print(msg)
+
+    if result.removed_from_playlist:
+        print(
+            f"  Removed {result.removed_from_playlist} local-only track(s) "
+            f"absent from {args.platform}, because --replace was given.",
+            file=sys.stderr,
+        )
     return 0
 
 

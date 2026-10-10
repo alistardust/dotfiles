@@ -70,6 +70,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_ingest = sub.add_parser("ingest", help="Import a playlist from a platform")
     p_ingest.add_argument("platform", choices=["tidal", "spotify", "ytmusic"])
     p_ingest.add_argument("playlist_id", help="Platform-specific playlist ID or URL")
+    p_ingest.add_argument(
+        "--replace",
+        action="store_true",
+        help="Make the remote authoritative, dropping local-only tracks "
+        "(default is to merge and keep them)",
+    )
 
     # sync
     p_sync = sub.add_parser(
