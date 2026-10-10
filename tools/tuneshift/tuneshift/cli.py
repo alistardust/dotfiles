@@ -287,12 +287,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_enrich.add_argument(
         "--classify",
         action="store_true",
-        help="Run LLM classification for narrative fields",
+        help="Run LLM classification for narrative fields (off by default; slow)",
     )
     p_enrich.add_argument(
         "--reclassify",
         action="store_true",
-        help="Force re-classify all tracks (overwrites existing)",
+        help="Force re-classify all tracks, overwriting existing (implies --classify)",
     )
     p_enrich.add_argument("--model", help="Override LLM model for classification")
     p_enrich.add_argument(
