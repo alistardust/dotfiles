@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 
 from tuneshift.curation.context import PlaylistContext
-from tuneshift.curation.scoring import score_track_contribution
+from tuneshift.curation.scoring import mean_contribution, score_track_contribution
 from tuneshift.sequencer.metadata import TrackMetadata
 
 
@@ -40,14 +40,24 @@ def curate_trim(
     """
     protected = frozenset(protected_ids or ())
 
-    scored = []
-    for track in tracks:
-        scores = score_track_contribution(track, ctx, tracks)
-        avg_score = sum(scores.values()) / len(scores) if scores else 0.5
-        scored.append((track, avg_score))
-
-    # Sort by score descending (best tracks first)
-    scored.sort(key=lambda x: x[1], reverse=True)
+    # Rank greedily rather than all at once. The comparative dimensions score a
+    # candidate against what has already been kept, so each pick changes the
+    # standing of everything still in contention; scoring once against the
+    # whole pool would make them per-track constants. Pinned tracks seed the
+    # selection because they are keeps whatever they score.
+    remaining = list(tracks)
+    selected = [t for t in tracks if t.track_id in protected]
+    scored: list[tuple[TrackMetadata, float]] = []
+    while remaining:
+        round_scores = [
+            mean_contribution(score_track_contribution(t, ctx, tracks, selected))
+            for t in remaining
+        ]
+        best_index = max(range(len(remaining)), key=lambda i: round_scores[i])
+        best = remaining.pop(best_index)
+        scored.append((best, round_scores[best_index]))
+        if best.track_id not in protected:
+            selected.append(best)
 
     # Determine how many to keep based on constraints
     target_count = None
@@ -117,7 +127,7 @@ def curate_analyze(
             "title": track.title,
             "artist": track.artist,
             "dimensions": track_scores,
-            "average": sum(track_scores.values()) / len(track_scores),
+            "average": mean_contribution(track_scores),
         }
 
     # Sort by average score
