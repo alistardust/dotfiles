@@ -204,7 +204,14 @@ class TracksMixin(PersistenceBase):
         return self._row_to_track(row)
 
     def find_track(self, title: str, artist: str, album: str | None) -> Track | None:
-        """Find a track by identity using indexed normalized columns."""
+        """Find a track by identity using indexed normalized columns.
+
+        A null album means "unspecified" and matches any album. It used to mean
+        "only rows whose album is also null", which hid an album-bearing row
+        from any caller that omitted one and invited a duplicate. Rows with no
+        album still sort first, so a caller that genuinely means "no album"
+        keeps the row it used to get.
+        """
         norm_title = normalize_title(title)
         norm_artist = normalize_artist(artist)
         norm_album = normalize_title(album) if album else None
@@ -219,7 +226,8 @@ class TracksMixin(PersistenceBase):
             ).fetchone()
         else:
             row = self.conn.execute(
-                "SELECT * FROM tracks WHERE norm_title = ? AND norm_artist = ? AND norm_album IS NULL",
+                "SELECT * FROM tracks WHERE norm_title = ? AND norm_artist = ? "
+                "ORDER BY norm_album IS NOT NULL, id LIMIT 1",
                 (norm_title, norm_artist),
             ).fetchone()
         if row is None:
