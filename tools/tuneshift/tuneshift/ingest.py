@@ -1,43 +1,6 @@
 """Platform playlist ingestion: import playlists into canonical DB."""
 
-from dataclasses import dataclass
-
 from tuneshift.db import Database
-
-
-@dataclass(frozen=True)
-class IngestResult:
-    """What an ingest changed, counted in both directions.
-
-    ``new_tracks`` counts rows created in the library, which is not the same
-    as playlist membership: re-ingesting a playlist whose tracks all already
-    exist creates nothing while still changing what the playlist holds.
-    Reporting only the former is what made this operation read as a no-op.
-    """
-
-    name: str
-    total_remote: int
-    new_tracks: int
-    skipped: int
-    added_to_playlist: int
-    kept_local_only: int
-    removed_from_playlist: int
-
-
-def _dedupe(track_ids: list[int]) -> list[int]:
-    """Drop repeated ids, keeping first position.
-
-    The local model treats playlist membership as a set: removal deletes every
-    occurrence of a track and position lookup returns a single row. Admitting
-    duplicates here would create rows those paths cannot address.
-    """
-    seen: set[int] = set()
-    ordered: list[int] = []
-    for track_id in track_ids:
-        if track_id not in seen:
-            seen.add(track_id)
-            ordered.append(track_id)
-    return ordered
 
 
 def ingest_from_platform(
@@ -45,13 +8,10 @@ def ingest_from_platform(
     client: object,
     playlist_id: str,
     enrich: bool = True,
-    replace: bool = False,
-) -> IngestResult:
-    """Ingest a platform playlist into the canonical database.
+) -> tuple[str, int, int, int]:
+    """Ingest a playlist from a platform into the canonical database.
 
-    Merges by default: the remote order leads and local-only tracks are kept
-    after it. Pass ``replace=True`` to make the remote authoritative and drop
-    whatever it does not contain.
+    Returns (playlist_name, total_tracks, new_tracks_created, skipped_tracks).
     """
     platform_name = client.platform_name  # type: ignore[attr-defined]
 
@@ -73,18 +33,13 @@ def ingest_from_platform(
 
     if canonical_playlist is None:
         playlist_db_id = db.create_playlist(name)
-        existing_ids: list[int] = []
     else:
         playlist_db_id = canonical_playlist.id
-        existing_ids = _dedupe(db.get_playlist_track_ids(playlist_db_id))
 
-    # Resolve the remote side to canonical track ids, without writing
-    # playlist rows: membership is decided once, after the whole remote
-    # listing is known.
+    # Process each track
     new_count = 0
     skipped_count = 0
     track_ids_to_enrich: list[tuple[int, str]] = []
-    remote_ids: list[int] = []
 
     for position, tr in enumerate(raw_tracks, start=1):
         try:
@@ -106,7 +61,8 @@ def ingest_from_platform(
                 new_count += 1
                 track_ids_to_enrich.append((track_id, tr.platform_id))
 
-            remote_ids.append(track_id)
+            # Add to playlist (skip if already there)
+            db.add_track_to_playlist(playlist_db_id, track_id, position)
 
             # Store platform mapping
             from tuneshift.models import PlatformMapping
@@ -130,19 +86,6 @@ def ingest_from_platform(
             print(f"  Skipping track at position {position}: {exc}", file=sys.stderr)
             skipped_count += 1
 
-    remote_ids = _dedupe(remote_ids)
-    remote_set = set(remote_ids)
-    local_only = [track_id for track_id in existing_ids if track_id not in remote_set]
-    existing_set = set(existing_ids)
-
-    added = sum(1 for track_id in remote_ids if track_id not in existing_set)
-    if replace:
-        merged, kept, removed = remote_ids, 0, len(local_only)
-    else:
-        merged, kept, removed = remote_ids + local_only, len(local_only), 0
-
-    db.set_playlist_tracks(playlist_db_id, merged)
-
     # Link platform playlist
     db.link_platform_playlist(playlist_db_id, platform_name, playlist_id)
 
@@ -154,15 +97,7 @@ def ingest_from_platform(
     if track_ids_to_enrich:
         _auto_classify_batch(db, track_ids_to_enrich)
 
-    return IngestResult(
-        name=name,
-        total_remote=len(raw_tracks),
-        new_tracks=new_count,
-        skipped=skipped_count,
-        added_to_playlist=added,
-        kept_local_only=kept,
-        removed_from_playlist=removed,
-    )
+    return name, len(raw_tracks), new_count, skipped_count
 
 
 def _enrich_tracks(db: Database, client: object, tracks: list[tuple[int, str]]) -> None:

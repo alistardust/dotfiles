@@ -176,16 +176,10 @@ def handle_enrich(args, db: Database) -> int:
             msg += f", {meta_failed} failed (retries exhausted)"
         print(msg)
 
-    # LLM classification for narrative fields. Opt-in, as the help text has
-    # always claimed (BUG-32): the gate used to read `classify or not
-    # platform_name`, so the slowest and least reliable pass ran by default and
-    # the only way to suppress it was to name a platform, which buys an
-    # unwanted network pass instead. --reclassify is a form of asking for
-    # classification, so it opens the gate on its own; without that it would be
-    # a flag that silently does nothing.
-    reclassify = getattr(args, "reclassify", False)
-    if getattr(args, "classify", False) or reclassify:
+    # LLM classification for narrative fields
+    if getattr(args, "classify", False) or not platform_name:
         model = getattr(args, "model", None)
+        reclassify = getattr(args, "reclassify", False)
         classified = _run_classification(
             db,
             tracks,

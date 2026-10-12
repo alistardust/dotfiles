@@ -31,33 +31,15 @@ def handle_add(args, db: Database) -> int:
     else:
         playlist_id = playlist.id
 
-    # Find or create canonical track. Without an album the lookup is
-    # title and artist alone, so an existing row is reused rather than
-    # forked; several albums is ambiguity to report, not to guess at.
-    album = getattr(args, "album", None)
-    if album:
-        found = db.find_track(args.title, args.artist, album)
-        matches = [found] if found else []
-    else:
-        matches = db.find_tracks_by_title_artist(args.title, args.artist)
-
-    if len(matches) > 1:
-        print(
-            f'"{args.title}" by {args.artist} matches {len(matches)} library tracks:',
-            file=sys.stderr,
-        )
-        for match in matches:
-            print(f"  {match.album or '(no album)'}", file=sys.stderr)
-        print("Pass --album to say which one you mean.", file=sys.stderr)
-        return 1
-
-    if matches:
-        track_id = matches[0].id
+    # Find or create canonical track
+    existing = db.find_track(args.title, args.artist, getattr(args, "album", None))
+    if existing:
+        track_id = existing.id
     else:
         track = Track(
             title=args.title,
             artist=args.artist,
-            album=album,
+            album=getattr(args, "album", None),
         )
         track_id = db.add_track(track)
 
