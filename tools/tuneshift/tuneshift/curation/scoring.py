@@ -258,6 +258,47 @@ CURATION_SCORERS: dict[str, CurationScorer] = {
     "redundancy": score_redundancy,
 }
 
+#: Relative say each dimension gets in the mean. Unlisted dimensions weigh 1.0.
+#:
+#: Redundancy is held well below the musical dimensions because it is not a
+#: musical judgement: by construction it counts artist appearances, and its
+#: rank correlation with artist scarcity is exactly 1.0. Given a co-equal vote
+#: it does not merely influence the ranking, it *is* the ranking, because the
+#: dimensions it competes with are frequently silent on real data.
+#:
+#: Measured on a 64-track playlist, as the rank correlation of the final score
+#: with artist scarcity, against its correlation with musical energy:
+#:
+#:     weight 1.00   scarcity +0.790   energy +0.351
+#:     weight 0.33   scarcity +0.269   energy +0.770
+#:     weight 0.25   scarcity +0.133   energy +0.775
+#:     weight 0.00   scarcity -0.145   energy +0.740
+#:
+#: At 0.25 artist balance breaks ties without overturning a musical verdict,
+#: and the kept playlist keeps the intended artist shape. Dropping it to zero
+#: flattens that shape, which is a real loss: an artist holding a twelfth of
+#: the playlist should lose a track before an artist holding one does.
+#:
+#: This improves the ranking but does not on its own make trim rank songs.
+#: Two of the six dimensions are silent for want of playlist data and a third
+#: is near-constant, so the musical verdict rests mostly on energy, and energy
+#: is only as good as its classification.
+DIMENSION_WEIGHTS: dict[str, float] = {
+    "redundancy": 0.25,
+}
+
+# A misspelled key here would fall back to 1.0 and silently reinstate the
+# defect the weight exists to prevent, so refuse to import rather than run
+# with a weight that quietly does nothing.
+_unknown_weights = set(DIMENSION_WEIGHTS) - set(CURATION_SCORERS)
+if _unknown_weights:
+    raise ValueError(
+        f"DIMENSION_WEIGHTS names dimensions that do not exist: "
+        f"{sorted(_unknown_weights)}. Known dimensions: {sorted(CURATION_SCORERS)}"
+    )
+if any(weight < 0 for weight in DIMENSION_WEIGHTS.values()):
+    raise ValueError("DIMENSION_WEIGHTS must be non-negative; see mean_contribution")
+
 
 def score_track_contribution(
     track: TrackMetadata,
@@ -282,14 +323,27 @@ def score_track_contribution(
 
 
 def mean_contribution(scores: dict[str, float | None]) -> float:
-    """Average the dimensions that had something to say.
+    """Average the dimensions that had something to say, by their weight.
 
     Abstentions are excluded rather than averaged in as 0.5, which would pull
     every track toward the middle and compress the ranking into noise. A track
     no dimension could judge scores 0.5, which ties it with its peers instead
     of ranking it arbitrarily.
+
+    Weights come from :data:`DIMENSION_WEIGHTS` and are applied to the divisor
+    as well as the numerator. An abstaining dimension drops its weight from
+    both, so a track is scored on the scale of the dimensions that actually
+    spoke rather than being depressed by the silence of one that did not.
+
+    A dimension weighted 0.0 has no say by definition, so if it is the only
+    one that did not abstain, nothing judged the track and it scores 0.5.
     """
-    present = [v for v in scores.values() if v is not None]
-    if not present:
+    weighted = [
+        (DIMENSION_WEIGHTS.get(name, 1.0), value)
+        for name, value in scores.items()
+        if value is not None
+    ]
+    total_weight = sum(weight for weight, _ in weighted)
+    if not total_weight:
         return 0.5
-    return sum(present) / len(present)
+    return sum(weight * value for weight, value in weighted) / total_weight
