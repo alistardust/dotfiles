@@ -240,6 +240,27 @@ def strip_album_from_title(title: str, album: str | None) -> str:
     return _WHITESPACE_RE.sub(" ", cleaned).strip() or title
 
 
+def fold_typography(text: str) -> str:
+    """Fold accents, typographic punctuation, case and whitespace. Nothing else.
+
+    Edition parentheticals and feature credits survive, because a library
+    holds "Bohemian Rhapsody" and "Bohemian Rhapsody (Remastered 2011)" as
+    two rows and they must not reduce to one key.
+
+    :func:`normalize_title` strips those deliberately: its job is to find the
+    same song under a different release, across catalogues that disagree
+    about how to label one. This is the narrower job of recognising a string
+    as itself after a round trip that may have restyled it, such as a
+    language model echoing back a title it was handed.
+    """
+    if not text:
+        return ""
+    text = unicodedata.normalize("NFC", text)
+    text = fold_accents(text)
+    text = text.translate(_PUNCT_NORMALIZE)
+    return _WHITESPACE_RE.sub(" ", text).strip().casefold()
+
+
 def normalize_title(title: str) -> str:
     """Normalize a track/album title for comparison."""
     if not title:

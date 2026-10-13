@@ -4,6 +4,7 @@ import logging
 import sys
 
 from tuneshift.db import Database
+from tuneshift.matching.normalize import fold_typography, normalize_artist
 
 logger = logging.getLogger(__name__)
 
@@ -273,37 +274,69 @@ def _run_classification(
     )
 
     classified = 0
-    # Build lookup map to match results by title/artist (guards against LLM reordering/dropping)  # noqa: E501
-    track_lookup: dict[tuple[str, str], dict] = {}
+    written: set[int] = set()
+    # Match results back by title/artist, since the model may reorder or drop
+    # rows. Keys fold typography but keep edition and feature parentheticals:
+    # a model is free to echo a title with a curly apostrophe, which a raw
+    # casefold reads as a different track, but "Bohemian Rhapsody" and its
+    # remaster are two rows here and must not reduce to one key.
+    # A key held by more than one row maps to None, meaning refuse.
+    track_lookup: dict[tuple[str, str], dict | None] = {}
+    title_lookup: dict[str, dict | None] = {}
     for t in to_classify:
-        key = (t["title"].lower().strip(), t["artist"].lower().strip())
-        track_lookup[key] = t
+        key = (fold_typography(t["title"]), normalize_artist(t["artist"]))
+        track_lookup[key] = None if key in track_lookup else t
+        title_lookup[key[0]] = None if key[0] in title_lookup else t
 
     for result in results:
-        result_title = result.get("title", "").lower().strip()
-        result_artist = result.get("artist", "").lower().strip()
+        result_title = fold_typography(result.get("title") or "")
+        result_artist = normalize_artist(result.get("artist") or "")
         matched_track = None
+        ambiguous = False
 
         if result_title or result_artist:
-            # Try exact match first
-            matched_track = track_lookup.get((result_title, result_artist))
-            # Fallback: match by title only (handles artist name variants)
-            if not matched_track and result_title:
-                for key, t in track_lookup.items():
-                    if key[0] == result_title:
-                        matched_track = t
-                        break
+            key = (result_title, result_artist)
+            if key in track_lookup:
+                matched_track = track_lookup[key]
+                ambiguous = matched_track is None
+            # Fallback: match by title only (handles artist name variants).
+            # An ambiguous exact key implies an ambiguous title, so this
+            # correctly stays refused.
+            if matched_track is None and result_title in title_lookup:
+                matched_track = title_lookup[result_title]
+                ambiguous = matched_track is None
 
-        if not matched_track:
-            # If LLM omitted identifying fields, skip (no silent miswrite)
+        if matched_track is None:
+            # Never guess: a wrong match writes one track's narrative onto
+            # another, which no later pass would detect.
+            if ambiguous:
+                logger.warning(
+                    "Skipping ambiguous LLM result, matches more than one track: "
+                    "title='%s' artist='%s'",
+                    result.get("title"),
+                    result.get("artist"),
+                )
+            else:
+                logger.warning(
+                    "Skipping unmatched LLM result: title='%s' artist='%s'",
+                    result.get("title"),
+                    result.get("artist"),
+                )
+            continue
+
+        if matched_track["id"] in written:
+            # The model echoed one track twice. Counting it twice reports
+            # more work than was done, and the later copy would silently
+            # overwrite the earlier one.
             logger.warning(
-                "Skipping unmatched LLM result: title='%s' artist='%s'",
+                "Skipping duplicate LLM result: title='%s' artist='%s'",
                 result.get("title"),
                 result.get("artist"),
             )
             continue
 
         db.update_track_metadata(matched_track["id"], result)
+        written.add(matched_track["id"])
         classified += 1
 
     print(f'  Classified {classified}/{len(to_classify)} tracks for "{playlist_name}"')

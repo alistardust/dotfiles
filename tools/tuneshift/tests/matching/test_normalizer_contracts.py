@@ -1,12 +1,18 @@
-"""Drift-guard contracts for the four normalizers (FL4).
+"""Drift-guard contracts for the five normalizers (FL4).
 
-TuneShift has four normalization functions that serve THREE distinct concerns.
+TuneShift has five normalization functions that serve FOUR distinct concerns.
 They must NOT be collapsed into one, because their outputs mean different things
 and some are persisted:
 
 1. ``matching.normalize_*`` -- COMPARISON / equivalence keys used by the scoring
    engine. Aggressive: folds Latin accents, strips feat/explicit/all editions,
    casefolds. Output is transient (recomputed every match).
+
+1b. ``matching.fold_typography`` -- ROUND-TRIP identity. Folds accents,
+   typographic punctuation, case and whitespace, and stops. Recognises a string
+   as itself after something restyled it (a model echoing back a title), so it
+   must NOT strip editions or feat: those distinguish rows the library holds
+   separately.
 
 2. ``db.normalize_*`` -- STORED, INDEXED identity keys (``norm_title`` /
    ``norm_artist`` / ``norm_album`` columns; ``albums`` has
@@ -120,6 +126,36 @@ class TestMatchingNormalizerContract:
         assert matching_normalize.normalize_artist("Beyoncé") == matching_normalize.normalize_artist("Beyonce")
 
 
+class TestFoldTypographyContract:
+    """matching.fold_typography is the round-trip identity key.
+
+    Narrower than ``normalize_title`` on purpose. It recognises a string as
+    itself after something restyled it, such as a language model echoing back
+    a title it was handed, and it does not try to find the same song under a
+    different release. Two rows the library holds separately must stay
+    separate keys.
+    """
+
+    def test_fold_typography_golden(self):
+        cases = {
+            "Café del Mar": "cafe del mar",                  # accents FOLDED
+            "I\u2019ll Feel Better": "i'll feel better",     # curly -> straight
+            "Song  (Remastered 2009)": "song (remastered 2009)",  # edition KEPT
+            "Track (feat. Drake)": "track (feat. drake)",    # feat KEPT
+            "Track [Explicit]": "track [explicit]",          # explicit KEPT
+            "  Spaced   Out  ": "spaced out",                # whitespace collapsed
+            "": "",
+        }
+        for raw, expected in cases.items():
+            assert matching_normalize.fold_typography(raw) == expected, raw
+
+    def test_restyled_punctuation_folds_together(self):
+        # The whole point: a model may return either apostrophe.
+        straight = matching_normalize.fold_typography("I'll Feel Better")
+        curly = matching_normalize.fold_typography("I\u2019ll Feel Better")
+        assert straight == curly
+
+
 class TestIdentitySearchNormalizerContract:
     """identity.normalize_*_for_search builds external query strings."""
 
@@ -161,7 +197,7 @@ class TestComposerTokenizerContract:
 
 
 class TestNormalizerDivergence:
-    """The four normalizers intentionally DISAGREE. Lock the divergences so no
+    """The five normalizers intentionally DISAGREE. Lock the divergences so no
     future 'consolidation' silently makes one delegate to another."""
 
     def test_db_and_matching_disagree_on_accents(self):
@@ -177,3 +213,20 @@ class TestNormalizerDivergence:
         assert identity_matching.normalize_artist_for_search(raw) == "Beyoncé"
         assert db_mod.normalize_artist(raw) == "beyoncé"
         assert matching_normalize.normalize_artist(raw) == "beyonce"
+
+    def test_fold_typography_and_matching_disagree_on_editions(self):
+        # The regression this pair exists to prevent: borrowing normalize_title
+        # for round-trip identity collapses a remaster onto its original, and
+        # the enrich ambiguity guard then refuses to classify either.
+        plain, remaster = "Bohemian Rhapsody", "Bohemian Rhapsody (Remastered 2011)"
+        assert matching_normalize.normalize_title(plain) == matching_normalize.normalize_title(remaster)
+        assert matching_normalize.fold_typography(plain) != matching_normalize.fold_typography(remaster)
+
+    def test_fold_typography_and_matching_disagree_on_feat(self):
+        plain, feat = "Big Yellow Taxi", "Big Yellow Taxi (feat. Lucius)"
+        assert matching_normalize.normalize_title(plain) == matching_normalize.normalize_title(feat)
+        assert matching_normalize.fold_typography(plain) != matching_normalize.fold_typography(feat)
+
+    def test_fold_typography_and_db_disagree_on_accents(self):
+        raw = "Café"
+        assert db_mod.normalize_title(raw) != matching_normalize.fold_typography(raw)
