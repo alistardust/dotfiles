@@ -28,7 +28,9 @@ def _no_background_enrichment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ingest_module, "_auto_classify_batch", lambda *a, **k: None)
 
 
-def _client(*titles: str, name: str = "Laurel Canyon Sunset") -> MagicMock:
+def _client(
+    *titles: str, name: str = "Laurel Canyon Sunset", album: str = "Blue"
+) -> MagicMock:
     """Build a fake platform client serving ``titles`` as the remote playlist."""
     client = MagicMock()
     client.platform_name = "tidal"
@@ -40,7 +42,7 @@ def _client(*titles: str, name: str = "Laurel Canyon Sunset") -> MagicMock:
             platform_id=f"tid_{title.replace(' ', '_')}",
             title=title,
             artist="Joni Mitchell",
-            album="Blue",
+            album=album,
         )
         for title in titles
     ]
@@ -166,3 +168,130 @@ def test_a_track_listed_twice_remotely_lands_once(tmp_db: Path) -> None:
     assert result.added_to_playlist == 2, (
         "the duplicate was counted as a distinct addition"
     )
+
+
+# The addition half of the merge. Live testing only ever saw remotes that were
+# a subset of local, so every run reported "0 added" and no remote-only track
+# was observed arriving. These pin that half: where an addition lands, and
+# that it reuses the library row it already has rather than growing a second.
+
+
+def test_a_remote_only_track_reuses_the_library_row_from_another_playlist(
+    tmp_db: Path,
+) -> None:
+    """The same song in two playlists is one library row, not two.
+
+    This is where a duplicate library row appears silently. Ingest resolves
+    each remote track with ``find_track`` before adding one, so a song the
+    library already holds for a different playlist must resolve to that row.
+    A second row would split the song's mappings, tags and enrichment in two
+    with nothing in the output to say it happened.
+    """
+    db = Database(tmp_db)
+    other = _seed_local(db, "Blue Sessions", "All I Want")
+    target = _seed_local(db, "Laurel Canyon Sunset", "Carey")
+
+    result = ingest_from_platform(db, _client("Carey", "All I Want"), "pl_1")
+
+    rows = db.find_tracks_by_title_artist("All I Want", "Joni Mitchell")
+    assert len(rows) == 1, f"a second library row was created: {rows}"
+    assert result.new_tracks == 0
+    assert result.added_to_playlist == 1
+    assert "All I Want" in _titles(db, target)
+    assert _titles(db, other) == ["All I Want"], "the other playlist was disturbed"
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "UNFILED (QA to number): db.normalize_title strips edition parens only "
+        "when the label comes first in the parenthetical. _REMIX_RE is "
+        "'\\((?:remaster(?:ed)?|deluxe edition)[^)]*\\)', so '(Remastered 2011)' "
+        "strips and '(2021 Remaster)' does not. At least four independent "
+        "families miss: year-first '(2021 Remaster)', bare label '(Deluxe)', "
+        "different label '(Expanded Edition)', and ordinal-first "
+        "'(50th Anniversary Edition)'. A fix for any one of them leaves the "
+        "other three, so this marker alone going red does NOT mean the bug is "
+        "closed. Measured on the real library: 276 of 2757 rows carry a label "
+        "this misses, and 15 songs are already split across 34 rows. Two of "
+        "those splits are the ambiguous pairs QA hit while classifying, "
+        "including Caroline, No at ids 107 and 2154. "
+        "COUPLED TEST: tests/matching/test_normalizer_contracts.py"
+        "::TestStoredKeysStayReachableAfterANormalizerEdit"
+        "::test_every_indexed_row_is_still_reachable "
+        "pins that rows indexed under the current normalizer stay reachable. "
+        "norm_* is written at insert and recomputed at query time, so widening "
+        "the regex to make THIS test pass turns every already-stored row stale "
+        "and that pin goes red. When BOTH go red the fix is incomplete: it "
+        "needs a backfill migration of every norm_* value, not a regex edit. "
+        "When this goes red and that one stays green the fix is complete: "
+        "remove this marker. Do not widen the regex without the migration."
+    ),
+)
+def test_an_edition_suffix_on_the_remote_album_still_finds_the_row(
+    tmp_db: Path,
+) -> None:
+    """Platforms relabel albums between catalogues; the row must survive it.
+
+    ``find_track`` normalises the album with the STORED normaliser, which is
+    deliberately light. A remaster label on the remote side should resolve to
+    the plain row already in the library; today it does not, and ingest grows
+    a second row for the same recording.
+    """
+    db = Database(tmp_db)
+    _seed_local(db, "Laurel Canyon Sunset", "Carey")
+
+    result = ingest_from_platform(
+        db, _client("Carey", album="Blue (2021 Remaster)"), "pl_1"
+    )
+
+    rows = db.find_tracks_by_title_artist("Carey", "Joni Mitchell")
+    assert len(rows) == 1, f"the remaster label created a second row: {rows}"
+    assert result.new_tracks == 0
+
+
+def test_a_remote_only_track_lands_in_remote_order_not_at_the_end(
+    tmp_db: Path,
+) -> None:
+    """Additions take their remote position; only local-only tracks trail.
+
+    The existing order test puts the new track last in the remote listing, so
+    appending and inserting are indistinguishable there. Here the additions sit
+    first and third.
+    """
+    db = Database(tmp_db)
+    playlist_id = _seed_local(db, "Laurel Canyon Sunset", "Carey", "River")
+
+    result = ingest_from_platform(db, _client("All I Want", "Carey", "Blue"), "pl_1")
+
+    assert _titles(db, playlist_id) == ["All I Want", "Carey", "Blue", "River"]
+    assert result.added_to_playlist == 2
+    assert result.kept_local_only == 1
+
+
+def test_a_track_that_fails_to_add_is_skipped_and_counted(
+    tmp_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One unusable remote row must not abort the ingest or the merge.
+
+    The loop catches per-track failures so a single bad row cannot cost the
+    whole playlist. The count is what makes the loss visible, so it is pinned
+    alongside the surviving tracks.
+    """
+    db = Database(tmp_db)
+    playlist_id = _seed_local(db, "Laurel Canyon Sunset", "Carey")
+    real_add = db.add_track
+
+    def failing_add(track):  # type: ignore[no-untyped-def]
+        if track.title == "Blue":
+            raise ValueError("unusable row")
+        return real_add(track)
+
+    monkeypatch.setattr(db, "add_track", failing_add)
+
+    result = ingest_from_platform(db, _client("Carey", "Blue", "All I Want"), "pl_1")
+
+    assert result.skipped == 1
+    assert "Blue" not in _titles(db, playlist_id)
+    assert _titles(db, playlist_id) == ["Carey", "All I Want"]
+    assert result.added_to_playlist == 1

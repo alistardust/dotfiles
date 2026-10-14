@@ -230,3 +230,135 @@ class TestNormalizerDivergence:
     def test_fold_typography_and_db_disagree_on_accents(self):
         raw = "Café"
         assert db_mod.normalize_title(raw) != matching_normalize.fold_typography(raw)
+
+
+# The norm_* columns are written once at insert and read on every lookup. The
+# golden corpus above pins what the normalizer emits; it cannot see rows that
+# were indexed before an edit. This class holds the other end: a library whose
+# norm_* values were frozen under today's normalizer, asserted to still be
+# reachable through find_track, which recomputes the key at query time.
+#
+# These literals are deliberately NOT recomputed from the normalizer. Deriving
+# them would move both sides together and pin nothing.
+INDEXED_LIBRARY = [
+    # title, artist, album, norm_title, norm_artist, norm_album
+    ("Carey", "Joni Mitchell", "Blue", "carey", "joni mitchell", "blue"),
+    (
+        "Café Solo",
+        "Sigur Rós",
+        "Ágætis byrjun",
+        "café solo",
+        "sigur rós",
+        "ágætis byrjun",
+    ),
+    (
+        "Song (feat. Nico)",
+        "The Velvet Underground",
+        "Loaded",
+        "song (feat. nico)",
+        "velvet underground",
+        "loaded",
+    ),
+    (
+        "Black & White",
+        "Earth & Fire",
+        "Atlantis",
+        "black and white",
+        "earth and fire",
+        "atlantis",
+    ),
+    (
+        "Within You Without You",
+        "The Beatles",
+        "Sgt. Pepper (Remastered)",
+        "within you without you",
+        "beatles",
+        "sgt. pepper",
+    ),
+    ("Hey   Jude", "The Beatles", None, "hey jude", "beatles", None),
+    # One row per family the regex currently misses, stored as the library
+    # holds them today. These are what a regex widening would strand: the
+    # lookup would compute the stripped key and never reach the stored one.
+    (
+        "Them Bones",
+        "Alice In Chains",
+        "Dirt (2022 Remaster)",
+        "them bones",
+        "alice in chains",
+        "dirt (2022 remaster)",
+    ),
+    (
+        "Diamonds",
+        "Rihanna",
+        "Diamonds (Deluxe)",
+        "diamonds",
+        "rihanna",
+        "diamonds (deluxe)",
+    ),
+    (
+        "Kokomo",
+        "The Beach Boys",
+        "Sounds Of Summer (Expanded Edition)",
+        "kokomo",
+        "beach boys",
+        "sounds of summer (expanded edition)",
+    ),
+    (
+        "Sloop John B",
+        "The Beach Boys",
+        "Pet Sounds (50th Anniversary Edition)",
+        "sloop john b",
+        "beach boys",
+        "pet sounds (50th anniversary edition)",
+    ),
+]
+
+
+class TestStoredKeysStayReachableAfterANormalizerEdit:
+    """A row indexed yesterday must still be found today, or it is a migration.
+
+    Changing ``db.normalize_*`` does not rewrite the ``norm_*`` columns already
+    on disk. ``find_track`` normalizes its arguments at query time, so an edit
+    that is not paired with a backfill makes existing rows silently
+    unreachable: the lookup misses, the caller concludes the track is new, and
+    ingest writes a second library row for a song that was already there. No
+    error is raised at any point.
+    """
+
+    def _library(self, tmp_path):
+        db = db_mod.Database(tmp_path / "indexed.db")
+        for title, artist, album, n_title, n_artist, n_album in INDEXED_LIBRARY:
+            db.conn.execute(
+                "INSERT INTO tracks "
+                "(title, artist, album, norm_title, norm_artist, norm_album) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (title, artist, album, n_title, n_artist, n_album),
+            )
+        db.conn.commit()
+        return db
+
+    def test_every_indexed_row_is_still_reachable(self, tmp_path):
+        db = self._library(tmp_path)
+        for title, artist, album, *_ in INDEXED_LIBRARY:
+            found = db.find_track(title, artist, album)
+            assert found is not None, (
+                f"{title!r} by {artist!r} was indexed under the frozen "
+                f"normalizer and find_track can no longer reach it. The "
+                f"normalizer changed without a backfill of norm_*; every "
+                f"stored row is now stale and ingest will duplicate it."
+            )
+            assert found.title == title
+
+    def test_a_stale_key_is_what_duplication_looks_like(self, tmp_path):
+        # Demonstrates the failure the test above guards against, using a row
+        # whose stored key was written under a normalizer that lowercased
+        # nothing. This is the shape of every row in the library after an
+        # unmigrated edit.
+        db = db_mod.Database(tmp_path / "stale.db")
+        db.conn.execute(
+            "INSERT INTO tracks (title, artist, norm_title, norm_artist) "
+            "VALUES (?, ?, ?, ?)",
+            ("Carey", "Joni Mitchell", "Carey", "Joni Mitchell"),
+        )
+        db.conn.commit()
+        assert db.find_track("Carey", "Joni Mitchell", None) is None
