@@ -42,13 +42,18 @@ def _track(track_id: int, title: str, artist: str) -> SimpleNamespace:
 
 
 def _run(tracks: list, results: list) -> tuple[Mock, int]:
-    """Run classification with a stubbed backend. Returns (db, classified)."""
+    """Run classification with a stubbed backend. Returns (db, classified).
+
+    The per-track recovery call returns nothing, so these tests see the
+    matching path alone. Recovery is covered in ``test_enrich_recovery``.
+    """
     db = Mock()
     db.get_narrative.return_value = None
     classifier = Mock()
     classifier.available = True
     classifier.backend_info = "stub"
     classifier.classify_batched.return_value = results
+    classifier.classify.return_value = []
     with patch(CLASSIFIER, return_value=classifier):
         count = _run_classification(db, tracks, "Mix", playlist_id=1)
     return db, count

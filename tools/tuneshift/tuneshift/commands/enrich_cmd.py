@@ -2,6 +2,7 @@
 
 import logging
 import sys
+from typing import Any
 
 from tuneshift.db import Database
 from tuneshift.matching.normalize import fold_typography, normalize_artist
@@ -339,5 +340,63 @@ def _run_classification(
         written.add(matched_track["id"])
         classified += 1
 
+    classified += _recover_unwritten(
+        db, classifier, to_classify, written, narrative=narrative
+    )
+
     print(f'  Classified {classified}/{len(to_classify)} tracks for "{playlist_name}"')
     return classified
+
+
+def _recover_unwritten(
+    db: Database,
+    classifier: Any,
+    to_classify: list[dict],
+    already_written: set[int],
+    narrative: str | None = None,
+) -> int:
+    """Re-ask about each track the batch did not write, one track at a time.
+
+    A batch result carries no identifier, so it can only be bound by the
+    title the model echoes back. Models tidy titles, dropping an edition or
+    supplying a subtitle, and two rows sharing a key cannot be told apart at
+    all. Neither is reachable by normalising harder.
+
+    Asking about a single track removes the matching step: one track in, one
+    result out, bound by position. The echoed title is never read. A response
+    holding anything other than one result has no row to belong to, so it is
+    refused rather than guessed at.
+
+    ``already_written`` is read, not extended: it names the rows the batch
+    pass settled, and nothing downstream consults it again.
+
+    Returns the number of tracks recovered.
+    """
+    unwritten = [track for track in to_classify if track["id"] not in already_written]
+    if not unwritten:
+        return 0
+
+    # Printed on its own line: the batch progress uses a carriage return,
+    # which a pipe never shows, and a silent recovery is the defect here.
+    print(f"  Retrying {len(unwritten)} track(s) the batch did not classify...")
+
+    recovered = 0
+    for track in unwritten:
+        results = classifier.classify(
+            [{"title": track["title"], "artist": track["artist"]}],
+            narrative=narrative,
+        )
+        if len(results) != 1:
+            logger.warning(
+                "Recovery returned %s results for one track, skipping: "
+                "title='%s' artist='%s'",
+                len(results),
+                track["title"],
+                track["artist"],
+            )
+            continue
+
+        db.update_track_metadata(track["id"], results[0])
+        recovered += 1
+
+    return recovered
