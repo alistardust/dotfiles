@@ -226,6 +226,18 @@ class OpenAICompatibleBackend:
         return response.choices[0].message.content or ""
 
 
+_OLLAMA_SOCKET_FLOOR = 300.0
+_OLLAMA_SECONDS_PER_TOKEN = 0.05
+
+
+class LLMTruncationError(RuntimeError):
+    """The model stopped at its token ceiling, so the reply is incomplete.
+
+    Subclasses ``RuntimeError`` so existing callers keep catching it. Retrying
+    an identical request cannot recover: only a larger budget can.
+    """
+
+
 class OllamaBackend:
     """Backend for local Ollama instance."""
 
@@ -259,6 +271,15 @@ class OllamaBackend:
             raise ValueError(f"Cannot reach Ollama at {self._host}: {exc}") from exc
 
     def complete(self, prompt: str, model: str, max_tokens: int = 4096) -> str:
+        """Generate a completion, failing loudly on a truncated or empty reply.
+
+        Raises:
+            LLMTruncationError: The model stopped at the token ceiling, so the
+                reply is incomplete. Retrying as-is cannot help.
+            RuntimeError: The model returned nothing at all. Both cases used to
+                surface as an empty string, which reads downstream as a JSON
+                parse failure and hides the real cause.
+        """
         import urllib.request
 
         self._validate_model(model)
@@ -275,9 +296,26 @@ class OllamaBackend:
             data=payload,
             headers={"Content-Type": "application/json"},
         )
-        with urllib.request.urlopen(req, timeout=300) as resp:  # noqa: S310  (host validated by _validate_ollama_host, SSRF guard)  # nosec B310
+        socket_timeout = self._socket_timeout(max_tokens)
+        with urllib.request.urlopen(req, timeout=socket_timeout) as resp:  # noqa: S310  (host validated by _validate_ollama_host, SSRF guard)  # nosec B310
             result = json.loads(resp.read())
-        return result.get("response", "")
+        text: str = result.get("response", "")
+        done_reason = result.get("done_reason")
+        if done_reason == "length":
+            raise LLMTruncationError(
+                f"{model} hit the {max_tokens}-token generation ceiling, so the "
+                f"reply is truncated and cannot parse. Raise TUNESHIFT_LLM_TOKENS."
+            )
+        if not text.strip():
+            raise RuntimeError(
+                f"{model} returned an empty response (done_reason={done_reason!r})."
+            )
+        return text
+
+    @staticmethod
+    def _socket_timeout(max_tokens: int) -> float:
+        """Clear the generation itself: stream=False sends nothing until done."""
+        return max(_OLLAMA_SOCKET_FLOOR, max_tokens * _OLLAMA_SECONDS_PER_TOKEN)
 
     def ping(self) -> bool:
         """Return True if the Ollama host answers its tags endpoint quickly."""
@@ -436,9 +474,25 @@ class _TimeoutBackend:
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
 
-    def complete(self, prompt: str, model: str, max_tokens: int = 4096) -> str:
+    def complete(
+        self,
+        prompt: str,
+        model: str,
+        max_tokens: int = 4096,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> str:
+        """Run the inner backend, bounded by ``timeout_seconds`` if given.
+
+        Args:
+            timeout_seconds: Wall-clock budget for this call. ``None`` uses the
+                budget fixed at construction. A caller that knows the batch size
+                passes a scaled value, since the construction-time budget sizes a
+                single call.
+        """
         import threading
 
+        budget = self._timeout if timeout_seconds is None else timeout_seconds
         box: dict[str, Any] = {}
 
         def _target() -> None:
@@ -449,10 +503,10 @@ class _TimeoutBackend:
 
         worker = threading.Thread(target=_target, daemon=True)
         worker.start()
-        worker.join(self._timeout)
+        worker.join(budget)
         if worker.is_alive():
             raise TimeoutError(
-                f"LLM backend did not respond within {self._timeout:.0f}s. "
+                f"LLM backend did not respond within {budget:.0f}s. "
                 "Check that the configured backend is running and reachable "
                 "(e.g. `ollama serve`, or your API key / base URL)."
             )
@@ -462,10 +516,16 @@ class _TimeoutBackend:
 
 
 _DEFAULT_LLM_TIMEOUT = 30.0
+_DEFAULT_LLM_TOKENS = 4096
+
+# Measured on qwen3:30b-a3b at batch 20: 8.5 s/track and ~380 generated
+# tokens/track with thinking on. Both carry ~2x headroom.
+_SECONDS_PER_TRACK = 20.0
+_TOKENS_PER_TRACK = 800
 
 
 def _resolve_llm_timeout() -> float:
-    """Per-track LLM wall-clock budget (AC7), overridable via env."""
+    """Floor for the LLM wall-clock budget (AC7), overridable via env."""
     raw = os.environ.get("TUNESHIFT_LLM_TIMEOUT")
     if not raw:
         return _DEFAULT_LLM_TIMEOUT
@@ -474,6 +534,28 @@ def _resolve_llm_timeout() -> float:
     except ValueError:
         return _DEFAULT_LLM_TIMEOUT
     return value if value > 0 else _DEFAULT_LLM_TIMEOUT
+
+
+def _resolve_llm_tokens() -> int:
+    """Floor for the generated-token budget, overridable via env."""
+    raw = os.environ.get("TUNESHIFT_LLM_TOKENS")
+    if not raw:
+        return _DEFAULT_LLM_TOKENS
+    try:
+        value = int(raw)
+    except ValueError:
+        return _DEFAULT_LLM_TOKENS
+    return value if value > 0 else _DEFAULT_LLM_TOKENS
+
+
+def _llm_timeout_for(track_count: int) -> float:
+    """Wall-clock budget for a whole batch, never below the single-call floor."""
+    return max(_resolve_llm_timeout(), _SECONDS_PER_TRACK * max(track_count, 1))
+
+
+def _llm_tokens_for(track_count: int) -> int:
+    """Generated-token budget for a whole batch, never below the floor."""
+    return max(_resolve_llm_tokens(), _TOKENS_PER_TRACK * max(track_count, 1))
 
 
 class TrackClassifier:
@@ -559,13 +641,34 @@ class TrackClassifier:
             return []
 
         prompt = build_classification_prompt(tracks, narrative=narrative)
+        max_tokens = _llm_tokens_for(len(tracks))
+        timeout = _llm_timeout_for(len(tracks))
 
         for attempt in range(max_retries):
             try:
-                text = self._backend.complete(prompt, self._model)
+                text = self._backend.complete(
+                    prompt, self._model, max_tokens, timeout_seconds=timeout
+                )
                 results = parse_classification_response(text)
                 if results:
                     return results
+                logger.warning(
+                    "Classification attempt %s/%s (%s): reply parsed to nothing "
+                    "for %s track(s)",
+                    attempt + 1,
+                    max_retries,
+                    self._backend_name,
+                    len(tracks),
+                )
+            except LLMTruncationError as exc:
+                logger.error(
+                    "Classification stopped after attempt %s/%s (%s): %s",
+                    attempt + 1,
+                    max_retries,
+                    self._backend_name,
+                    exc,
+                )
+                break
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "Classification attempt %s/%s failed (%s): %s",
