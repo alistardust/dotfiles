@@ -20,7 +20,7 @@ readline
 reattach-to-user-namespace
 tmux
 tree
-unrar
+unar
 unzip
 vim
 watch

@@ -26,7 +26,8 @@ install_packages_macos() {
            || brew list --cask "$pkg_name" &>/dev/null; then
             ok "Already installed: $pkg_name"
         else
-            run brew install "$pkg_name"
+            run brew install "$pkg_name" < /dev/null \
+                || warn "brew install failed: $pkg_name (continuing)"
         fi
     done < "${SCRIPT_DIR}/brew_packages.txt"
 }
