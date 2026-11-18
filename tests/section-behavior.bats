@@ -105,6 +105,16 @@ setup() {
     [[ "$status" -eq 0 ]]
 }
 
+@test "verify_claude runs to the end under setup.sh's shell options without Copilot" {
+    source "$SCRIPT_DIR/sections/claude.sh"
+    mkdir -p "$HOME/.claude/skills"
+
+    local output
+    output="$(set -euo pipefail; verify_claude; echo "verify_claude: done")"
+
+    [[ "$output" == *"verify_claude: done"* ]]
+}
+
 # -- copilot_skills section tests --
 
 @test "copilot_skills: GSD helper exists and is callable" {

@@ -75,15 +75,19 @@ verify_claude() {
             || fail "Claude skill missing: ${skill}"
     done
 
-    # Cross-tool parity check
-    local copilot_count claude_count
-    copilot_count=$(find "$HOME/.copilot/skills" -maxdepth 2 -name "SKILL.md" 2>/dev/null | wc -l | tr -d ' ')
-    claude_count=$(find "$skills_dir" -maxdepth 2 -name "SKILL.md" 2>/dev/null | wc -l | tr -d ' ')
-    if [[ "$copilot_count" -gt 0 && "$claude_count" -gt 0 ]]; then
-        if [[ "$copilot_count" -eq "$claude_count" ]]; then
-            pass "Skills parity: ${copilot_count} skills in both tools"
-        else
-            warn "Skills drift: Copilot has ${copilot_count}, Claude has ${claude_count}"
+    # Cross-tool parity check. Only meaningful when both tools have a skills
+    # directory; find on a missing one exits non-zero, which under pipefail
+    # would abort the whole verify run on a Claude-only machine.
+    local copilot_skills_dir="$HOME/.copilot/skills" copilot_count claude_count
+    if [[ -d "$copilot_skills_dir" && -d "$skills_dir" ]]; then
+        copilot_count=$(find "$copilot_skills_dir" -maxdepth 2 -name "SKILL.md" 2>/dev/null | wc -l | tr -d ' ')
+        claude_count=$(find "$skills_dir" -maxdepth 2 -name "SKILL.md" 2>/dev/null | wc -l | tr -d ' ')
+        if [[ "$copilot_count" -gt 0 && "$claude_count" -gt 0 ]]; then
+            if [[ "$copilot_count" -eq "$claude_count" ]]; then
+                pass "Skills parity: ${copilot_count} skills in both tools"
+            else
+                warn "Skills drift: Copilot has ${copilot_count}, Claude has ${claude_count}"
+            fi
         fi
     fi
 }
