@@ -37,6 +37,11 @@ setup() {
 
     source "$BATS_TEST_DIRNAME/../sections/packages.sh"
     source "$BATS_TEST_DIRNAME/../sections/gnubin.sh"
+    source "$BATS_TEST_DIRNAME/../sections/alacritty.sh"
+
+    # Alacritty's optional extras download from GitHub; keep tests offline.
+    curl() { return 1; }
+    ALACRITTY_APP="$BATS_TEST_TMPDIR/Alacritty.app"
 }
 
 @test "packages: every listed formula is installed even if brew reads stdin" {
@@ -80,4 +85,25 @@ setup() {
     if grep -qx vim "$list" && grep -qx macvim "$list"; then
         return 1
     fi
+}
+
+@test "alacritty: an app installed outside Homebrew counts as installed" {
+    mkdir -p "$ALACRITTY_APP/Contents/MacOS"
+    printf '#!/bin/sh\n' > "$ALACRITTY_APP/Contents/MacOS/alacritty"
+    chmod +x "$ALACRITTY_APP/Contents/MacOS/alacritty"
+
+    local output
+    output="$(section_alacritty 2>&1 < /dev/null)"
+
+    [[ "$output" == *"ok:Alacritty already installed: $ALACRITTY_APP/Contents/MacOS/alacritty"* ]]
+    [[ ! -s "$INSTALL_LOG" ]]
+    [[ "$(readlink "$HOME/.config/alacritty/alacritty.toml")" == "$SCRIPT_DIR/terminal_configs/alacritty.toml" ]]
+}
+
+@test "alacritty: config is linked even when no binary can be found" {
+    local output
+    output="$(section_alacritty 2>&1 < /dev/null)"
+
+    [[ "$output" == *"warn:alacritty not found after install attempt"* ]]
+    [[ "$(readlink "$HOME/.config/alacritty/alacritty.toml")" == "$SCRIPT_DIR/terminal_configs/alacritty.toml" ]]
 }

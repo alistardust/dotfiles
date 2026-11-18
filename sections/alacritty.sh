@@ -4,6 +4,21 @@
 
 # -- 7. Alacritty -------------------------------------------------------------
 
+ALACRITTY_APP="${ALACRITTY_APP:-/Applications/Alacritty.app}"
+
+# Print the alacritty binary path, or return 1 if Alacritty is not installed.
+# On macOS the app may come from the GitHub release DMG rather than Homebrew,
+# in which case its binary lives inside the bundle and is not on PATH.
+_alacritty_bin() {
+    if command_exists alacritty; then
+        command -v alacritty
+    elif [[ "$OS" == "macos" && -x "${ALACRITTY_APP}/Contents/MacOS/alacritty" ]]; then
+        printf '%s\n' "${ALACRITTY_APP}/Contents/MacOS/alacritty"
+    else
+        return 1
+    fi
+}
+
 _alacritty_install_mac() {
     command_exists brew || fetch_and_run "https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh"
     if [[ -x /opt/homebrew/bin/brew ]]; then
@@ -11,7 +26,8 @@ _alacritty_install_mac() {
     elif [[ -x /usr/local/bin/brew ]]; then
         eval "$(/usr/local/bin/brew shellenv)"
     fi
-    run brew install --cask alacritty
+    run brew install --cask alacritty < /dev/null \
+        || warn "brew install --cask alacritty failed"
 }
 
 _alacritty_install_debian() {
@@ -48,8 +64,8 @@ _alacritty_install_arch() {
 section_alacritty() {
     log "Setting up Alacritty..."
 
-    if command_exists alacritty; then
-        ok "Alacritty already installed."
+    if _alacritty_bin >/dev/null; then
+        ok "Alacritty already installed: $(_alacritty_bin)"
     else
         case "$OS" in
             macos)    _alacritty_install_mac ;;
@@ -64,8 +80,21 @@ section_alacritty() {
         esac
     fi
 
+    # Link the config before anything that needs the binary: it is plain data,
+    # and an Alacritty installed later picks it up without a re-run.
+    # macOS uses alacritty.toml (font size 13.5); Linux/WSL uses
+    # alacritty-linux.toml (font size 10.5 for HiDPI displays).
+    run mkdir -p "$HOME/.config/alacritty"
+    local toml_src
+    if [[ "$OS" == "macos" ]]; then
+        toml_src="${SCRIPT_DIR}/terminal_configs/alacritty.toml"
+    else
+        toml_src="${SCRIPT_DIR}/terminal_configs/alacritty-linux.toml"
+    fi
+    run ln -sf "$toml_src" "$HOME/.config/alacritty/alacritty.toml"
+
     # Bail out early if alacritty still isn't available (install step warned already)
-    if ! command_exists alacritty; then
+    if ! _alacritty_bin >/dev/null; then
         warn "alacritty not found after install attempt  - skipping man page, completions, and terminfo"
         return 0
     fi
@@ -97,7 +126,8 @@ section_alacritty() {
         register_cleanup "$terminfo_tmp"
         if run curl -fsSL -o "$terminfo_tmp" \
             https://raw.githubusercontent.com/alacritty/alacritty/master/extra/alacritty.info; then
-            run sudo tic -xe alacritty,alacritty-direct "$terminfo_tmp"
+            run sudo tic -xe alacritty,alacritty-direct "$terminfo_tmp" \
+                || warn "sudo tic failed  - install Alacritty terminfo manually (see alacritty extra/alacritty.info)"
         else
             warn "Failed to download Alacritty terminfo  - skipping"
         fi
@@ -105,17 +135,6 @@ section_alacritty() {
     else
         warn "tic not found  - skipping alacritty terminfo install (run: sudo tic -xe alacritty,alacritty-direct alacritty.info)"
     fi
-
-    # Symlink config -- macOS uses alacritty.toml (font size 13.5);
-    # Linux/WSL uses alacritty-linux.toml (font size 10.5 for HiDPI displays).
-    run mkdir -p "$HOME/.config/alacritty"
-    local toml_src
-    if [[ "$OS" == "macos" ]]; then
-        toml_src="${SCRIPT_DIR}/terminal_configs/alacritty.toml"
-    else
-        toml_src="${SCRIPT_DIR}/terminal_configs/alacritty-linux.toml"
-    fi
-    run ln -sf "$toml_src" "$HOME/.config/alacritty/alacritty.toml"
 
     ok "Alacritty configured."
 }
