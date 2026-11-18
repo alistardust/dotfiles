@@ -22,7 +22,6 @@ tmux
 tree
 unar
 unzip
-vim
 watch
 wget
 xz

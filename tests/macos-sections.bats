@@ -71,3 +71,13 @@ setup() {
     [[ -L "$HOME/.gnubin/sed" ]]
     [[ -L "$HOME/.gnubin/find" ]]
 }
+
+@test "brew_packages.txt does not list both vim and macvim" {
+    # Homebrew refuses to install both (they ship the same vi* binaries);
+    # macvim already provides the terminal vim.
+    local list="$BATS_TEST_DIRNAME/../brew_packages.txt"
+
+    if grep -qx vim "$list" && grep -qx macvim "$list"; then
+        return 1
+    fi
+}
