@@ -58,3 +58,16 @@ setup() {
     [[ "$output" == *"warn:brew install failed: missing"* ]]
     [[ "$(cat "$INSTALL_LOG")" == "$(printf '%s\n' alpha beta)" ]]
 }
+
+@test "gnubin: links symlinked GNU tools as well as regular files" {
+    local gnubin="$BREW_PREFIX/opt/gnu-sed/libexec/gnubin"
+    mkdir -p "$gnubin" "$BREW_PREFIX/bin"
+    printf '#!/bin/sh\n' > "$BREW_PREFIX/bin/gsed"
+    ln -s ../../../../bin/gsed "$gnubin/sed"
+    printf '#!/bin/sh\n' > "$gnubin/find"
+
+    section_gnubin
+
+    [[ -L "$HOME/.gnubin/sed" ]]
+    [[ -L "$HOME/.gnubin/find" ]]
+}

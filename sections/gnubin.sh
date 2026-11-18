@@ -17,7 +17,7 @@ section_gnubin() {
         [[ -d "$dir" ]] || continue
         while IFS= read -r -d '' bin; do
             run ln -sf "$bin" "$HOME/.gnubin/$(basename "$bin")"
-        done < <(find "$dir" -maxdepth 1 -type f -print0)
+        done < <(find "$dir" -maxdepth 1 \( -type f -o -type l \) -print0)
     done
     ok "GNU tools linked in ~/.gnubin"
 }
