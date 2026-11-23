@@ -52,6 +52,50 @@ _cloud_tool_path() {
     return 1
 }
 
+# Directories on PATH for every shell, not just interactive zsh. The SDK's own
+# bin dir is only added by .zshrc, which scripts, kubectl exec plugins and
+# agent shells never read, so tools must also be linked into one of these.
+_shared_bin_dirs() {
+    printf '%s\n' \
+        "$(_cloud_brew_prefix)/bin" \
+        /usr/local/bin \
+        /usr/bin \
+        "$HOME/.local/bin"
+}
+
+# Print the path of a tool reachable from a shared bin dir. Ignores the
+# current PATH on purpose: setup often runs from a shell that has .zshrc's.
+_shared_tool_path() {
+    local tool="$1" dir
+    while IFS= read -r dir; do
+        if [[ -x "$dir/$tool" ]]; then
+            printf '%s\n' "$dir/$tool"
+            return 0
+        fi
+    done < <(_shared_bin_dirs)
+    return 1
+}
+
+# Symlink target to link, idempotently. An optional third argument "sudo"
+# creates the link as root, for system bin dirs.
+_link_tool() {
+    local target="$1" link="$2" as_root="${3:-}"
+    local -a ln_cmd=(ln -s)
+    [[ "$as_root" == "sudo" ]] && ln_cmd=(sudo ln -s)
+    if [[ "$(readlink "$link" 2>/dev/null)" == "$target" ]]; then
+        ok "${link} already links to ${target}"
+    elif [[ -e "$link" || -L "$link" ]]; then
+        warn "${link} exists and does not link to ${target}; leaving it." \
+            "Remove it and re-run to relink."
+        return 1
+    elif [[ "$DRY_RUN" != "true" && ! -x "$target" ]]; then
+        warn "${target} not found; cannot link ${link}"
+        return 1
+    else
+        run "${ln_cmd[@]}" "$target" "$link"
+    fi
+}
+
 _os_release_field() {
     local field="$1"
     [[ -r /etc/os-release ]] || return 1
@@ -98,7 +142,8 @@ _add_gcloud_apt_repo() {
 _install_gcloud_debian() {
     _add_gcloud_apt_repo || return 1
     run sudo apt-get update -y || return 1
-    run sudo apt-get install -y "${GCLOUD_REPO_PACKAGES[@]}"
+    run sudo apt-get install -y "${GCLOUD_REPO_PACKAGES[@]}" || return 1
+    _link_packaged_auth_plugin
 }
 
 # Google publishes separate el9 (RHEL 7-9) and el10 repos, each with its own key.
@@ -141,7 +186,9 @@ _install_gcloud_rhel() {
                 | sudo tee "$GCLOUD_YUM_REPO" >/dev/null || return 1
         fi
     fi
-    run sudo "$mgr" install -y libxcrypt-compat "${GCLOUD_REPO_PACKAGES[@]}"
+    run sudo "$mgr" install -y libxcrypt-compat "${GCLOUD_REPO_PACKAGES[@]}" \
+        || return 1
+    _link_packaged_auth_plugin
 }
 
 # Google's user-local SDK, for distros without a documented Google repo.
@@ -173,8 +220,37 @@ _install_gcloud_tarball() {
     _install_gke_auth_plugin_component "$GCLOUD_USER_SDK/bin/gcloud" || return 1
     if (( ${#extra_components[@]} > 0 )); then
         run "$GCLOUD_USER_SDK/bin/gcloud" components install \
-            "${extra_components[@]}" --quiet
+            "${extra_components[@]}" --quiet || return 1
     fi
+    ensure_local_bin_shell_path
+    run mkdir -p "$HOME/.local/bin" || return 1
+    local tool
+    for tool in gcloud gke-gcloud-auth-plugin "${extra_components[@]}"; do
+        _link_tool "$GCLOUD_USER_SDK/bin/$tool" "$HOME/.local/bin/$tool" || return 1
+    done
+}
+
+# Package installs keep the SDK under /usr/lib*/google-cloud-sdk. Link the
+# plugin into /usr/local/bin unless the package already put it in /usr/bin.
+_link_packaged_auth_plugin() {
+    local sdk_bin
+    if [[ -x /usr/bin/gke-gcloud-auth-plugin ]]; then
+        ok "gke-gcloud-auth-plugin already in /usr/bin"
+        return 0
+    fi
+    for sdk_bin in /usr/lib/google-cloud-sdk/bin /usr/lib64/google-cloud-sdk/bin; do
+        if [[ -x "$sdk_bin/gke-gcloud-auth-plugin" ]]; then
+            _link_tool "$sdk_bin/gke-gcloud-auth-plugin" \
+                /usr/local/bin/gke-gcloud-auth-plugin sudo
+            return
+        fi
+    done
+    if [[ "$DRY_RUN" == "true" ]]; then
+        printf '\e[2;37m  [dry] link gke-gcloud-auth-plugin into /usr/local/bin\e[0m\n'
+        return 0
+    fi
+    warn "gke-gcloud-auth-plugin not found under /usr/lib*/google-cloud-sdk/bin"
+    return 1
 }
 
 _install_helm_script() {
@@ -186,7 +262,7 @@ _install_helm_script() {
 }
 
 _install_tfenv_linux() {
-    local tool link
+    local tool
     if [[ -d "$TFENV_DIR/.git" ]]; then
         ok "tfenv already cloned at ${TFENV_DIR}"
     else
@@ -196,14 +272,7 @@ _install_tfenv_linux() {
     ensure_local_bin_shell_path
     run mkdir -p "$HOME/.local/bin" || return 1
     for tool in tfenv terraform; do
-        link="$HOME/.local/bin/$tool"
-        if [[ "$(readlink "$link" 2>/dev/null)" == "$TFENV_DIR/bin/$tool" ]]; then
-            ok "${link} already links to tfenv"
-        elif [[ -e "$link" || -L "$link" ]]; then
-            warn "${link} exists and is not the tfenv shim; leaving it"
-        else
-            run ln -s "$TFENV_DIR/bin/$tool" "$link" || return 1
-        fi
+        _link_tool "$TFENV_DIR/bin/$tool" "$HOME/.local/bin/$tool" || return 1
     done
 }
 
@@ -231,12 +300,23 @@ _install_cloud_tools_linux() {
     _install_tfenv_linux || warn "tfenv install failed (continuing)"
 }
 
+# The cask links gcloud into Homebrew's bin but not components installed later.
+# Link to share/google-cloud-sdk, the SDK root gcloud updates in place; the
+# versioned Caskroom path is a symlink to it and changes on every upgrade.
+_install_cloud_tools_macos() {
+    local prefix
+    prefix="$(_cloud_brew_prefix)"
+    _install_gke_auth_plugin_component "${prefix}/bin/gcloud" \
+        || { warn "gke-gcloud-auth-plugin install failed (continuing)"; return 0; }
+    _link_tool "${prefix}/share/google-cloud-sdk/bin/gke-gcloud-auth-plugin" \
+        "${prefix}/bin/gke-gcloud-auth-plugin" \
+        || warn "gke-gcloud-auth-plugin link failed (continuing)"
+}
+
 section_cloud_tools() {
     log "Installing cloud tools (gcloud, GKE auth plugin, kubectl, helm, tfenv)..."
     case "$OS" in
-        macos)
-            _install_gke_auth_plugin_component "$(_cloud_brew_prefix)/bin/gcloud" \
-                || warn "gke-gcloud-auth-plugin install failed (continuing)" ;;
+        macos) _install_cloud_tools_macos ;;
         linux|wsl) _install_cloud_tools_linux ;;
         *) warn "Unsupported OS  - skipping cloud tools" ;;
     esac
@@ -247,8 +327,8 @@ section_cloud_tools() {
 verify_cloud_tools() {
     local tool
     for tool in gcloud gke-gcloud-auth-plugin kubectl helm tfenv; do
-        _cloud_tool_path "$tool" >/dev/null \
-            && pass "${tool} installed" \
-            || fail "${tool} not installed"
+        _shared_tool_path "$tool" >/dev/null \
+            && pass "${tool} on PATH for all shells" \
+            || fail "${tool} not in a shared bin dir (brew bin, /usr/local/bin, /usr/bin, ~/.local/bin)"
     done
 }
