@@ -5,6 +5,7 @@ gawk
 gcc
 gcloud-cli
 gettext
+gh
 gnu-getopt
 gnu-indent
 gnu-sed
