@@ -2,6 +2,7 @@ curl
 gcc
 git
 gitflow
+golang
 htop
 jq
 libffi-devel

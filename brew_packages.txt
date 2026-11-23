@@ -12,6 +12,7 @@ gnu-sed
 gnu-tar
 gnupg
 gnutls
+go
 grep
 gzip
 helm

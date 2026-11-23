@@ -2,6 +2,7 @@ auto-cpufreq
 curl
 git
 github-cli
+go
 gcc
 gettext
 helm

@@ -211,6 +211,14 @@ unset gcloud_bin
 GCLOUD_PATH
 }
 
+# "go install" puts binaries in $GOPATH/bin, which defaults to ~/go/bin. Added
+# unconditionally so the first "go install" is usable without a new shell.
+_zsh_append_go_path() {
+    _zsh_append_guarded_block "$1" go << 'GO_PATH'
+export PATH="$PATH:${GOPATH:-$HOME/go}/bin"
+GO_PATH
+}
+
 _zsh_set_default_shell() {
     local zsh_path
 
@@ -285,6 +293,7 @@ section_zsh() {
     _zsh_fix_legacy "$zshrc"
     _zsh_append_customizations "$zshrc"
     _zsh_append_gcloud_path "$zshrc"
+    _zsh_append_go_path "$zshrc"
     _zsh_install_tmux_rename_hook "$zshrc"
     _zsh_set_default_shell
     _zsh_set_default_editor
@@ -309,7 +318,10 @@ verify_zsh() {
     grep -q 'uv-virtualenvwrapper.sh' "$zshrc" && pass "uv-virtualenvwrapper sourced in .zshrc" || fail "uv-virtualenvwrapper not sourced in .zshrc"
     [[ -f "$HOME/.config/zsh/hooks/tmux-rename.zsh" ]] && pass "tmux-rename hook installed"    || fail "tmux-rename hook not installed"
     grep -q "tmux-rename.zsh" "$zshrc"  && pass "tmux-rename hook sourced in .zshrc"           || fail "tmux-rename hook not sourced in .zshrc"
-    grep -q "# >>> dotfiles gcloud <<<" "$zshrc" \
-        && pass "gcloud PATH block present" \
-        || fail "gcloud PATH block missing"
+    local block
+    for block in gcloud go; do
+        grep -qF "# >>> dotfiles ${block} <<<" "$zshrc" \
+            && pass "${block} PATH block present" \
+            || fail "${block} PATH block missing"
+    done
 }

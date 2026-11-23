@@ -27,7 +27,7 @@ current platform. Exceptions: `gnubin` runs on macOS only, `wsl` on WSL2 only,
 
 | Section | What it sets up |
 |---------|----------------|
-| `packages` | Homebrew (macOS), apt, dnf/yum, or pacman packages from the relevant package list |
+| `packages` | Homebrew (macOS), apt, dnf/yum, or pacman packages from the relevant package list, including Go; `gh` comes from GitHub's own apt/yum repo on Debian and RHEL-family distros. `~/go/bin` is added to PATH by the `zsh` section |
 | `gnubin` | *(macOS only)* Symlinks all GNU tool binaries into `~/.gnubin` so they shadow BSD tools |
 | `fonts` | Powerline fonts cloned and installed *(skipped on Arch — fonts managed via pacman)* |
 | `tmux` | [gpakosz/.tmux](https://github.com/gpakosz/.tmux) framework, symlinked config, customisations applied to `~/.tmux.conf.local` |

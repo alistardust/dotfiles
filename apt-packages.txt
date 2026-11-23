@@ -7,6 +7,7 @@ git
 gettext
 git-flow
 gnupg
+golang-go
 htop
 jq
 libffi-dev

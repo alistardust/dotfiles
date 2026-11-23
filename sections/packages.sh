@@ -145,7 +145,10 @@ verify_packages() {
             esac ;;
         *) skip_check "unknown OS  - cannot verify packages" ;;
     esac
-    command_exists gh \
-        && pass "gh installed" \
-        || fail "gh not installed"
+    local tool
+    for tool in gh go; do
+        command_exists "$tool" \
+            && pass "${tool} installed" \
+            || fail "${tool} not installed"
+    done
 }
