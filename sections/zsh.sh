@@ -173,22 +173,30 @@ EOF
     fi
 }
 
-# Covers every place sections/cloud_tools.sh can install the SDK; missing
-# directories are skipped when the shell starts.
-_zsh_append_gcloud_path() {
-    local zshrc="$1"
-    if grep -q "# >>> dotfiles gcloud <<<" "$zshrc" 2>/dev/null; then
-        ok "gcloud PATH block already present."
+# Append a marker-guarded block to .zshrc once. Separate from the
+# customizations block, which is only written on first install, so new blocks
+# still reach existing machines. Block content is read from stdin.
+_zsh_append_guarded_block() {
+    local zshrc="$1" name="$2" content
+    content="$(cat)"
+    if grep -qF "# >>> dotfiles ${name} <<<" "$zshrc" 2>/dev/null; then
+        ok "${name} PATH block already present."
         return 0
     fi
     if [[ "$DRY_RUN" == "true" ]]; then
-        printf '\e[2;37m  [dry] append gcloud PATH block to %s\e[0m\n' \
-            "$zshrc"
+        printf '\e[2;37m  [dry] append %s PATH block to %s\e[0m\n' \
+            "$name" "$zshrc"
         return 0
     fi
-    cat >> "$zshrc" << 'GCLOUD_PATH'
+    printf '\n# >>> dotfiles %s <<<\n%s\n# <<< dotfiles %s <<<\n' \
+        "$name" "$content" "$name" >> "$zshrc"
+    ok "${name} PATH block added."
+}
 
-# >>> dotfiles gcloud <<<
+# Covers every place sections/cloud_tools.sh can install the SDK; missing
+# directories are skipped when the shell starts.
+_zsh_append_gcloud_path() {
+    _zsh_append_guarded_block "$1" gcloud << 'GCLOUD_PATH'
 for gcloud_bin in \
     /opt/homebrew/share/google-cloud-sdk/bin \
     /usr/local/share/google-cloud-sdk/bin \
@@ -200,9 +208,7 @@ for gcloud_bin in \
     fi
 done
 unset gcloud_bin
-# <<< dotfiles gcloud <<<
 GCLOUD_PATH
-    ok "gcloud PATH block added."
 }
 
 _zsh_set_default_shell() {
