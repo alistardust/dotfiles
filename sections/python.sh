@@ -4,6 +4,15 @@
 
 # -- 9. Python (uv + uv-virtualenvwrapper + base virtualenv) ------------------
 
+# Pinned so every platform gets the same interpreter, whatever the OS ships.
+# uv downloads a managed build when no matching interpreter is installed.
+BASE_PYTHON_VERSION="3.14"
+
+# Print a venv interpreter's major.minor version, e.g. "3.14".
+_venv_python_version() {
+    "$1/bin/python" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null
+}
+
 append_local_bin_hook() {
     local target="$1"
     if grep -q "# >>> dotfiles local bin <<<" "$target" 2>/dev/null; then
@@ -68,10 +77,18 @@ section_python() {
     run mkdir -p "$venv_home"
     local base_venv="$venv_home/base"
     if [[ ! -d "$base_venv" ]]; then
-        run uv venv "$base_venv"
-        ok "Created base virtualenv at $base_venv"
+        run uv venv --python "$BASE_PYTHON_VERSION" "$base_venv"
+        ok "Created base virtualenv at $base_venv (Python ${BASE_PYTHON_VERSION})"
     else
-        ok "Base virtualenv already exists at $base_venv"
+        local venv_version
+        venv_version="$(_venv_python_version "$base_venv")" || venv_version="unknown"
+        if [[ "$venv_version" == "$BASE_PYTHON_VERSION" ]]; then
+            ok "Base virtualenv already exists at $base_venv (Python ${venv_version})"
+        else
+            # Not rebuilt automatically: that would drop hand-installed packages.
+            warn "Base virtualenv uses Python ${venv_version}, expected ${BASE_PYTHON_VERSION}." \
+                "Recreate it with: rm -rf $base_venv && ./setup.sh --only python"
+        fi
     fi
 
     log "Installing packages into base virtualenv..."
@@ -120,6 +137,9 @@ verify_python() {
     local venv="${WORKON_HOME:-$HOME/.venvs}/base"
     [[ -d "$venv" ]]                   && pass "base virtualenv exists"                        || { fail "base virtualenv missing ($venv)"; return; }
     [[ -x "$venv/bin/python" ]]        && pass "base venv python executable"                  || fail "base venv python not executable"
+    [[ "$(_venv_python_version "$venv")" == "$BASE_PYTHON_VERSION" ]] \
+        && pass "base venv is Python ${BASE_PYTHON_VERSION}" \
+        || fail "base venv is not Python ${BASE_PYTHON_VERSION}"
     local uv_bin="${HOME}/.local/bin/uv"
     local pkg
     for pkg in requests boto3 kubernetes rich ipython weasyprint cryptography prometheus_client paramiko; do
