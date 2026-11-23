@@ -30,6 +30,18 @@ install_packages_macos() {
                 || warn "brew install failed: $pkg_name (continuing)"
         fi
     done < "${SCRIPT_DIR}/brew_packages.txt"
+    link_node_macos
+}
+
+# node@22 is keg-only, so brew install alone leaves it off PATH.
+link_node_macos() {
+    local node_link="${HOMEBREW_PREFIX:-/opt/homebrew}/bin/node"
+    if [[ "$(readlink "$node_link" 2>/dev/null)" == *"/node@22/"* ]]; then
+        ok "node@22 already linked"
+    else
+        run brew link --force node@22 \
+            || warn "brew link failed: node@22 (continuing)"
+    fi
 }
 
 install_packages_debian() {
@@ -73,7 +85,10 @@ verify_packages() {
         macos)
             command_exists brew \
                 && pass "Homebrew installed" \
-                || fail "Homebrew not installed" ;;
+                || fail "Homebrew not installed"
+            command_exists node && [[ "$(node --version)" == v22.* ]] \
+                && pass "Node.js 22 on PATH" \
+                || fail "Node.js 22 not on PATH" ;;
         linux|wsl)
             case "$(detect_linux_distro)" in
                 debian) command_exists apt-get && pass "apt-get available" || fail "apt-get not available" ;;
