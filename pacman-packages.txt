@@ -3,9 +3,11 @@ curl
 git
 gcc
 gettext
+helm
 htop
 jq
 keyd
+kubectl
 libffi
 make
 openssh

@@ -3,6 +3,7 @@ coreutils
 findutils
 gawk
 gcc
+gcloud-cli
 gettext
 gnu-getopt
 gnu-indent
@@ -12,13 +13,16 @@ gnupg
 gnutls
 grep
 gzip
+helm
 htop
 jq
+kubernetes-cli
 macvim
 node@22
 pkg-config
 readline
 reattach-to-user-namespace
+tfenv
 tmux
 tree
 unar

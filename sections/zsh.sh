@@ -173,6 +173,38 @@ EOF
     fi
 }
 
+# Covers every place sections/cloud_tools.sh can install the SDK; missing
+# directories are skipped when the shell starts.
+_zsh_append_gcloud_path() {
+    local zshrc="$1"
+    if grep -q "# >>> dotfiles gcloud <<<" "$zshrc" 2>/dev/null; then
+        ok "gcloud PATH block already present."
+        return 0
+    fi
+    if [[ "$DRY_RUN" == "true" ]]; then
+        printf '\e[2;37m  [dry] append gcloud PATH block to %s\e[0m\n' \
+            "$zshrc"
+        return 0
+    fi
+    cat >> "$zshrc" << 'GCLOUD_PATH'
+
+# >>> dotfiles gcloud <<<
+for gcloud_bin in \
+    /opt/homebrew/share/google-cloud-sdk/bin \
+    /usr/local/share/google-cloud-sdk/bin \
+    "$HOME/google-cloud-sdk/bin" \
+    /usr/lib/google-cloud-sdk/bin \
+    /usr/lib64/google-cloud-sdk/bin; do
+    if [[ -d "$gcloud_bin" ]]; then
+        export PATH="$gcloud_bin:$PATH"
+    fi
+done
+unset gcloud_bin
+# <<< dotfiles gcloud <<<
+GCLOUD_PATH
+    ok "gcloud PATH block added."
+}
+
 _zsh_set_default_shell() {
     local zsh_path
 
@@ -246,6 +278,7 @@ section_zsh() {
     _zsh_patch_theme_and_plugins "$zshrc"
     _zsh_fix_legacy "$zshrc"
     _zsh_append_customizations "$zshrc"
+    _zsh_append_gcloud_path "$zshrc"
     _zsh_install_tmux_rename_hook "$zshrc"
     _zsh_set_default_shell
     _zsh_set_default_editor
@@ -270,4 +303,7 @@ verify_zsh() {
     grep -q 'uv-virtualenvwrapper.sh' "$zshrc" && pass "uv-virtualenvwrapper sourced in .zshrc" || fail "uv-virtualenvwrapper not sourced in .zshrc"
     [[ -f "$HOME/.config/zsh/hooks/tmux-rename.zsh" ]] && pass "tmux-rename hook installed"    || fail "tmux-rename hook not installed"
     grep -q "tmux-rename.zsh" "$zshrc"  && pass "tmux-rename hook sourced in .zshrc"           || fail "tmux-rename hook not sourced in .zshrc"
+    grep -q "# >>> dotfiles gcloud <<<" "$zshrc" \
+        && pass "gcloud PATH block present" \
+        || fail "gcloud PATH block missing"
 }

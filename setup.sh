@@ -30,7 +30,7 @@ set -euo pipefail
 #   ./setup.sh --shellgpt                    # include ShellGPT in the standard run
 #   ./setup.sh --google-workspace            # include Google Workspace MCP in the standard run
 #
-# Sections: packages gnubin fonts tmux zsh vim alacritty wsl python keyd auto_cpufreq ddcutil copilot claude chatgpt shellgpt google_workspace copilot_skills
+# Sections: packages gnubin fonts tmux zsh vim alacritty wsl python cloud_tools keyd auto_cpufreq ddcutil copilot claude chatgpt shellgpt google_workspace copilot_skills
 
 # -- Helpers -------------------------------------------------------------------
 
@@ -141,7 +141,7 @@ OS="$(detect_os)"
 
 # -- Argument parsing ----------------------------------------------------------
 
-ALL_SECTIONS=(packages gnubin fonts tmux zsh vim alacritty wsl python keyd auto_cpufreq ddcutil copilot claude chatgpt shellgpt google_workspace copilot_skills)
+ALL_SECTIONS=(packages gnubin fonts tmux zsh vim alacritty wsl python cloud_tools keyd auto_cpufreq ddcutil copilot claude chatgpt shellgpt google_workspace copilot_skills)
 declare -A RUN
 for s in "${ALL_SECTIONS[@]}"; do RUN[$s]=true; done
 RUN[copilot]=false                                    # opt-in; use --copilot or --all
@@ -300,6 +300,7 @@ should_run vim           && dispatch vim
 should_run alacritty     && dispatch alacritty
 should_run wsl           && dispatch wsl
 should_run python        && dispatch python
+should_run cloud_tools   && dispatch cloud_tools
 should_run keyd          && dispatch keyd
 should_run auto_cpufreq  && dispatch auto_cpufreq
 should_run ddcutil       && dispatch ddcutil

@@ -19,7 +19,7 @@
 ./setup.sh --all                        # everything, including all AI CLIs
 ```
 
-Sections: `packages gnubin fonts tmux zsh vim alacritty wsl python keyd auto_cpufreq copilot claude chatgpt shellgpt google_workspace copilot_skills ddcutil`
+Sections: `packages gnubin fonts tmux zsh vim alacritty wsl python cloud_tools keyd auto_cpufreq copilot claude chatgpt shellgpt google_workspace copilot_skills ddcutil`
 
 Use `--dry-run --only <section>` to preview changes and `--verify --only <section>` as the nearest equivalent to a unit test for one area.
 

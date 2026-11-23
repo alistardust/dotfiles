@@ -1,10 +1,12 @@
 apt-transport-https
 build-essential
+ca-certificates
 curl
 gcc
 git
 gettext
 git-flow
+gnupg
 htop
 jq
 libffi-dev
